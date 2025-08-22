@@ -2,7 +2,6 @@ node_modules/
 npm-debug.log*
 yarn-debug.log*
 yarn-error.log*
-
 .expo/
 .expo-shared/
 .expo-dev/
@@ -15,13 +14,11 @@ android/
 .DS_Store
 .vscode/
 .idea/
-
 .env
 .env.*
 credentials.json
-*.p8     # Apple private key
+*.p8
 *.mobileprovision
 *.p12
 *.cer
-
 *.log
