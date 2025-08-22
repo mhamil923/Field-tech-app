@@ -1,0 +1,59 @@
+/* Root container */
+.container {
+  background-color: #F1F5F9;
+  padding: 16px;
+}
+
+/* Header text */
+.header {
+  font-size: 1.5rem;
+  font-weight: 700;
+  text-align: center;
+  color: #2B2D42;
+  margin-bottom: 1rem;
+}
+
+/* Section wrapper */
+.section {
+  margin-bottom: 1.5rem;
+}
+
+/* Section titles */
+.sectionTitle {
+  font-size: 1.25rem;
+  font-weight: 600;
+  color: #3D5A80;
+  margin-bottom: 0.5rem;
+}
+
+/* Cards */
+.card {
+  background: #FFFFFF;
+  padding: 12px;
+  border-radius: 8px;
+  border: 1px solid #E2E8F0;
+  margin-bottom: 12px;
+  box-shadow: 0 2px 4px rgba(0, 0, 0, 0.05);
+}
+
+/* Card heading */
+.cardTitle {
+  font-weight: 700;
+  color: #2B2D42;
+  margin-bottom: 6px;
+}
+
+/* Card body text */
+.cardText {
+  font-size: 0.875rem;
+  color: #2B2D42;
+  margin-bottom: 4px;
+}
+
+/* Empty state */
+.noData {
+  font-style: italic;
+  color: #8D99AE;
+  text-align: center;
+  padding: 8px 0;
+}
