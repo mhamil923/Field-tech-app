@@ -16,7 +16,17 @@
         "NSCameraUsageDescription": "We use the camera to capture job site photos and signatures for work orders.",
         "NSPhotoLibraryUsageDescription": "We access your photo library so you can upload job photos and signed documents.",
         "NSPhotoLibraryAddUsageDescription": "We save signed PDFs or images to your library when you export them.",
-        "LSApplicationQueriesSchemes": ["comgooglemaps"]
+        "LSApplicationQueriesSchemes": ["comgooglemaps"],
+        "NSAppTransportSecurity": {
+          "NSAllowsArbitraryLoads": false,
+          "NSAllowsArbitraryLoadsInWebContent": true,
+          "NSExceptionDomains": {
+            "fcgg.us-east-2.elasticbeanstalk.com": {
+              "NSExceptionAllowsInsecureHTTPLoads": true,
+              "NSIncludesSubdomains": true
+            }
+          }
+        }
       }
     },
 
@@ -55,7 +65,7 @@
       "eas": {
         "projectId": "8a664541-cdcf-4c5a-8156-9b8d93f9599b"
       },
-      "apiUrl": "https://<YOUR_PUBLIC_API_URL>"
+      "apiUrl": "https://fcgg.us-east-2.elasticbeanstalk.com"
     },
 
     "runtimeVersion": {
