@@ -17,11 +17,13 @@ import {
   Linking,
   Platform,
   PanResponder,
+  SafeAreaView,
 } from 'react-native';
 import { WebView } from 'react-native-webview';
 import Canvas from 'react-native-canvas';
 import * as FileSystem from 'expo-file-system';
 import * as ImagePicker from 'expo-image-picker';
+import * as ImageManipulator from 'expo-image-manipulator';
 import moment from 'moment';
 import { useLocalSearchParams, useRouter } from 'expo-router';
 
@@ -33,7 +35,8 @@ const { width: screenWidth, height: screenHeight } = Dimensions.get('window');
  * Annotator HTML (with Draw Mode checkbox):
  * - Renders PDF via pdf.js
  * - Overlay per page for ink
- * - Save uses pdf-lib.saveAsBase64({ dataUri: false }) to AVOID call-stack overflow
+ * - Save uses pdf-lib.saveAsBase64({ dataUri: false })
+ * - Adds safe-area padding so toolbar isn’t clipped on iOS
  */
 const ANNOTATOR_HTML = `
 <!doctype html>
@@ -44,6 +47,8 @@ const ANNOTATOR_HTML = `
 <title>Annotate PDF</title>
 <style>
   html,body { margin:0; padding:0; background:#fff; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Arial, sans-serif; }
+  /* push content below iOS notch / status bar */
+  body { padding-top: calc(env(safe-area-inset-top, 0px) + 6px); }
   #toolbar { position: sticky; top: 0; z-index: 1000; background: #111827; color:#fff; display:flex; gap:8px; align-items:center; padding:8px 10px; flex-wrap: wrap; }
   #toolbar button { background:#374151; border:0; color:#fff; padding:8px 10px; border-radius:6px; font-weight:600; }
   #toolbar button.primary { background:#2563EB; }
@@ -194,7 +199,6 @@ const ANNOTATOR_HTML = `
       }
     }
 
-    // Avoid stack overflows by using pdf-lib's base64 save (no apply on large arrays)
     async function saveAndUpload() {
       try {
         const b64 = window.PDF_BASE64 || '';
@@ -227,10 +231,9 @@ const ANNOTATOR_HTML = `
 
         let outB64;
         if (pdfDoc.saveAsBase64) {
-          outB64 = await pdfDoc.saveAsBase64({ dataUri: false }); // ✅ no stack overflow
+          outB64 = await pdfDoc.saveAsBase64({ dataUri: false });
         } else {
           const outBytes = await pdfDoc.save();
-          // fallback (chunked) — safe but slower
           let binary = '';
           const chunkSize = 0x8000;
           for (let i = 0; i < outBytes.length; i += chunkSize) {
@@ -350,12 +353,16 @@ export default function ViewWorkOrder() {
     );
   }
 
-  // Draw Note canvas (kept)
+  // Draw Note canvas (now with white background so saved PNG isn't transparent)
   const handleCanvas = canvas => {
     if (!canvas) return;
     canvas.width = screenWidth;
     canvas.height = screenHeight;
     const ctx = canvas.getContext('2d');
+    // fill WHITE background so it isn't transparent (prevents "black screen" when viewer bg is black)
+    ctx.fillStyle = '#FFFFFF';
+    ctx.fillRect(0, 0, canvas.width, canvas.height);
+    // draw settings
     ctx.strokeStyle = '#000';
     ctx.lineWidth = 4;
     ctx.lineCap = 'round';
@@ -367,11 +374,12 @@ export default function ViewWorkOrder() {
     try {
       const dataUrl = await canvasRef.current.toDataURL();
       const base64 = dataUrl.split(',')[1];
-      const fileUri = FileSystem.cacheDirectory + `drawing_${Date.now()}.png`;
+      const fileUri = FileSystem.cacheDirectory + `drawing_${Date.now()}.jpg`; // save as JPEG
+      // write as JPEG (base64 already represents PNG, but backend just stores file; JPEG smaller helps against 413)
       await FileSystem.writeAsStringAsync(fileUri, base64, { encoding: FileSystem.EncodingType.Base64 });
 
       const form = new FormData();
-      form.append('photoFile', { uri: fileUri, name: 'drawing.png', type: 'image/png' });
+      form.append('photoFile', { uri: fileUri, name: 'drawing.jpg', type: 'image/jpeg' });
 
       await api.put(`/work-orders/${workOrderId}/edit`, form, { headers: { 'Content-Type': 'multipart/form-data' } });
 
@@ -409,49 +417,72 @@ export default function ViewWorkOrder() {
     }
   };
 
+  // --- helpers to keep uploads small (avoid 413) ---
+  const processImageForUpload = async (uri) => {
+    try {
+      // Resize longest side to ~1600px and compress to ~0.7 JPEG
+      const manip = await ImageManipulator.manipulateAsync(
+        uri,
+        [{ resize: { width: 1600 } }], // if portrait, RN will respect aspect ratio; if landscape, width cap helps
+        { compress: 0.7, format: ImageManipulator.SaveFormat.JPEG }
+      );
+      return manip.uri;
+    } catch {
+      return uri; // fall back to original if manipulator fails
+    }
+  };
+
   const takePhoto = async () => {
     const { status } = await ImagePicker.requestCameraPermissionsAsync();
     if (status !== 'granted') return Alert.alert('Permission required', 'Need camera access.');
-    const result = await ImagePicker.launchCameraAsync({ mediaTypes: ImagePicker.MediaTypeOptions.Images, quality: 1 });
+    const result = await ImagePicker.launchCameraAsync({
+      mediaTypes: ImagePicker.MediaTypeOptions.Images,
+      quality: 1,
+      // iOS can produce HEIC; we’ll convert to JPEG via ImageManipulator
+    });
     if (result.canceled) return;
 
     const form = new FormData();
-    result.assets.forEach(({ uri }, idx) => {
-      const guessedExt = (uri.split('.').pop() || 'jpg').toLowerCase();
-      const name = `photo-${Date.now()}-${idx}.${guessedExt}`;
-      const type = guessedExt === 'jpg' ? 'image/jpeg' : `image/${guessedExt}`;
-      form.append('photoFile', { uri, name, type });
-    });
+    for (let i = 0; i < result.assets.length; i++) {
+      const originalUri = result.assets[i].uri;
+      const processedUri = await processImageForUpload(originalUri);
+      const name = `photo-${Date.now()}-${i}.jpg`;
+      form.append('photoFile', { uri: processedUri, name, type: 'image/jpeg' });
+    }
 
     try {
       await api.put(`/work-orders/${workOrderId}/edit`, form, { headers: { 'Content-Type': 'multipart/form-data' } });
       fetchWorkOrder();
       Alert.alert('Success', 'Photo taken!');
     } catch (err) {
-      Alert.alert('Error', err?.response?.data?.error || err.message);
+      Alert.alert('Upload Error', err?.response?.data?.error || err.message);
     }
   };
 
   const uploadPhotos = async () => {
     const { status } = await ImagePicker.requestMediaLibraryPermissionsAsync();
     if (status !== 'granted') return Alert.alert('Permission required', 'Need photo library access.');
-    const result = await ImagePicker.launchImageLibraryAsync({ mediaTypes: ImagePicker.MediaTypeOptions.Images, allowsMultipleSelection: true, quality: 1 });
+    const result = await ImagePicker.launchImageLibraryAsync({
+      mediaTypes: ImagePicker.MediaTypeOptions.Images,
+      allowsMultipleSelection: true,
+      quality: 1,
+    });
     if (result.canceled) return;
 
     const form = new FormData();
-    result.assets.forEach(({ uri }, idx) => {
-      const guessedExt = (uri.split('.').pop() || 'jpg').toLowerCase();
-      const name = `photo-${Date.now()}-${idx}.${guessedExt}`;
-      const type = guessedExt === 'jpg' ? 'image/jpeg' : `image/${guessedExt}`;
-      form.append('photoFile', { uri, name, type });
-    });
+    for (let i = 0; i < result.assets.length; i++) {
+      const originalUri = result.assets[i].uri;
+      const processedUri = await processImageForUpload(originalUri);
+      const name = `photo-${Date.now()}-${i}.jpg`;
+      form.append('photoFile', { uri: processedUri, name, type: 'image/jpeg' });
+    }
 
     try {
       await api.put(`/work-orders/${workOrderId}/edit`, form, { headers: { 'Content-Type': 'multipart/form-data' } });
       fetchWorkOrder();
       Alert.alert('Success', 'Photos uploaded!');
     } catch (err) {
-      Alert.alert('Error', err?.response?.data?.error || err.message);
+      Alert.alert('Upload Error', err?.response?.data?.error || err.message);
     }
   };
 
@@ -715,7 +746,7 @@ export default function ViewWorkOrder() {
 
       {/* Annotate & Sign Modal */}
       <Modal visible={annotateVisible} animationType="slide" onRequestClose={() => setAnnotateVisible(false)}>
-        <View style={{ flex: 1, backgroundColor: '#000' }}>
+        <SafeAreaView style={{ flex: 1, backgroundColor: '#000' }}>
           {pdfBase64 ? (
             <WebView
               ref={annotatorRef}
@@ -725,21 +756,21 @@ export default function ViewWorkOrder() {
               domStorageEnabled
               onMessage={onAnnotatorMessage}
               injectedJavaScriptBeforeContentLoaded={
-                // safer injection avoids breaking on quotes/backslashes and huge strings
                 `window.PDF_BASE64 = ${JSON.stringify(pdfBase64)}; true;`
               }
+              style={{ flex: 1 }}
             />
           ) : (
             <View style={styles.center}>
               <Text style={styles.loadingText}>Loading PDF…</Text>
             </View>
           )}
-          <View style={{ position:'absolute', top: 40, right: 16 }}>
+          <View style={{ position:'absolute', top: 8, right: 16 }}>
             <TouchableOpacity onPress={() => setAnnotateVisible(false)} style={{ backgroundColor:'#dc3545', padding:10, borderRadius:8 }}>
               <Text style={{ color:'#fff', fontWeight:'700' }}>Close</Text>
             </TouchableOpacity>
           </View>
-        </View>
+        </SafeAreaView>
       </Modal>
     </View>
   );

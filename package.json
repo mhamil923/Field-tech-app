@@ -56,7 +56,8 @@
     "react-native-view-shot": "^4.0.3",
     "react-native-web": "^0.20.0",
     "react-native-webview": "13.13.5",
-    "rn-fetch-blob": "^0.12.0"
+    "rn-fetch-blob": "^0.12.0",
+    "expo-image-manipulator": "~13.1.7"
   },
   "devDependencies": {
     "@babel/core": "^7.26.0",
