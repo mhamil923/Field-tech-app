@@ -3,6 +3,9 @@ import axios from 'axios';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import API_BASE_URL from './API_BASE_URL';
 
+// normalize base URL to avoid double slashes
+const BASE = (API_BASE_URL || '').replace(/\/+$/, '');
+
 /**
  * Axios instance pointed at your EB backend.
  * NOTE: If your EB is HTTP (not HTTPS), remember:
@@ -10,7 +13,7 @@ import API_BASE_URL from './API_BASE_URL';
  *  - Android: set android:usesCleartextTraffic="true" or host allowlist
  */
 const api = axios.create({
-  baseURL: API_BASE_URL,
+  baseURL: BASE,
   timeout: 15000,
   headers: { Accept: 'application/json' },
 });
@@ -40,21 +43,31 @@ api.interceptors.response.use(
  * - For S3-backed uploads, your server redirects /files?key=uploads/... to a presigned URL.
  * - For local disk, it serves the file directly.
  *
- * @param {string} key e.g. "uploads/1699999999999-abcd12.jpg" or "uploads/xxx.pdf"
- * @returns {string|null}
+ * Accepts:
+ *  - absolute URL: "https://..." (passed through)
+ *  - resolver path: "/files?key=uploads/abc.pdf"
+ *  - key with prefix: "uploads/abc.pdf"
+ *  - bare filename: "abc.pdf" (auto-prefixed to uploads/)
  */
 export function fileUrl(key) {
   if (!key) return null;
-  // If backend ever returns absolute URLs already, just pass through:
-  if (/^https?:\/\//i.test(key)) return key;
 
-  // Prefer the file resolver so this works for both S3 and local
-  if (String(key).startsWith('uploads/')) {
-    return `${API_BASE_URL}/files?key=${encodeURIComponent(key)}`;
+  const str = String(key);
+
+  // already absolute
+  if (/^https?:\/\//i.test(str)) return str;
+
+  // already looks like the resolver
+  if (str.startsWith('/files?key=')) {
+    return `${BASE}${str}`;
   }
 
-  // Fallback (rare): treat as relative path on the API host
-  return `${API_BASE_URL}/${key.replace(/^\//, '')}`;
+  // normalize to uploads/… if it's just a bare name
+  const normalizedKey = str.startsWith('uploads/')
+    ? str
+    : `uploads/${str.replace(/^\/+/, '')}`;
+
+  return `${BASE}/files?key=${encodeURIComponent(normalizedKey)}`;
 }
 
 /**
@@ -64,16 +77,14 @@ export function fileUrl(key) {
  *
  * @param {number|string} workOrderId
  * @param {Array<{ uri:string, name?:string, type?:string }>} assets
- *        Use ImagePicker/MediaLibrary assets. Provide .type if you can.
  */
 export async function uploadPhotos(workOrderId, assets = []) {
   const form = new FormData();
 
   assets.forEach((asset, idx) => {
     if (!asset?.uri) return;
-    const name =
-      asset.name ||
-      `photo-${Date.now()}-${idx}.${(asset.uri.split('.').pop() || 'jpg')}`;
+    const guessedExt = (asset.uri.split('.').pop() || 'jpg').toLowerCase();
+    const name = asset.name || `photo-${Date.now()}-${idx}.${guessedExt}`;
     const type = asset.type || guessMimeFromName(name) || 'image/jpeg';
 
     form.append('photoFile', {
@@ -83,24 +94,20 @@ export async function uploadPhotos(workOrderId, assets = []) {
     });
   });
 
-  // IMPORTANT: for React Native + axios + FormData, do NOT set the boundary yourself.
   return api.put(`/work-orders/${workOrderId}/edit`, form, {
     headers: { 'Content-Type': 'multipart/form-data' },
   });
 }
 
-/**
- * Simple mime guesser for common image types.
- * (Avoids pulling in extra deps.)
- */
+/** Simple mime guesser for common image types. */
 function guessMimeFromName(name = '') {
   const lower = name.toLowerCase();
-  if (lower.endsWith('.png')) return 'image/png';
+  if (lower.endsWith('.png'))  return 'image/png';
   if (lower.endsWith('.jpg') || lower.endsWith('.jpeg')) return 'image/jpeg';
   if (lower.endsWith('.heic')) return 'image/heic';
   if (lower.endsWith('.webp')) return 'image/webp';
-  if (lower.endsWith('.gif')) return 'image/gif';
-  if (lower.endsWith('.pdf')) return 'application/pdf';
+  if (lower.endsWith('.gif'))  return 'image/gif';
+  if (lower.endsWith('.pdf'))  return 'application/pdf';
   return null;
 }
 
