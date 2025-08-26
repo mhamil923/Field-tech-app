@@ -32,11 +32,94 @@ import api, { fileUrl } from '../../constants/api';
 const { width: screenWidth, height: screenHeight } = Dimensions.get('window');
 
 /**
- * Annotator HTML (with Draw Mode checkbox):
- * - Renders PDF via pdf.js
- * - Overlay per page for ink
- * - Save uses pdf-lib.saveAsBase64({ dataUri: false })
- * - Adds safe-area padding so toolbar isn’t clipped on iOS
+ * Read-only multi-page PDF viewer using pdf.js
+ * - Accepts window.PDF_BASE64
+ * - Renders every page vertically with internal scrolling
+ * - Posts "HEIGHT:<px>" (approx doc height) that we can optionally use
+ */
+const PDF_VIEWER_HTML = `
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no" />
+<title>PDF Preview</title>
+<style>
+  html,body { margin:0; padding:0; background:#fff; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Arial, sans-serif; }
+  #pages { padding: 8px; }
+  .pageWrap { margin: 0 auto 12px; max-width: 1100px; }
+  canvas.page { width:100%; height:auto; display:block; background:#fafafa; box-shadow: 0 1px 2px rgba(0,0,0,.05); }
+  .hint { text-align:center; font-size:12px; color:#6b7280; margin:8px 0 12px; }
+</style>
+</head>
+<body>
+  <div id="pages"></div>
+  <div class="hint">Scroll to view all pages.</div>
+
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
+  <script>
+    if (window['pdfjsLib']) {
+      pdfjsLib.GlobalWorkerOptions.workerSrc =
+        "https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js";
+    }
+
+    function b64ToUint8(b64) {
+      const bin = atob(b64);
+      const len = bin.length;
+      const bytes = new Uint8Array(len);
+      for (let i = 0; i < len; i++) bytes[i] = bin.charCodeAt(i);
+      return bytes;
+    }
+
+    async function renderPDF() {
+      try {
+        const b64 = window.PDF_BASE64 || '';
+        if (!b64) throw new Error('Missing PDF data.');
+        const doc = await pdfjsLib.getDocument({ data: b64ToUint8(b64) }).promise;
+        const container = document.getElementById('pages');
+        container.innerHTML = '';
+
+        for (let i = 1; i <= doc.numPages; i++) {
+          const page = await doc.getPage(i);
+          const vp = page.getViewport({ scale: 1 });
+          const targetWidth = Math.min(1100, Math.max(600, vp.width));
+          const scale = targetWidth / vp.width;
+          const viewport = page.getViewport({ scale });
+
+          const wrap = document.createElement('div'); wrap.className = 'pageWrap';
+          const pageCanvas = document.createElement('canvas'); pageCanvas.className = 'page';
+          pageCanvas.width = Math.floor(viewport.width); pageCanvas.height = Math.floor(viewport.height);
+          wrap.appendChild(pageCanvas);
+          container.appendChild(wrap);
+
+          const ctx = pageCanvas.getContext('2d');
+          await page.render({ canvasContext: ctx, viewport }).promise;
+        }
+
+        setTimeout(() => {
+          const h = Math.max(
+            document.documentElement.scrollHeight,
+            document.body.scrollHeight
+          );
+          if (window.ReactNativeWebView) {
+            window.ReactNativeWebView.postMessage('HEIGHT:' + h);
+          }
+        }, 50);
+      } catch (e) {
+        if (window.ReactNativeWebView) {
+          window.ReactNativeWebView.postMessage('ERROR:' + (e?.message || String(e)));
+        }
+      }
+    }
+
+    window.addEventListener('DOMContentLoaded', renderPDF);
+  </script>
+</body>
+</html>
+`;
+
+/**
+ * Annotator HTML (with Draw Mode checkbox) — unchanged: used for signing
  */
 const ANNOTATOR_HTML = `
 <!doctype html>
@@ -47,7 +130,6 @@ const ANNOTATOR_HTML = `
 <title>Annotate PDF</title>
 <style>
   html,body { margin:0; padding:0; background:#fff; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Arial, sans-serif; }
-  /* push content below iOS notch / status bar */
   body { padding-top: calc(env(safe-area-inset-top, 0px) + 6px); }
   #toolbar { position: sticky; top: 0; z-index: 1000; background: #111827; color:#fff; display:flex; gap:8px; align-items:center; padding:8px 10px; flex-wrap: wrap; }
   #toolbar button { background:#374151; border:0; color:#fff; padding:8px 10px; border-radius:6px; font-weight:600; }
@@ -72,7 +154,7 @@ const ANNOTATOR_HTML = `
     <button id="save" class="primary">Save & Upload</button>
   </div>
   <div id="pages"></div>
-  <div class="hint">Turn OFF “Draw Mode” to scroll. Turn it ON to sign/annotate (e.g., page 2).</div>
+  <div class="hint">Turn OFF “Draw Mode” to scroll. Turn it ON to sign/annotate.</div>
 
   <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
   <script>
@@ -282,21 +364,43 @@ export default function ViewWorkOrder() {
   const workOrderId = params?.id ? (Array.isArray(params.id) ? params.id[0] : params.id) : null;
   const router = useRouter();
 
+  // Draw-note canvas refs
   const canvasRef = useRef(null);
   const ctxRef = useRef(null);
+
+  // Draw-note tool state
+  const [drawTool, setDrawTool] = useState('pen'); // 'pen' | 'erase'
 
   const panResponder = useRef(
     PanResponder.create({
       onStartShouldSetPanResponder: () => true,
+      onMoveShouldSetPanResponder: () => true,
       onPanResponderGrant: e => {
+        if (!ctxRef.current) return;
         const { locationX, locationY } = e.nativeEvent;
-        ctxRef.current?.beginPath();
-        ctxRef.current?.moveTo(locationX, locationY);
+        // choose pen or eraser style
+        if (drawTool === 'erase') {
+          ctxRef.current.strokeStyle = '#FFFFFF';
+          ctxRef.current.lineWidth = 14;
+        } else {
+          ctxRef.current.strokeStyle = '#000000';
+          ctxRef.current.lineWidth = 4;
+        }
+        ctxRef.current.beginPath();
+        ctxRef.current.moveTo(locationX, locationY);
+        ctxRef.current.stroke();
       },
       onPanResponderMove: e => {
+        if (!ctxRef.current) return;
         const { locationX, locationY } = e.nativeEvent;
-        ctxRef.current?.lineTo(locationX, locationY);
-        ctxRef.current?.stroke();
+        ctxRef.current.lineTo(locationX, locationY);
+        ctxRef.current.stroke();
+      },
+      onPanResponderRelease: () => {
+        try { ctxRef.current?.closePath?.(); } catch {}
+      },
+      onPanResponderTerminate: () => {
+        try { ctxRef.current?.closePath?.(); } catch {}
       },
     })
   ).current;
@@ -318,6 +422,18 @@ export default function ViewWorkOrder() {
   const [pdfBase64, setPdfBase64] = useState(null);
   const annotatorRef = useRef(null);
 
+  // Inline viewer state (multi-page pdf.js)
+  const [pdfInlineB64, setPdfInlineB64] = useState(null);
+  const [pdfPreviewError, setPdfPreviewError] = useState(null);
+  const [pdfInlineHeight, setPdfInlineHeight] = useState(Math.max(600, screenHeight * 0.8));
+
+  const sortNotesDesc = (arr = []) =>
+    [...arr].sort((a, b) => {
+      const ta = new Date(a?.createdAt || 0).getTime();
+      const tb = new Date(b?.createdAt || 0).getTime();
+      return tb - ta;
+    });
+
   const fetchWorkOrder = useCallback(async () => {
     if (!workOrderId) return;
     try {
@@ -329,14 +445,29 @@ export default function ViewWorkOrder() {
         : data.notes
         ? (() => { try { return JSON.parse(data.notes); } catch { return []; } })()
         : [];
-      setNotes(parsedNotes);
+      setNotes(sortNotesDesc(parsedNotes));
 
       const photoKeys = (data.photoPath || '')
         .split(',')
         .map(s => s.trim())
         .filter(Boolean);
       setPhotos(photoKeys.map(k => fileUrl(k)));
-    } catch {
+
+      // Prepare inline PDF preview (as base64 for pdf.js)
+      setPdfInlineB64(null);
+      setPdfPreviewError(null);
+      if (data.pdfPath) {
+        try {
+          const url = fileUrl(data.pdfPath);
+          const target = FileSystem.cacheDirectory + `wo_preview_${workOrderId}.pdf`;
+          await FileSystem.downloadAsync(url, target);
+          const b64 = await FileSystem.readAsStringAsync(target, { encoding: FileSystem.EncodingType.Base64 });
+          setPdfInlineB64(b64);
+        } catch (e) {
+          setPdfPreviewError(e?.message || 'Failed to load PDF.');
+        }
+      }
+    } catch (err) {
       Alert.alert('Error', 'Failed to load work order.');
     }
   }, [workOrderId]);
@@ -345,41 +476,61 @@ export default function ViewWorkOrder() {
     fetchWorkOrder();
   }, [fetchWorkOrder]);
 
-  if (!workOrder) {
-    return (
-      <View style={styles.center}>
-        <Text style={styles.loadingText}>Loading…</Text>
-      </View>
-    );
-  }
-
-  // Draw Note canvas (now with white background so saved PNG isn't transparent)
+  // Canvas setup for Draw Notes
   const handleCanvas = canvas => {
     if (!canvas) return;
     canvas.width = screenWidth;
     canvas.height = screenHeight;
     const ctx = canvas.getContext('2d');
-    // fill WHITE background so it isn't transparent (prevents "black screen" when viewer bg is black)
+    // white background so erasing works by painting white
     ctx.fillStyle = '#FFFFFF';
     ctx.fillRect(0, 0, canvas.width, canvas.height);
-    // draw settings
-    ctx.strokeStyle = '#000';
+    // defaults for pen
+    ctx.strokeStyle = '#000000';
     ctx.lineWidth = 4;
     ctx.lineCap = 'round';
+    ctx.lineJoin = 'round';
     ctxRef.current = ctx;
     canvasRef.current = canvas;
   };
 
+  const clearCanvas = () => {
+    if (!canvasRef.current || !ctxRef.current) return;
+    ctxRef.current.save?.();
+    ctxRef.current.fillStyle = '#FFFFFF';
+    ctxRef.current.fillRect(0, 0, canvasRef.current.width, canvasRef.current.height);
+    ctxRef.current.restore?.();
+  };
+
   const saveDrawing = async () => {
     try {
+      if (!canvasRef.current) throw new Error('Canvas not ready.');
+      // toDataURL is PNG; save as file, then compress to JPEG to keep size down
       const dataUrl = await canvasRef.current.toDataURL();
-      const base64 = dataUrl.split(',')[1];
-      const fileUri = FileSystem.cacheDirectory + `drawing_${Date.now()}.jpg`; // save as JPEG
-      // write as JPEG (base64 already represents PNG, but backend just stores file; JPEG smaller helps against 413)
-      await FileSystem.writeAsStringAsync(fileUri, base64, { encoding: FileSystem.EncodingType.Base64 });
+      const base64Png = dataUrl.split(',')[1];
+
+      const pngPath = FileSystem.cacheDirectory + `drawing_${Date.now()}.png`;
+      await FileSystem.writeAsStringAsync(pngPath, base64Png, { encoding: FileSystem.EncodingType.Base64 });
+
+      // Try compressing to JPEG
+      let uploadUri = pngPath;
+      let uploadType = 'image/png';
+      let uploadName = 'drawing.png';
+      try {
+        const jpeg = await ImageManipulator.manipulateAsync(
+          pngPath,
+          [],
+          { compress: 0.8, format: ImageManipulator.SaveFormat.JPEG }
+        );
+        uploadUri = jpeg.uri;
+        uploadType = 'image/jpeg';
+        uploadName = 'drawing.jpg';
+      } catch {
+        // fall back to PNG if JPEG conversion fails
+      }
 
       const form = new FormData();
-      form.append('photoFile', { uri: fileUri, name: 'drawing.jpg', type: 'image/jpeg' });
+      form.append('photoFile', { uri: uploadUri, name: uploadName, type: uploadType });
 
       await api.put(`/work-orders/${workOrderId}/edit`, form, { headers: { 'Content-Type': 'multipart/form-data' } });
 
@@ -411,24 +562,23 @@ export default function ViewWorkOrder() {
       const { data } = await api.post(`/work-orders/${workOrderId}/notes`, { text: newNoteText.trim() });
       setNewNoteText('');
       setShowAddNoteModal(false);
-      setNotes(data.notes || []);
+      setNotes(sortNotesDesc(data.notes || []));
     } catch (err) {
       Alert.alert('Error', err?.response?.data?.error || err.message);
     }
   };
 
-  // --- helpers to keep uploads small (avoid 413) ---
+  // --- helpers to keep uploads small (avoid 413 on raw photos) ---
   const processImageForUpload = async (uri) => {
     try {
-      // Resize longest side to ~1600px and compress to ~0.7 JPEG
       const manip = await ImageManipulator.manipulateAsync(
         uri,
-        [{ resize: { width: 1600 } }], // if portrait, RN will respect aspect ratio; if landscape, width cap helps
+        [{ resize: { width: 1600 } }],
         { compress: 0.7, format: ImageManipulator.SaveFormat.JPEG }
       );
       return manip.uri;
     } catch {
-      return uri; // fall back to original if manipulator fails
+      return uri;
     }
   };
 
@@ -438,7 +588,6 @@ export default function ViewWorkOrder() {
     const result = await ImagePicker.launchCameraAsync({
       mediaTypes: ImagePicker.MediaTypeOptions.Images,
       quality: 1,
-      // iOS can produce HEIC; we’ll convert to JPEG via ImageManipulator
     });
     if (result.canceled) return;
 
@@ -514,7 +663,7 @@ export default function ViewWorkOrder() {
     try { await Share.share({ url, message: url }); } catch {}
   };
 
-  const pdfURL = workOrder.pdfPath ? fileUrl(workOrder.pdfPath) : null;
+  const pdfURL = workOrder?.pdfPath ? fileUrl(workOrder.pdfPath) : null;
 
   const openAnnotator = async () => {
     if (!pdfURL) return Alert.alert('No PDF', 'This work order does not have a PDF attached.');
@@ -563,20 +712,20 @@ export default function ViewWorkOrder() {
         <Text style={styles.title}>Work Order Details</Text>
 
         <View style={styles.card}>
-          <View style={styles.row}><Text style={styles.label}>WO/PO #:</Text><Text style={styles.value}>{workOrder.poNumber || '—'}</Text></View>
-          <View style={styles.row}><Text style={styles.label}>Customer:</Text><Text style={styles.value}>{workOrder.customer || '—'}</Text></View>
+          <View style={styles.row}><Text style={styles.label}>WO/PO #:</Text><Text style={styles.value}>{workOrder?.poNumber || '—'}</Text></View>
+          <View style={styles.row}><Text style={styles.label}>Customer:</Text><Text style={styles.value}>{workOrder?.customer || '—'}</Text></View>
           <View style={styles.row}>
             <Text style={styles.label}>Site Location:</Text>
-            <TouchableOpacity onPress={() => openMap(workOrder.siteLocation)}>
-              <Text style={[styles.value, styles.linkText]}>{workOrder.siteLocation || '—'}</Text>
+            <TouchableOpacity onPress={() => openMap(workOrder?.siteLocation)}>
+              <Text style={[styles.value, styles.linkText]}>{workOrder?.siteLocation || '—'}</Text>
             </TouchableOpacity>
           </View>
-          <View style={styles.row}><Text style={styles.label}>Problem:</Text><Text style={styles.value}>{workOrder.problemDescription || '—'}</Text></View>
-          <View style={styles.row}><Text style={styles.label}>Status:</Text><Text style={styles.value}>{workOrder.status || '—'}</Text></View>
+          <View style={styles.row}><Text style={styles.label}>Problem:</Text><Text style={styles.value}>{workOrder?.problemDescription || '—'}</Text></View>
+          <View style={styles.row}><Text style={styles.label}>Status:</Text><Text style={styles.value}>{workOrder?.status || '—'}</Text></View>
           <View style={styles.row}>
             <Text style={styles.label}>Scheduled:</Text>
             <Text style={styles.value}>
-              {workOrder.scheduledDate ? moment(workOrder.scheduledDate).format('YYYY-MM-DD HH:mm') : 'Not Scheduled'}
+              {workOrder?.scheduledDate ? moment(workOrder.scheduledDate).format('YYYY-MM-DD HH:mm') : 'Not Scheduled'}
             </Text>
           </View>
         </View>
@@ -612,21 +761,69 @@ export default function ViewWorkOrder() {
             {notes.map((n, i) => (
               <View key={i} style={styles.noteCard}>
                 <Text style={styles.noteTimestamp}>
-                  {moment(n.createdAt).format('YYYY-MM-DD HH:mm')}
-                  {n.by ? `  •  ${n.by}` : ''}
+                  {n?.createdAt ? moment(n.createdAt).format('YYYY-MM-DD HH:mm') : ''}
+                  {n?.by ? `  •  ${n.by}` : ''}
                 </Text>
-                <Text style={styles.noteBody}>{n.text}</Text>
+                <Text style={styles.noteBody}>{n?.text || ''}</Text>
               </View>
             ))}
           </>
         )}
 
-        {workOrder.pdfPath && (
+        {workOrder?.pdfPath && (
           <View style={styles.card}>
-            <Text style={styles.sectionHeader}>Work Order PDF (preview)</Text>
-            <View style={[styles.pdfInline, { height: screenHeight * 0.3 }]}>
-              <WebView source={{ uri: workOrder.pdfPath ? fileUrl(workOrder.pdfPath) : '' }} style={{ flex: 1 }} />
-            </View>
+            <Text style={styles.sectionHeader}>Work Order PDF</Text>
+
+            {!pdfInlineB64 && !pdfPreviewError && (
+              <View style={[styles.pdfInline, { height: pdfInlineHeight, alignItems:'center', justifyContent:'center' }]}>
+                <Text style={{ color:'#2B2D42' }}>Loading preview…</Text>
+              </View>
+            )}
+
+            {!!pdfPreviewError && (
+              <View style={[styles.pdfInline, { padding: 12 }]}>
+                <Text style={{ marginBottom: 8, color: '#b00020' }}>
+                  Couldn’t load inline preview: {pdfPreviewError}
+                </Text>
+                <TouchableOpacity
+                  onPress={() => Linking.openURL(fileUrl(workOrder.pdfPath))}
+                  style={{ backgroundColor:'#343a40', padding:10, borderRadius:6, alignSelf:'flex-start' }}
+                >
+                  <Text style={{ color:'#fff', fontWeight:'600' }}>Open PDF</Text>
+                </TouchableOpacity>
+              </View>
+            )}
+
+            {!!pdfInlineB64 && (
+              <View style={[styles.pdfInline, { height: pdfInlineHeight }]}>
+                <WebView
+                  originWhitelist={['*']}
+                  source={{ html: PDF_VIEWER_HTML }}
+                  javaScriptEnabled
+                  domStorageEnabled={false}
+                  onMessage={(e) => {
+                    const msg = e?.nativeEvent?.data || '';
+                    if (msg.startsWith('ERROR:')) {
+                      setPdfPreviewError(msg.slice(6));
+                      return;
+                    }
+                    if (msg.startsWith('HEIGHT:')) {
+                      const h = parseInt(msg.slice(7), 10);
+                      if (Number.isFinite(h)) {
+                        // allow a tall viewer but cap to ~2.5 screens to still allow outer scrolling after
+                        const minH = Math.max(600, screenHeight * 0.8);
+                        const maxH = Math.max(minH, screenHeight * 2.5);
+                        setPdfInlineHeight(Math.max(minH, Math.min(h, maxH)));
+                      }
+                    }
+                  }}
+                  injectedJavaScriptBeforeContentLoaded={
+                    `window.PDF_BASE64 = ${JSON.stringify(pdfInlineB64)}; true;`
+                  }
+                  style={{ flex: 1 }}
+                />
+              </View>
+            )}
           </View>
         )}
       </ScrollView>
@@ -728,11 +925,30 @@ export default function ViewWorkOrder() {
         </View>
       </Modal>
 
-      {/* Draw Note Modal (kept) */}
+      {/* Draw Note Modal with Pen/Eraser */}
       <Modal visible={showDrawModal} animationType="slide" onRequestClose={() => setShowDrawModal(false)}>
         <View style={styles.drawContainer}>
           <Canvas ref={handleCanvas} style={styles.canvas} />
           <View style={StyleSheet.absoluteFill} {...panResponder.panHandlers} />
+
+          <View style={styles.drawToolbar}>
+            <TouchableOpacity
+              style={[styles.toolBtn, drawTool === 'pen' ? styles.toolBtnActive : null]}
+              onPress={() => setDrawTool('pen')}
+            >
+              <Text style={[styles.toolText, drawTool === 'pen' ? styles.toolTextActive : null]}>Pen</Text>
+            </TouchableOpacity>
+            <TouchableOpacity
+              style={[styles.toolBtn, drawTool === 'erase' ? styles.toolBtnActive : null]}
+              onPress={() => setDrawTool('erase')}
+            >
+              <Text style={[styles.toolText, drawTool === 'erase' ? styles.toolTextActive : null]}>Eraser</Text>
+            </TouchableOpacity>
+            <TouchableOpacity style={[styles.toolBtn, styles.clearBtn]} onPress={clearCanvas}>
+              <Text style={[styles.toolText, styles.clearText]}>Clear</Text>
+            </TouchableOpacity>
+          </View>
+
           <View style={styles.drawFooter}>
             <TouchableOpacity style={styles.saveDrawBtn} onPress={saveDrawing}>
               <Text style={styles.saveDrawText}>Save</Text>
@@ -788,6 +1004,7 @@ const styles = StyleSheet.create({
   value: { flex: 1, color: '#2B2D42' },
   linkText: { color: '#007bff', textDecorationLine: 'underline' },
   pdfInline: { width: '100%', backgroundColor: '#E2E8F0', borderRadius: 6, overflow: 'hidden', marginTop: 8 },
+
   buttonBase: { width: '100%', paddingVertical: 12, borderRadius: 6, alignItems: 'center', marginBottom: 12 },
   backBtn: { backgroundColor: '#6c757d' },
   backText: { color: '#FFF', fontWeight: '600', fontSize: 16 },
@@ -799,17 +1016,61 @@ const styles = StyleSheet.create({
   noteText: { color: '#000', fontWeight: '600', fontSize: 16 },
   drawBtn: { backgroundColor: '#28a745' },
   drawText: { color: '#FFF', fontWeight: '600', fontSize: 16 },
+
   sectionHeader: { fontSize: 18, fontWeight: '600', marginVertical: 8, color: '#2B2D42' },
   noteCard: { backgroundColor: '#FFF', borderRadius: 6, padding: 12, marginBottom: 8, borderWidth: 1, borderColor: '#E2E8F0' },
   noteTimestamp: { fontSize: 12, color: '#8D99AE', marginBottom: 4 },
   noteBody: { fontSize: 14, color: '#2B2D42' },
+
   drawContainer: { flex: 1, backgroundColor: '#FFF' },
   canvas: { width: screenWidth, height: screenHeight, backgroundColor: '#FFF' },
-  drawFooter: { position: 'absolute', bottom: 0, left: 0, right: 0, flexDirection: 'row', justifyContent: 'space-around', padding: 16, backgroundColor: '#FFF', borderTopWidth: 1, borderColor: '#EEE' },
+
+  drawToolbar: {
+    position: 'absolute',
+    top: 12,
+    left: 12,
+    right: 12,
+    flexDirection: 'row',
+    gap: 8,
+    justifyContent: 'flex-start',
+    backgroundColor: 'rgba(255,255,255,0.85)',
+    padding: 8,
+    borderRadius: 8,
+    borderWidth: 1,
+    borderColor: '#EEE',
+  },
+  toolBtn: {
+    paddingVertical: 8,
+    paddingHorizontal: 12,
+    borderRadius: 6,
+    backgroundColor: '#f1f5f9',
+    borderWidth: 1,
+    borderColor: '#e2e8f0',
+  },
+  toolBtnActive: {
+    backgroundColor: '#0d6efd',
+    borderColor: '#0d6efd',
+  },
+  toolText: { color: '#2B2D42', fontWeight: '600' },
+  toolTextActive: { color: '#fff' },
+  clearBtn: { backgroundColor: '#dc3545', borderColor: '#dc3545' },
+  clearText: { color: '#fff' },
+
+  drawFooter: {
+    position: 'absolute',
+    bottom: 0, left: 0, right: 0,
+    flexDirection: 'row',
+    justifyContent: 'space-around',
+    padding: 16,
+    backgroundColor: '#FFF',
+    borderTopWidth: 1,
+    borderColor: '#EEE'
+  },
   saveDrawBtn: { backgroundColor: '#28a745', padding: 12, borderRadius: 6 },
   saveDrawText: { color: '#FFF', fontWeight: '600', fontSize: 16 },
   closeDrawBtn: { backgroundColor: '#dc3545', padding: 12, borderRadius: 6 },
   closeDrawText: { color: '#FFF', fontWeight: '600', fontSize: 16 },
+
   viewerContainer: { flex: 1, backgroundColor: '#000' },
   fullScreenImage: { width: screenWidth, height: screenHeight, resizeMode: 'contain' },
   viewerButtons: { position: 'absolute', bottom: 40, left: 0, right: 0, flexDirection: 'row', justifyContent: 'space-around' },
@@ -817,6 +1078,7 @@ const styles = StyleSheet.create({
   shareBtn: { backgroundColor: 'rgba(255,255,255,0.3)' },
   shareText: { color: '#fff', fontWeight: '600', fontSize: 16 },
   exitBtn: { backgroundColor: 'rgba(220,53,69,0.8)' },
+
   modal: { flex: 1, padding: 16, backgroundColor: '#fff', marginTop: 80, borderTopLeftRadius: 12, borderTopRightRadius: 12 },
   modalTitle: { fontSize: 18, fontWeight: '600', marginBottom: 12, textAlign: 'center', color: '#2B2D42' },
   noPhotosText: { textAlign: 'center', marginTop: 20, fontStyle: 'italic' },
@@ -827,6 +1089,7 @@ const styles = StyleSheet.create({
   deleteText: { color: '#fff', fontSize: 14, lineHeight: 18 },
   cancelBtn: { backgroundColor: '#dc3545', padding: 12, borderRadius: 6, alignItems: 'center', marginTop: 16 },
   cancelText: { color: '#fff', fontWeight: '600', fontSize: 16 },
+
   addNoteOverlay: { flex: 1, backgroundColor: 'rgba(0,0,0,0.4)', justifyContent: 'center', padding: 16 },
   addNoteContainer: { backgroundColor: '#fff', borderRadius: 6, padding: 16 },
   addNoteTitle: { fontSize: 18, fontWeight: '600', marginBottom: 12, textAlign: 'center', color: '#2B2D42' },
