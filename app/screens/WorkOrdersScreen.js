@@ -11,7 +11,6 @@ import {
   Alert,
   Linking,
   RefreshControl,
-  ScrollView,
 } from 'react-native';
 import moment from 'moment';
 import { Picker } from '@react-native-picker/picker';
@@ -245,15 +244,12 @@ export default function WorkOrdersScreen() {
         )}
       </View>
 
-      {/* Status chips */}
-      <ScrollView
-        horizontal={false}
-        showsHorizontalScrollIndicator={false}
-        contentContainerStyle={styles.chipsScroll}
-      >
+      {/* Fixed status bar */}
+      <View style={styles.filterBar}>
         {renderChips()}
-      </ScrollView>
+      </View>
 
+      {/* List pushed down so chips always visible and not overlapped */}
       <FlatList
         data={filteredOrders}
         keyExtractor={item => String(item.id)}
@@ -273,6 +269,8 @@ export default function WorkOrdersScreen() {
     </View>
   );
 }
+
+const CHIP_BAR_HEIGHT = 80; // space for 2 wrapped lines of chips
 
 const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: '#F1F5F9', padding: 16 },
@@ -296,7 +294,15 @@ const styles = StyleSheet.create({
   },
   addBtnText: { color: '#fff', fontWeight: '700' },
 
-  chipsScroll: { paddingVertical: 6 },
+  /* Fixed chip/filter bar */
+  filterBar: {
+    paddingTop: 6,
+    paddingBottom: 6,
+    backgroundColor: '#F1F5F9',
+    borderBottomWidth: StyleSheet.hairlineWidth,
+    borderBottomColor: '#CBD5E1',
+  },
+
   chipsWrap: {
     flexDirection: 'row',
     flexWrap: 'wrap',
@@ -337,7 +343,8 @@ const styles = StyleSheet.create({
   badgeText: { color: '#17a2b8', fontSize: 12, fontWeight: '700' },
   badgeTextActive: { color: '#fff' },
 
-  list: { paddingBottom: 16, paddingTop: 8 },
+  /* Give the list some top spacing so it doesn't crowd the chips */
+  list: { paddingTop: 8, paddingBottom: 16 },
 
   card: {
     backgroundColor: '#FFFFFF',

@@ -33,9 +33,6 @@ const { width: screenWidth, height: screenHeight } = Dimensions.get('window');
 
 /**
  * Read-only multi-page PDF viewer using pdf.js
- * - Accepts window.PDF_BASE64
- * - Renders every page vertically with internal scrolling
- * - Posts "HEIGHT:<px>" (approx doc height) that we can optionally use
  */
 const PDF_VIEWER_HTML = `
 <!doctype html>
@@ -65,9 +62,8 @@ const PDF_VIEWER_HTML = `
 
     function b64ToUint8(b64) {
       const bin = atob(b64);
-      const len = bin.length;
-      const bytes = new Uint8Array(len);
-      for (let i = 0; i < len; i++) bytes[i] = bin.charCodeAt(i);
+      const bytes = new Uint8Array(bin.length);
+      for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
       return bytes;
     }
 
@@ -101,14 +97,10 @@ const PDF_VIEWER_HTML = `
             document.documentElement.scrollHeight,
             document.body.scrollHeight
           );
-          if (window.ReactNativeWebView) {
-            window.ReactNativeWebView.postMessage('HEIGHT:' + h);
-          }
+          window.ReactNativeWebView?.postMessage('HEIGHT:' + h);
         }, 50);
       } catch (e) {
-        if (window.ReactNativeWebView) {
-          window.ReactNativeWebView.postMessage('ERROR:' + (e?.message || String(e)));
-        }
+        window.ReactNativeWebView?.postMessage('ERROR:' + (e?.message || String(e)));
       }
     }
 
@@ -119,7 +111,7 @@ const PDF_VIEWER_HTML = `
 `;
 
 /**
- * Annotator HTML (with Draw Mode checkbox) — unchanged: used for signing
+ * Annotator HTML (with real eraser + nicer cursor)
  */
 const ANNOTATOR_HTML = `
 <!doctype html>
@@ -157,23 +149,12 @@ const ANNOTATOR_HTML = `
   <div class="hint">Turn OFF “Draw Mode” to scroll. Turn it ON to sign/annotate.</div>
 
   <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
-  <script>
-    if (window['pdfjsLib']) {
-      pdfjsLib.GlobalWorkerOptions.workerSrc =
-        "https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js";
-    }
-  </script>
+  <script>pdfjsLib.GlobalWorkerOptions.workerSrc = "https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js";</script>
   <script src="https://unpkg.com/pdf-lib@1.17.1/dist/pdf-lib.min.js"></script>
 
   <script>
-    function b64ToUint8(b64) {
-      const bin = atob(b64);
-      const len = bin.length;
-      const bytes = new Uint8Array(len);
-      for (let i = 0; i < len; i++) bytes[i] = bin.charCodeAt(i);
-      return bytes;
-    }
-    function dataURLFromCanvas(canvas) { return canvas.toDataURL('image/png'); }
+    function b64ToUint8(b64){const bin=atob(b64);const bytes=new Uint8Array(bin.length);for(let i=0;i<bin.length;i++)bytes[i]=bin.charCodeAt(i);return bytes;}
+    function dataURLFromCanvas(c){return c.toDataURL('image/png');}
 
     const state = { tool: 'pen', drawEnabled: false, pages: [] };
 
@@ -182,176 +163,158 @@ const ANNOTATOR_HTML = `
         p.overlayCanvas.style.pointerEvents = state.drawEnabled ? 'auto' : 'none';
         p.overlayCanvas.style.touchAction = state.drawEnabled ? 'none' : 'auto';
         p.overlayCanvas.style.cursor = state.drawEnabled
-          ? (state.tool === 'erase' ? 'not-allowed' : 'crosshair')
+          ? (state.tool === 'erase' ? 'cell' : 'crosshair')
           : 'default';
       }
     }
-    function setTool(t) { state.tool = t; applyPointerMode(); }
-    function setDrawEnabled(on) { state.drawEnabled = !!on; applyPointerMode(); }
+    function setTool(t){ state.tool=t; applyPointerMode(); }
+    function setDrawEnabled(on){ state.drawEnabled=!!on; applyPointerMode(); }
 
-    function pushUndo(p) {
-      try {
-        const snap = p.overlayCtx.getImageData(0,0,p.overlayCanvas.width,p.overlayCanvas.height);
-        p.strokes.push(snap);
-        if (p.strokes.length > 50) p.strokes.shift();
-      } catch(e) {}
+    function pushUndo(p){
+      try{
+        const snap=p.overlayCtx.getImageData(0,0,p.overlayCanvas.width,p.overlayCanvas.height);
+        p.strokes.push(snap); if(p.strokes.length>50) p.strokes.shift();
+      }catch(e){}
     }
-    function undo(p) { if (p.strokes.length) p.overlayCtx.putImageData(p.strokes.pop(), 0, 0); }
-    function clearPage(p) { pushUndo(p); p.overlayCtx.clearRect(0,0,p.overlayCanvas.width,p.overlayCanvas.height); }
+    function undo(p){ if(p.strokes.length) p.overlayCtx.putImageData(p.strokes.pop(),0,0); }
+    function clearPage(p){ pushUndo(p); p.overlayCtx.clearRect(0,0,p.overlayCanvas.width,p.overlayCanvas.height); }
 
-    async function renderPDF() {
-      try {
-        const b64 = window.PDF_BASE64 || '';
-        if (!b64) throw new Error('Missing PDF data.');
-        const doc = await pdfjsLib.getDocument({ data: b64ToUint8(b64) }).promise;
-        const container = document.getElementById('pages');
-        container.innerHTML = '';
-        for (let i = 1; i <= doc.numPages; i++) {
-          const page = await doc.getPage(i);
-          const vp = page.getViewport({ scale: 1 });
-          const targetWidth = Math.min(900, Math.max(600, vp.width));
-          const scale = targetWidth / vp.width;
-          const viewport = page.getViewport({ scale });
+    async function renderPDF(){
+      try{
+        const b64=window.PDF_BASE64||''; if(!b64) throw new Error('Missing PDF data.');
+        const doc=await pdfjsLib.getDocument({data:b64ToUint8(b64)}).promise;
+        const container=document.getElementById('pages'); container.innerHTML='';
 
-          const wrap = document.createElement('div'); wrap.className = 'pageWrap';
-          const pageCanvas = document.createElement('canvas'); pageCanvas.className = 'page';
-          pageCanvas.width = Math.floor(viewport.width); pageCanvas.height = Math.floor(viewport.height);
+        for(let i=1;i<=doc.numPages;i++){
+          const page=await doc.getPage(i);
+          const vp=page.getViewport({scale:1});
+          const targetWidth=Math.min(900,Math.max(600,vp.width));
+          const scale=targetWidth/vp.width;
+          const viewport=page.getViewport({scale});
+
+          const wrap=document.createElement('div'); wrap.className='pageWrap';
+          const pageCanvas=document.createElement('canvas'); pageCanvas.className='page';
+          pageCanvas.width=Math.floor(viewport.width); pageCanvas.height=Math.floor(viewport.height);
           wrap.appendChild(pageCanvas);
 
-          const overlay = document.createElement('canvas'); overlay.className = 'overlay';
-          overlay.width = pageCanvas.width; overlay.height = pageCanvas.height;
+          const overlay=document.createElement('canvas'); overlay.className='overlay';
+          overlay.width=pageCanvas.width; overlay.height=pageCanvas.height;
           overlay.style.width = pageCanvas.style.width = '100%';
           overlay.style.height = pageCanvas.style.height = 'auto';
           wrap.appendChild(overlay);
 
           container.appendChild(wrap);
 
-          const ctx = pageCanvas.getContext('2d');
-          await page.render({ canvasContext: ctx, viewport }).promise;
+          const ctx=pageCanvas.getContext('2d');
+          await page.render({canvasContext:ctx,viewport}).promise;
 
-          const octx = overlay.getContext('2d');
-          octx.lineWidth = 3; octx.lineCap = 'round'; octx.lineJoin = 'round'; octx.strokeStyle = '#000';
+          const octx=overlay.getContext('2d');
+          octx.lineWidth=3; octx.lineCap='round'; octx.lineJoin='round'; octx.strokeStyle='#000'; octx.globalCompositeOperation='source-over';
 
-          const pState = { pageCanvas, overlayCanvas: overlay, overlayCtx: octx, strokes: [] };
+          const pState={pageCanvas,overlayCanvas:overlay,overlayCtx:octx,strokes:[]};
           state.pages.push(pState);
 
-          let drawing = false, lastX = 0, lastY = 0;
-          function posFromEvent(ev) {
-            const rect = overlay.getBoundingClientRect();
-            const x = (ev.touches ? ev.touches[0].clientX : ev.clientX) - rect.left;
-            const y = (ev.touches ? ev.touches[0].clientY : ev.clientY) - rect.top;
-            const sx = overlay.width / rect.width;
-            const sy = overlay.height / rect.height;
-            return { x: x * sx, y: y * sy };
+          let drawing=false,lastX=0,lastY=0;
+          function pos(ev){
+            const r=overlay.getBoundingClientRect();
+            const x=(ev.touches?ev.touches[0].clientX:ev.clientX)-r.left;
+            const y=(ev.touches?ev.touches[0].clientY:ev.clientY)-r.top;
+            const sx=overlay.width/r.width, sy=overlay.height/r.height;
+            return {x:x*sx,y:y*sy};
           }
-          function start(ev) {
-            if (!state.drawEnabled) return;
+          function start(ev){
+            if(!state.drawEnabled) return;
             ev.preventDefault();
             pushUndo(pState);
-            drawing = true;
-            const {x,y}=posFromEvent(ev); lastX=x; lastY=y;
+            drawing=true;
+            const {x,y}=pos(ev); lastX=x; lastY=y;
           }
-          function move(ev) {
-            if (!state.drawEnabled || !drawing) return;
+          function move(ev){
+            if(!state.drawEnabled || !drawing) return;
             ev.preventDefault();
-            const {x,y}=posFromEvent(ev);
-            if (state.tool === 'erase') {
-              pState.overlayCtx.save();
-              pState.overlayCtx.globalCompositeOperation = 'destination-out';
-              pState.overlayCtx.beginPath(); pState.overlayCtx.moveTo(lastX,lastY); pState.overlayCtx.lineTo(x,y); pState.overlayCtx.stroke();
-              pState.overlayCtx.restore();
+            const {x,y}=pos(ev);
+            if(state.tool==='erase'){
+              octx.save();
+              octx.globalCompositeOperation='destination-out';
+              octx.lineWidth=16;
+              octx.beginPath(); octx.moveTo(lastX,lastY); octx.lineTo(x,y); octx.stroke();
+              octx.restore();
             } else {
-              pState.overlayCtx.beginPath(); pState.overlayCtx.moveTo(lastX,lastY); pState.overlayCtx.lineTo(x,y); pState.overlayCtx.stroke();
+              octx.save();
+              octx.globalCompositeOperation='source-over';
+              octx.lineWidth=3;
+              octx.beginPath(); octx.moveTo(lastX,lastY); octx.lineTo(x,y); octx.stroke();
+              octx.restore();
             }
             lastX=x; lastY=y;
           }
-          function end() { drawing = false; }
+          function end(){ drawing=false; }
 
-          overlay.addEventListener('touchstart', start, { passive:false });
-          overlay.addEventListener('touchmove',  move,  { passive:false });
-          overlay.addEventListener('touchend',   end,   { passive:false });
-
-          overlay.addEventListener('mousedown', start);
-          overlay.addEventListener('mousemove', move);
-          window.addEventListener('mouseup', end);
+          overlay.addEventListener('touchstart',start,{passive:false});
+          overlay.addEventListener('touchmove', move ,{passive:false});
+          overlay.addEventListener('touchend',  end  ,{passive:false});
+          overlay.addEventListener('mousedown',start);
+          overlay.addEventListener('mousemove',move);
+          window.addEventListener('mouseup',end);
         }
         applyPointerMode();
-      } catch (e) {
-        window.ReactNativeWebView && window.ReactNativeWebView.postMessage('ERROR:' + (e?.message || String(e)));
+      }catch(e){
+        window.ReactNativeWebView?.postMessage('ERROR:'+(e?.message||String(e)));
       }
     }
 
-    async function saveAndUpload() {
-      try {
-        const b64 = window.PDF_BASE64 || '';
-        if (!b64) throw new Error('Missing PDF data.');
-        const pdfBytes = b64ToUint8(b64);
-        const pdfDoc = await PDFLib.PDFDocument.load(pdfBytes);
-        const pages = pdfDoc.getPages();
+    async function saveAndUpload(){
+      try{
+        const b64=window.PDF_BASE64||''; if(!b64) throw new Error('Missing PDF data.');
+        const pdfBytes=b64ToUint8(b64);
+        const pdfDoc=await PDFLib.PDFDocument.load(pdfBytes);
+        const pages=pdfDoc.getPages();
 
-        for (let i = 0; i < Math.min(pages.length, state.pages.length); i++) {
-          const p = pages[i], view = state.pages[i];
-          const data = view.overlayCtx.getImageData(0,0,view.overlayCanvas.width,view.overlayCanvas.height).data;
-          let hasInk = false; for (let k=3;k<data.length;k+=4){ if(data[k]>0){hasInk=true;break;} }
-          if (!hasInk) continue;
+        for(let i=0;i<Math.min(pages.length,state.pages.length);i++){
+          const p=pages[i], view=state.pages[i];
+          const data=view.overlayCtx.getImageData(0,0,view.overlayCanvas.width,view.overlayCanvas.height).data;
+          let hasInk=false; for(let k=3;k<data.length;k+=4){ if(data[k]>0){hasInk=true;break;} }
+          if(!hasInk) continue;
 
-          const dataUrl = dataURLFromCanvas(view.overlayCanvas);
-          const pngBytes = await (await fetch(dataUrl)).arrayBuffer();
-          const png = await pdfDoc.embedPng(pngBytes);
+          const dataUrl=dataURLFromCanvas(view.overlayCanvas);
+          const pngBytes=await (await fetch(dataUrl)).arrayBuffer();
+          const png=await pdfDoc.embedPng(pngBytes);
 
-          const pageW = p.getWidth(), pageH = p.getHeight();
-          const scaleX = pageW / view.overlayCanvas.width;
-          const scaleY = pageH / view.overlayCanvas.height;
+          const pageW=p.getWidth(), pageH=p.getHeight();
+          const scaleX=pageW/view.overlayCanvas.width;
+          const scaleY=pageH/view.overlayCanvas.height;
 
-          p.drawImage(png, {
-            x: 0, y: 0,
-            width: view.overlayCanvas.width * scaleX,
-            height: view.overlayCanvas.height * scaleY,
-            opacity: 1
-          });
+          p.drawImage(png,{x:0,y:0,width:view.overlayCanvas.width*scaleX,height:view.overlayCanvas.height*scaleY,opacity:1});
         }
 
-        let outB64;
-        if (pdfDoc.saveAsBase64) {
-          outB64 = await pdfDoc.saveAsBase64({ dataUri: false });
-        } else {
-          const outBytes = await pdfDoc.save();
-          let binary = '';
-          const chunkSize = 0x8000;
-          for (let i = 0; i < outBytes.length; i += chunkSize) {
-            const chunk = outBytes.subarray(i, i + chunkSize);
-            binary += String.fromCharCode.apply(null, chunk);
-          }
-          outB64 = btoa(binary);
-        }
-
-        window.ReactNativeWebView && window.ReactNativeWebView.postMessage('SIGNED:' + outB64);
-      } catch (e) {
-        window.ReactNativeWebView && window.ReactNativeWebView.postMessage('ERROR:' + (e?.message || String(e)));
+        const outB64 = pdfDoc.saveAsBase64 ? await pdfDoc.saveAsBase64({dataUri:false}) : btoa(String.fromCharCode(...(await pdfDoc.save())));
+        window.ReactNativeWebView?.postMessage('SIGNED:'+outB64);
+      }catch(e){
+        window.ReactNativeWebView?.postMessage('ERROR:'+(e?.message||String(e)));
       }
     }
 
-    window.addEventListener('DOMContentLoaded', () => {
-      document.getElementById('pen').addEventListener('click', () => setTool('pen'));
-      document.getElementById('erase').addEventListener('click', () => setTool('erase'));
-      document.getElementById('save').addEventListener('click', saveAndUpload);
-      document.getElementById('undo').addEventListener('click', () => {
-        const winTop = window.scrollY; let target = state.pages[0];
-        for (const p of state.pages) {
-          const top = p.overlayCanvas.getBoundingClientRect().top + window.scrollY;
-          if (top <= winTop + 100) target = p;
+    window.addEventListener('DOMContentLoaded',()=>{
+      document.getElementById('pen').addEventListener('click',()=>setTool('pen'));
+      document.getElementById('erase').addEventListener('click',()=>setTool('erase'));
+      document.getElementById('save').addEventListener('click',saveAndUpload);
+      document.getElementById('undo').addEventListener('click',()=>{
+        const winTop=window.scrollY; let target=state.pages[0];
+        for(const p of state.pages){
+          const top=p.overlayCanvas.getBoundingClientRect().top+window.scrollY;
+          if(top<=winTop+100) target=p;
         }
         undo(target);
       });
-      document.getElementById('clear').addEventListener('click', () => {
-        const winTop = window.scrollY; let target = state.pages[0];
-        for (const p of state.pages) {
-          const top = p.overlayCanvas.getBoundingClientRect().top + window.scrollY;
-          if (top <= winTop + 100) target = p;
+      document.getElementById('clear').addEventListener('click',()=>{
+        const winTop=window.scrollY; let target=state.pages[0];
+        for(const p of state.pages){
+          const top=p.overlayCanvas.getBoundingClientRect().top+window.scrollY;
+          if(top<=winTop+100) target=p;
         }
         clearPage(target);
       });
-      document.getElementById('drawToggle').addEventListener('change', (e) => setDrawEnabled(e.target.checked));
+      document.getElementById('drawToggle').addEventListener('change',e=>setDrawEnabled(e.target.checked));
       renderPDF();
     });
   </script>
@@ -371,30 +334,36 @@ export default function ViewWorkOrder() {
   // Draw-note tool state
   const [drawTool, setDrawTool] = useState('pen'); // 'pen' | 'erase'
 
+  // TRUE ERASER: use destination-out while dragging; pen uses source-over
   const panResponder = useRef(
     PanResponder.create({
       onStartShouldSetPanResponder: () => true,
       onMoveShouldSetPanResponder: () => true,
       onPanResponderGrant: e => {
-        if (!ctxRef.current) return;
+        const ctx = ctxRef.current;
+        if (!ctx) return;
         const { locationX, locationY } = e.nativeEvent;
-        // choose pen or eraser style
+
         if (drawTool === 'erase') {
-          ctxRef.current.strokeStyle = '#FFFFFF';
-          ctxRef.current.lineWidth = 14;
+          ctx.globalCompositeOperation = 'destination-out';
+          ctx.lineWidth = 16;
         } else {
-          ctxRef.current.strokeStyle = '#000000';
-          ctxRef.current.lineWidth = 4;
+          ctx.globalCompositeOperation = 'source-over';
+          ctx.strokeStyle = '#000000';
+          ctx.lineWidth = 4;
         }
-        ctxRef.current.beginPath();
-        ctxRef.current.moveTo(locationX, locationY);
-        ctxRef.current.stroke();
+        ctx.lineCap = 'round';
+        ctx.lineJoin = 'round';
+
+        ctx.beginPath();
+        ctx.moveTo(locationX, locationY);
       },
       onPanResponderMove: e => {
-        if (!ctxRef.current) return;
+        const ctx = ctxRef.current;
+        if (!ctx) return;
         const { locationX, locationY } = e.nativeEvent;
-        ctxRef.current.lineTo(locationX, locationY);
-        ctxRef.current.stroke();
+        ctx.lineTo(locationX, locationY);
+        ctx.stroke();
       },
       onPanResponderRelease: () => {
         try { ctxRef.current?.closePath?.(); } catch {}
@@ -453,7 +422,6 @@ export default function ViewWorkOrder() {
         .filter(Boolean);
       setPhotos(photoKeys.map(k => fileUrl(k)));
 
-      // Prepare inline PDF preview (as base64 for pdf.js)
       setPdfInlineB64(null);
       setPdfPreviewError(null);
       if (data.pdfPath) {
@@ -467,7 +435,7 @@ export default function ViewWorkOrder() {
           setPdfPreviewError(e?.message || 'Failed to load PDF.');
         }
       }
-    } catch (err) {
+    } catch {
       Alert.alert('Error', 'Failed to load work order.');
     }
   }, [workOrderId]);
@@ -482,37 +450,44 @@ export default function ViewWorkOrder() {
     canvas.width = screenWidth;
     canvas.height = screenHeight;
     const ctx = canvas.getContext('2d');
-    // white background so erasing works by painting white
+
+    // White background layer so saving produces a white page
+    ctx.save();
+    ctx.globalCompositeOperation = 'source-over';
     ctx.fillStyle = '#FFFFFF';
     ctx.fillRect(0, 0, canvas.width, canvas.height);
-    // defaults for pen
+    ctx.restore();
+
+    // Pen defaults
     ctx.strokeStyle = '#000000';
     ctx.lineWidth = 4;
     ctx.lineCap = 'round';
     ctx.lineJoin = 'round';
+
     ctxRef.current = ctx;
     canvasRef.current = canvas;
   };
 
   const clearCanvas = () => {
     if (!canvasRef.current || !ctxRef.current) return;
-    ctxRef.current.save?.();
-    ctxRef.current.fillStyle = '#FFFFFF';
-    ctxRef.current.fillRect(0, 0, canvasRef.current.width, canvasRef.current.height);
-    ctxRef.current.restore?.();
+    const ctx = ctxRef.current;
+    ctx.save();
+    ctx.globalCompositeOperation = 'source-over';
+    ctx.fillStyle = '#FFFFFF';
+    ctx.fillRect(0, 0, canvasRef.current.width, canvasRef.current.height);
+    ctx.restore();
   };
 
   const saveDrawing = async () => {
     try {
       if (!canvasRef.current) throw new Error('Canvas not ready.');
-      // toDataURL is PNG; save as file, then compress to JPEG to keep size down
       const dataUrl = await canvasRef.current.toDataURL();
       const base64Png = dataUrl.split(',')[1];
 
       const pngPath = FileSystem.cacheDirectory + `drawing_${Date.now()}.png`;
       await FileSystem.writeAsStringAsync(pngPath, base64Png, { encoding: FileSystem.EncodingType.Base64 });
 
-      // Try compressing to JPEG
+      // Compress to JPEG to keep uploads small
       let uploadUri = pngPath;
       let uploadType = 'image/png';
       let uploadName = 'drawing.png';
@@ -525,9 +500,7 @@ export default function ViewWorkOrder() {
         uploadUri = jpeg.uri;
         uploadType = 'image/jpeg';
         uploadName = 'drawing.jpg';
-      } catch {
-        // fall back to PNG if JPEG conversion fails
-      }
+      } catch {}
 
       const form = new FormData();
       form.append('photoFile', { uri: uploadUri, name: uploadName, type: uploadType });
@@ -568,7 +541,7 @@ export default function ViewWorkOrder() {
     }
   };
 
-  // --- helpers to keep uploads small (avoid 413 on raw photos) ---
+  // keep uploads smaller
   const processImageForUpload = async (uri) => {
     try {
       const manip = await ImageManipulator.manipulateAsync(
@@ -593,8 +566,7 @@ export default function ViewWorkOrder() {
 
     const form = new FormData();
     for (let i = 0; i < result.assets.length; i++) {
-      const originalUri = result.assets[i].uri;
-      const processedUri = await processImageForUpload(originalUri);
+      const processedUri = await processImageForUpload(result.assets[i].uri);
       const name = `photo-${Date.now()}-${i}.jpg`;
       form.append('photoFile', { uri: processedUri, name, type: 'image/jpeg' });
     }
@@ -620,8 +592,7 @@ export default function ViewWorkOrder() {
 
     const form = new FormData();
     for (let i = 0; i < result.assets.length; i++) {
-      const originalUri = result.assets[i].uri;
-      const processedUri = await processImageForUpload(originalUri);
+      const processedUri = await processImageForUpload(result.assets[i].uri);
       const name = `photo-${Date.now()}-${i}.jpg`;
       form.append('photoFile', { uri: processedUri, name, type: 'image/jpeg' });
     }
@@ -810,7 +781,6 @@ export default function ViewWorkOrder() {
                     if (msg.startsWith('HEIGHT:')) {
                       const h = parseInt(msg.slice(7), 10);
                       if (Number.isFinite(h)) {
-                        // allow a tall viewer but cap to ~2.5 screens to still allow outer scrolling after
                         const minH = Math.max(600, screenHeight * 0.8);
                         const maxH = Math.max(minH, screenHeight * 2.5);
                         setPdfInlineHeight(Math.max(minH, Math.min(h, maxH)));
@@ -925,7 +895,7 @@ export default function ViewWorkOrder() {
         </View>
       </Modal>
 
-      {/* Draw Note Modal with Pen/Eraser */}
+      {/* Draw Note Modal with true Eraser */}
       <Modal visible={showDrawModal} animationType="slide" onRequestClose={() => setShowDrawModal(false)}>
         <View style={styles.drawContainer}>
           <Canvas ref={handleCanvas} style={styles.canvas} />
