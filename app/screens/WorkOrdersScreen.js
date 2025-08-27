@@ -1,6 +1,6 @@
 // File: app/screens/WorkOrdersScreen.js
 
-import React, { useEffect, useState, useCallback } from 'react';
+import React, { useEffect, useState, useCallback, useMemo } from 'react';
 import {
   View,
   Text,
@@ -11,6 +11,7 @@ import {
   Alert,
   Linking,
   RefreshControl,
+  ScrollView,
 } from 'react-native';
 import moment from 'moment';
 import { Picker } from '@react-native-picker/picker';
@@ -18,24 +19,36 @@ import { useRouter } from 'expo-router';
 import { useFocusEffect } from '@react-navigation/native';
 import api from '../../constants/api';
 
-const STATUS_OPTIONS = [
+const STATUSES = [
   'Needs to be Scheduled',
   'Scheduled',
   'Waiting for Approval',
   'Waiting on Parts',
+  'Parts In',
   'Completed',
 ];
 
 export default function WorkOrdersScreen() {
   const router = useRouter();
 
+  const [me, setMe] = useState(null); // { id, username, role }
   const [workOrders, setWorkOrders] = useState([]);
-  const [filteredOrders, setFilteredOrders] = useState([]);
   const [selectedStatus, setSelectedStatus] = useState('All');
-  const [topFilterOpen, setTopFilterOpen] = useState(false);
   const [openPickers, setOpenPickers] = useState({});
   const [refreshing, setRefreshing] = useState(false);
   const [loadingFirst, setLoadingFirst] = useState(true);
+
+  // ---------- load current user (for Jeff-only button)
+  useEffect(() => {
+    (async () => {
+      try {
+        const r = await api.get('/auth/me');
+        setMe(r.data || null);
+      } catch {
+        // not fatal if /auth/me fails; UI just won't show Jeff button
+      }
+    })();
+  }, []);
 
   const fetchWorkOrders = useCallback(async () => {
     try {
@@ -57,73 +70,60 @@ export default function WorkOrdersScreen() {
     }
   }, [router]);
 
-  // Initial load
-  useEffect(() => {
-    fetchWorkOrders();
-  }, [fetchWorkOrders]);
+  // Initial load + on focus refresh
+  useEffect(() => { fetchWorkOrders(); }, [fetchWorkOrders]);
+  useFocusEffect(useCallback(() => { fetchWorkOrders(); }, [fetchWorkOrders]));
 
-  // Refresh every time the screen becomes active
-  useFocusEffect(
-    useCallback(() => {
-      fetchWorkOrders();
-    }, [fetchWorkOrders])
-  );
-
-  // Re-apply filter whenever list or selected status changes
-  useEffect(() => {
-    let filtered = workOrders;
-
-    if (selectedStatus === 'Today') {
-      const today = moment().format('YYYY-MM-DD');
-      filtered = workOrders.filter(
-        o =>
-          o.scheduledDate &&
-          moment(o.scheduledDate).format('YYYY-MM-DD') === today
-      );
-    } else if (selectedStatus !== 'All') {
-      filtered = workOrders.filter(o => o.status === selectedStatus);
+  // ---------- counts
+  const counts = useMemo(() => {
+    const map = Object.fromEntries(STATUSES.map(s => [s, 0]));
+    let today = 0;
+    for (const o of workOrders) {
+      if (o?.status && map[o.status] !== undefined) map[o.status] += 1;
+      if (o?.scheduledDate && moment(o.scheduledDate).isSame(moment(), 'day')) today += 1;
     }
+    return {
+      byStatus: map,
+      all: workOrders.length,
+      today,
+    };
+  }, [workOrders]);
 
-    setFilteredOrders(filtered);
+  // ---------- filtered list
+  const filteredOrders = useMemo(() => {
+    if (selectedStatus === 'All') return workOrders;
+    if (selectedStatus === 'Today') {
+      const todayStr = moment().format('YYYY-MM-DD');
+      return workOrders.filter(
+        o => o.scheduledDate && moment(o.scheduledDate).format('YYYY-MM-DD') === todayStr
+      );
+    }
+    return workOrders.filter(o => o.status === selectedStatus);
   }, [workOrders, selectedStatus]);
 
-  const applyFilter = (value) => {
-    setSelectedStatus(value);
-    setTopFilterOpen(false);
-  };
-
+  // ---------- actions
   const onRefresh = () => {
     setRefreshing(true);
     fetchWorkOrders();
   };
 
   const handleUpdateStatus = async (id, newStatus) => {
-    // Optimistic update
     const prev = workOrders;
     const next = prev.map(o => (o.id === id ? { ...o, status: newStatus } : o));
     setWorkOrders(next);
-
     try {
       await api.put(`/work-orders/${id}`, { status: newStatus });
     } catch (err) {
       console.error('Error updating status:', err);
-      setWorkOrders(prev); // rollback
-      Alert.alert(
-        'Error',
-        err?.response?.data?.error || 'Failed to update status.'
-      );
-    } finally {
-      // Re-apply current filter to reflect any changes
-      setSelectedStatus((s) => s); // noop but triggers effect if needed
+      setWorkOrders(prev);
+      Alert.alert('Error', err?.response?.data?.error || 'Failed to update status.');
     }
   };
 
   const openInGoogleMaps = async (query) => {
     const q = encodeURIComponent(query || '');
-    // Prefer Google Maps app on iOS; if not installed, fallback to web
     const gmScheme = `comgooglemaps://?q=${q}`;
     const webUrl = `https://www.google.com/maps/search/?api=1&query=${q}`;
-
     try {
       const supportsGm = await Linking.canOpenURL(gmScheme);
       if (supportsGm) return Linking.openURL(gmScheme);
@@ -133,20 +133,54 @@ export default function WorkOrdersScreen() {
     }
   };
 
+  // ---------- top chips
+  const TopChip = ({ label, active, onPress, count }) => (
+    <TouchableOpacity
+      onPress={onPress}
+      style={[styles.chip, active && styles.chipActive]}
+    >
+      <Text style={[styles.chipText, active && styles.chipTextActive]}>
+        {label}
+      </Text>
+      <View style={[styles.badge, active && styles.badgeActive]}>
+        <Text style={[styles.badgeText, active && styles.badgeTextActive]}>
+          {count}
+        </Text>
+      </View>
+    </TouchableOpacity>
+  );
+
+  const renderChips = () => {
+    const chips = [
+      { key: 'All', label: 'All', count: counts.all },
+      { key: 'Today', label: 'Today', count: counts.today },
+      ...STATUSES.map(s => ({ key: s, label: s, count: counts.byStatus[s] || 0 })),
+    ];
+    return (
+      <View style={styles.chipsWrap}>
+        {chips.map(c => (
+          <TopChip
+            key={c.key}
+            label={c.label}
+            count={c.count}
+            active={selectedStatus === c.key}
+            onPress={() => setSelectedStatus(c.key)}
+          />
+        ))}
+      </View>
+    );
+  };
+
+  // ---------- list item
   const renderOrderItem = ({ item }) => {
     const isPickerOpen = !!openPickers[item.id];
-
     return (
       <View style={styles.card}>
-        <Text style={styles.cardTitle}>
-          WO/PO #: {item.poNumber || 'N/A'}
-        </Text>
+        <Text style={styles.cardTitle}>WO/PO #: {item.poNumber || 'N/A'}</Text>
         <Text style={styles.cardText}>Customer: {item.customer}</Text>
 
         <TouchableOpacity onPress={() => openInGoogleMaps(item.siteLocation)}>
-          <Text style={styles.linkText}>
-            Site Location: {item.siteLocation}
-          </Text>
+          <Text style={styles.linkText}>Site Location: {item.siteLocation}</Text>
         </TouchableOpacity>
 
         <Text style={styles.cardText}>
@@ -178,7 +212,7 @@ export default function WorkOrdersScreen() {
                 setOpenPickers(p => ({ ...p, [item.id]: false }));
               }}
             >
-              {STATUS_OPTIONS.map(s => (
+              {STATUSES.map(s => (
                 <Picker.Item key={s} label={s} value={s} />
               ))}
             </Picker>
@@ -196,40 +230,33 @@ export default function WorkOrdersScreen() {
     );
   };
 
-  const renderTopFilter = topFilterOpen ? (
-    <Picker
-      mode={Platform.OS === 'ios' ? 'dialog' : 'dropdown'}
-      style={styles.topFilterPicker}
-      selectedValue={selectedStatus}
-      onValueChange={applyFilter}
-    >
-      {['All', 'Today', ...STATUS_OPTIONS].map(v => (
-        <Picker.Item key={v} label={v} value={v} />
-      ))}
-    </Picker>
-  ) : (
-    <TouchableOpacity
-      style={[styles.topFilterWrap, styles.pickerToggle]}
-      onPress={() => setTopFilterOpen(true)}
-    >
-      <Text style={styles.topFilterText}>
-        {selectedStatus} ▾
-      </Text>
-    </TouchableOpacity>
-  );
-
   return (
     <View style={styles.container}>
-      <Text style={styles.header}>Work Orders Dashboard</Text>
-
-      <View style={styles.filterRow}>
-        <Text style={styles.filterLabel}>Filter:</Text>
-        {renderTopFilter}
+      {/* Header row with Jeff-only Add button */}
+      <View style={styles.headerRow}>
+        <Text style={styles.header}>Work Orders</Text>
+        {me?.username === 'Jeff' && (
+          <TouchableOpacity
+            onPress={() => router.push('/screens/AddWorkOrder')}
+            style={styles.addBtn}
+          >
+            <Text style={styles.addBtnText}>+ Add Work Order</Text>
+          </TouchableOpacity>
+        )}
       </View>
+
+      {/* Status chips */}
+      <ScrollView
+        horizontal={false}
+        showsHorizontalScrollIndicator={false}
+        contentContainerStyle={styles.chipsScroll}
+      >
+        {renderChips()}
+      </ScrollView>
 
       <FlatList
         data={filteredOrders}
-        keyExtractor={item => item.id.toString()}
+        keyExtractor={item => String(item.id)}
         renderItem={renderOrderItem}
         contentContainerStyle={styles.list}
         refreshControl={
@@ -248,55 +275,70 @@ export default function WorkOrdersScreen() {
 }
 
 const styles = StyleSheet.create({
-  container: {
-    flex: 1,
-    backgroundColor: '#F1F5F9',
-    padding: 16,
-  },
-  header: {
-    fontSize: 24,
-    fontWeight: 'bold',
-    color: '#2B2D42',
-    textAlign: 'center',
-    marginBottom: 12,
-  },
+  container: { flex: 1, backgroundColor: '#F1F5F9', padding: 16 },
 
-  filterRow: {
+  headerRow: {
     flexDirection: 'row',
     alignItems: 'center',
-    marginBottom: 12,
-    overflow: 'visible',
-    zIndex: 10,
-    elevation: 10,
+    justifyContent: 'space-between',
+    marginBottom: 8,
   },
-  filterLabel: {
-    fontSize: 16,
-    color: '#3D5A80',
-    marginRight: 8,
+  header: {
+    fontSize: 22,
+    fontWeight: '700',
+    color: '#2B2D42',
   },
-  topFilterWrap: {
-    backgroundColor: '#FFFFFF',
+  addBtn: {
+    backgroundColor: '#17a2b8',
+    paddingHorizontal: 12,
+    paddingVertical: 8,
+    borderRadius: 6,
+  },
+  addBtnText: { color: '#fff', fontWeight: '700' },
+
+  chipsScroll: { paddingVertical: 6 },
+  chipsWrap: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 8,
+  },
+  chip: {
+    flexDirection: 'row',
+    alignItems: 'center',
     borderWidth: 1,
     borderColor: '#17a2b8',
-    borderRadius: 6,
-    paddingVertical: 8,
-    paddingHorizontal: 12,
+    backgroundColor: '#fff',
+    paddingVertical: 6,
+    paddingHorizontal: 10,
+    borderRadius: 20,
   },
-  topFilterText: {
-    fontSize: 16,
-    color: '#17a2b8',
+  chipActive: {
+    backgroundColor: '#17a2b8',
+    borderColor: '#17a2b8',
   },
-  topFilterPicker: {
-    width: 280,
-    marginLeft: -30,
-    backgroundColor: '#FFFFFF',
-    zIndex: 20,
-    elevation: 20,
+  chipText: { color: '#17a2b8', fontWeight: '600' },
+  chipTextActive: { color: '#fff' },
+  badge: {
+    marginLeft: 8,
+    minWidth: 22,
+    height: 22,
+    paddingHorizontal: 6,
+    borderRadius: 11,
+    borderWidth: 1,
+    borderColor: '#17a2b8',
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: '#fff',
   },
+  badgeActive: {
+    backgroundColor: '#0f6a79',
+    borderColor: '#0f6a79',
+  },
+  badgeText: { color: '#17a2b8', fontSize: 12, fontWeight: '700' },
+  badgeTextActive: { color: '#fff' },
 
-  list: {
-    paddingBottom: 16,
-  },
+  list: { paddingBottom: 16, paddingTop: 8 },
+
   card: {
     backgroundColor: '#FFFFFF',
     borderRadius: 8,
@@ -304,80 +346,38 @@ const styles = StyleSheet.create({
     borderColor: '#E0E0E0',
     padding: 16,
     marginBottom: 12,
-    overflow: 'visible',
   },
-  cardTitle: {
-    fontSize: 18,
-    fontWeight: '600',
-    color: '#2B2D42',
-    marginBottom: 8,
-  },
-  cardText: {
-    fontSize: 14,
-    color: '#2B2D42',
-    marginBottom: 4,
-  },
-  linkText: {
-    color: '#17a2b8',
-    textDecorationLine: 'underline',
-    marginBottom: 4,
-  },
+  cardTitle: { fontSize: 18, fontWeight: '600', color: '#2B2D42', marginBottom: 8 },
+  cardText: { fontSize: 14, color: '#2B2D42', marginBottom: 4 },
+  linkText: { color: '#17a2b8', textDecorationLine: 'underline', marginBottom: 4 },
 
   actionsRow: {
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
     marginTop: 12,
-    overflow: 'visible',
-    zIndex: 10,
-    elevation: 10,
   },
   viewButton: {
     backgroundColor: '#17a2b8',
     borderRadius: 6,
-    paddingVertical: 12,
-    paddingHorizontal: 20,
+    paddingVertical: 10,
+    paddingHorizontal: 16,
   },
-  viewButtonText: {
-    color: '#FFFFFF',
-    fontSize: 16,
-    fontWeight: 'bold',
-  },
+  viewButtonText: { color: '#FFFFFF', fontSize: 15, fontWeight: 'bold' },
 
-  statusWrap: {
-    flexDirection: 'row',
-    alignItems: 'center',
-  },
-  statusText: {
-    fontSize: 14,
-    color: '#2B2D42',
-    marginRight: 6,
-  },
-  changeLink: {
-    color: '#17a2b8',
-  },
+  statusWrap: { flexDirection: 'row', alignItems: 'center' },
+  statusText: { fontSize: 14, color: '#2B2D42', marginRight: 6 },
+  changeLink: { color: '#17a2b8' },
 
-  pickerToggle: {
-    zIndex: 20,
-    elevation: 20,
-  },
+  pickerToggle: { zIndex: 20, elevation: 20 },
   picker: {
-    width: 280,
-    marginLeft: -30,
+    width: 260,
     backgroundColor: '#FFFFFF',
     zIndex: 20,
     elevation: 20,
   },
-  pickerItem: {
-    fontSize: 16,
-  },
+  pickerItem: { fontSize: 16 },
 
-  center: {
-    alignItems: 'center',
-    marginTop: 24,
-  },
-  noData: {
-    fontStyle: 'italic',
-    color: '#8D99AE',
-  },
+  center: { alignItems: 'center', marginTop: 24 },
+  noData: { fontStyle: 'italic', color: '#8D99AE' },
 });
