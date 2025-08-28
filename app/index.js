@@ -23,10 +23,7 @@ export default function HomeScreen() {
       try {
         const token = await AsyncStorage.getItem('jwt');
         const headers = token ? { Authorization: `Bearer ${token}` } : {};
-        const { data } = await axios.get(
-          `${API_BASE_URL}/work-orders`,
-          { headers }
-        );
+        const { data } = await axios.get(`${API_BASE_URL}/work-orders`, { headers });
         setOrders(Array.isArray(data) ? data : []);
       } catch (error) {
         console.error('Error fetching work orders:', error);
@@ -37,30 +34,37 @@ export default function HomeScreen() {
     })();
   }, []);
 
-  const todayStr = moment().format('YYYY-MM-DD');
+  // Time window calculations
+  const startOfToday = moment().startOf('day');
+  const endOfToday = moment().endOf('day');
+  const endOf7Days = moment().add(7, 'days').endOf('day');
 
-  const agendaOrders = orders.filter(
-    o =>
-      o.scheduledDate &&
-      moment(o.scheduledDate).format('YYYY-MM-DD') === todayStr
-  );
+  // Today (agenda)
+  const agendaOrders = orders.filter((o) => {
+    if (!o.scheduledDate) return false;
+    const d = moment(o.scheduledDate);
+    return d.isValid() && d.isBetween(startOfToday, endOfToday, null, '[]');
+  });
 
-  const upcomingOrders = orders.filter(
-    o =>
-      o.scheduledDate &&
-      moment(o.scheduledDate).isAfter(todayStr)
-  );
+  // Upcoming: ONLY within the next 7 days (tomorrow .. +7d)
+  const upcomingOrders = orders
+    .filter((o) => {
+      if (!o.scheduledDate) return false;
+      const d = moment(o.scheduledDate);
+      return d.isValid() && d.isAfter(endOfToday) && d.isSameOrBefore(endOf7Days);
+    })
+    .sort((a, b) => new Date(a.scheduledDate) - new Date(b.scheduledDate));
 
-  const renderCard = order => (
+  const renderCard = (order) => (
     <TouchableOpacity
       key={order.id}
       style={styles.card}
       onPress={() => router.push(`/screens/ViewWorkOrder?id=${order.id}`)}
     >
-      <Text style={styles.cardTitle}>PO#: {order.poNumber}</Text>
-      <Text style={styles.cardText}>Customer: {order.customer}</Text>
-      <Text style={styles.cardText}>Site: {order.siteLocation}</Text>
-      <Text style={styles.cardText}>Problem: {order.problemDescription}</Text>
+      <Text style={styles.cardTitle}>PO#: {order.poNumber ?? '—'}</Text>
+      <Text style={styles.cardText}>Customer: {order.customer ?? '—'}</Text>
+      <Text style={styles.cardText}>Site: {order.siteLocation ?? '—'}</Text>
+      <Text style={styles.cardText}>Problem: {order.problemDescription ?? '—'}</Text>
       {order.scheduledDate && (
         <Text style={styles.cardText}>
           Scheduled: {moment(order.scheduledDate).format('YYYY-MM-DD')}
@@ -76,19 +80,23 @@ export default function HomeScreen() {
       {/* Agenda for Today */}
       <View style={styles.section}>
         <Text style={styles.sectionTitle}>
-          Agenda for Today ({todayStr})
+          Agenda for Today ({startOfToday.format('YYYY-MM-DD')})
         </Text>
-        {agendaOrders.length
-          ? agendaOrders.map(renderCard)
-          : <Text style={styles.noData}>No work orders scheduled for today.</Text>}
+        {agendaOrders.length ? (
+          agendaOrders.map(renderCard)
+        ) : (
+          <Text style={styles.noData}>No work orders scheduled for today.</Text>
+        )}
       </View>
 
-      {/* Upcoming Work Orders */}
+      {/* Upcoming Work Orders - only next 7 days */}
       <View style={styles.section}>
-        <Text style={styles.sectionTitle}>Upcoming Work Orders</Text>
-        {upcomingOrders.length
-          ? upcomingOrders.map(renderCard)
-          : <Text style={styles.noData}>No upcoming work orders.</Text>}
+        <Text style={styles.sectionTitle}>Upcoming Work Orders (next 7 days)</Text>
+        {upcomingOrders.length ? (
+          upcomingOrders.map(renderCard)
+        ) : (
+          <Text style={styles.noData}>No work orders in the next 7 days.</Text>
+        )}
       </View>
     </ScrollView>
   );

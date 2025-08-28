@@ -111,7 +111,7 @@ const PDF_VIEWER_HTML = `
 `;
 
 /**
- * Annotator HTML (with real eraser + nicer cursor)
+ * Annotator HTML (PDF signer/annotator) with white-paint eraser
  */
 const ANNOTATOR_HTML = `
 <!doctype html>
@@ -234,14 +234,17 @@ const ANNOTATOR_HTML = `
             ev.preventDefault();
             const {x,y}=pos(ev);
             if(state.tool==='erase'){
+              // White-paint eraser to avoid full-canvas clears on some devices
               octx.save();
-              octx.globalCompositeOperation='destination-out';
-              octx.lineWidth=16;
+              octx.globalCompositeOperation='source-over';
+              octx.strokeStyle='#FFFFFF';
+              octx.lineWidth=18;
               octx.beginPath(); octx.moveTo(lastX,lastY); octx.lineTo(x,y); octx.stroke();
               octx.restore();
             } else {
               octx.save();
               octx.globalCompositeOperation='source-over';
+              octx.strokeStyle='#000000';
               octx.lineWidth=3;
               octx.beginPath(); octx.moveTo(lastX,lastY); octx.lineTo(x,y); octx.stroke();
               octx.restore();
@@ -272,10 +275,6 @@ const ANNOTATOR_HTML = `
 
         for(let i=0;i<Math.min(pages.length,state.pages.length);i++){
           const p=pages[i], view=state.pages[i];
-          const data=view.overlayCtx.getImageData(0,0,view.overlayCanvas.width,view.overlayCanvas.height).data;
-          let hasInk=false; for(let k=3;k<data.length;k+=4){ if(data[k]>0){hasInk=true;break;} }
-          if(!hasInk) continue;
-
           const dataUrl=dataURLFromCanvas(view.overlayCanvas);
           const pngBytes=await (await fetch(dataUrl)).arrayBuffer();
           const png=await pdfDoc.embedPng(pngBytes);
@@ -333,44 +332,47 @@ export default function ViewWorkOrder() {
 
   // Draw-note tool state
   const [drawTool, setDrawTool] = useState('pen'); // 'pen' | 'erase'
+  const lastPt = useRef({ x: 0, y: 0, has: false });
+  const PEN_WIDTH = 4;
+  const ERASER_WIDTH = 20;
 
-  // TRUE ERASER: use destination-out while dragging; pen uses source-over
+  // Draw a single segment based on tool (eraser paints white)
+  const drawSegment = (x1, y1, x2, y2) => {
+    const ctx = ctxRef.current;
+    if (!ctx) return;
+    ctx.save();
+    ctx.globalCompositeOperation = 'source-over';
+    ctx.strokeStyle = drawTool === 'erase' ? '#FFFFFF' : '#000000';
+    ctx.lineWidth = drawTool === 'erase' ? ERASER_WIDTH : PEN_WIDTH;
+    ctx.lineCap = 'round';
+    ctx.lineJoin = 'round';
+    ctx.beginPath();
+    ctx.moveTo(x1, y1);
+    ctx.lineTo(x2, y2);
+    ctx.stroke();
+    ctx.restore();
+  };
+
+  // PanResponder for drawing/erasing
   const panResponder = useRef(
     PanResponder.create({
       onStartShouldSetPanResponder: () => true,
       onMoveShouldSetPanResponder: () => true,
       onPanResponderGrant: e => {
-        const ctx = ctxRef.current;
-        if (!ctx) return;
         const { locationX, locationY } = e.nativeEvent;
-
-        if (drawTool === 'erase') {
-          ctx.globalCompositeOperation = 'destination-out';
-          ctx.lineWidth = 16;
-        } else {
-          ctx.globalCompositeOperation = 'source-over';
-          ctx.strokeStyle = '#000000';
-          ctx.lineWidth = 4;
-        }
-        ctx.lineCap = 'round';
-        ctx.lineJoin = 'round';
-
-        ctx.beginPath();
-        ctx.moveTo(locationX, locationY);
+        lastPt.current = { x: locationX, y: locationY, has: true };
+        // Dot on tap
+        drawSegment(locationX, locationY, locationX + 0.01, locationY + 0.01);
       },
       onPanResponderMove: e => {
-        const ctx = ctxRef.current;
-        if (!ctx) return;
         const { locationX, locationY } = e.nativeEvent;
-        ctx.lineTo(locationX, locationY);
-        ctx.stroke();
+        if (lastPt.current.has) {
+          drawSegment(lastPt.current.x, lastPt.current.y, locationX, locationY);
+        }
+        lastPt.current = { x: locationX, y: locationY, has: true };
       },
-      onPanResponderRelease: () => {
-        try { ctxRef.current?.closePath?.(); } catch {}
-      },
-      onPanResponderTerminate: () => {
-        try { ctxRef.current?.closePath?.(); } catch {}
-      },
+      onPanResponderRelease: () => { lastPt.current.has = false; },
+      onPanResponderTerminate: () => { lastPt.current.has = false; },
     })
   ).current;
 
@@ -395,6 +397,34 @@ export default function ViewWorkOrder() {
   const [pdfInlineB64, setPdfInlineB64] = useState(null);
   const [pdfPreviewError, setPdfPreviewError] = useState(null);
   const [pdfInlineHeight, setPdfInlineHeight] = useState(Math.max(600, screenHeight * 0.8));
+
+  // -------- helpers for contact actions & address --------
+  const normPhone = (p) => String(p || '').replace(/[^\d+]/g, '');
+  const callNumber = (p) => {
+    const n = normPhone(p);
+    if (!n) return;
+    Linking.openURL(`tel:${n}`).catch(() => Alert.alert('Error', 'Unable to open Phone app.'));
+  };
+  const emailTo = (e) => {
+    const addr = String(e || '').trim();
+    if (!addr) return;
+    Linking.openURL(`mailto:${addr}`).catch(() => Alert.alert('Error', 'Unable to open Mail app.'));
+  };
+
+  const openMap = (loc) => {
+    const q = encodeURIComponent(loc || '');
+    if (!q) return;
+    const googleAppUrl = Platform.select({
+      ios: `comgooglemaps://?q=${q}`,
+      android: `geo:0,0?q=${q}`,
+      default: `https://www.google.com/maps/search/?api=1&query=${q}`,
+    });
+    const googleWebUrl = `https://www.google.com/maps/search/?api=1&query=${q}`;
+    Linking.canOpenURL(googleAppUrl)
+      .then(supported => (supported ? Linking.openURL(googleAppUrl) : Linking.openURL(googleWebUrl)))
+      .catch(() => Alert.alert('Error', 'Unable to open Google Maps.'));
+  };
+  // -------------------------------------------------------
 
   const sortNotesDesc = (arr = []) =>
     [...arr].sort((a, b) => {
@@ -445,24 +475,18 @@ export default function ViewWorkOrder() {
   }, [fetchWorkOrder]);
 
   // Canvas setup for Draw Notes
-  const handleCanvas = canvas => {
+  const handleCanvas = (canvas) => {
     if (!canvas) return;
     canvas.width = screenWidth;
     canvas.height = screenHeight;
     const ctx = canvas.getContext('2d');
 
-    // White background layer so saving produces a white page
+    // Solid white background so eraser (white paint) restores the page
     ctx.save();
     ctx.globalCompositeOperation = 'source-over';
     ctx.fillStyle = '#FFFFFF';
     ctx.fillRect(0, 0, canvas.width, canvas.height);
     ctx.restore();
-
-    // Pen defaults
-    ctx.strokeStyle = '#000000';
-    ctx.lineWidth = 4;
-    ctx.lineCap = 'round';
-    ctx.lineJoin = 'round';
 
     ctxRef.current = ctx;
     canvasRef.current = canvas;
@@ -513,20 +537,6 @@ export default function ViewWorkOrder() {
       Alert.alert('Error', err.message || 'Error uploading drawing');
       setShowDrawModal(false);
     }
-  };
-
-  const openMap = loc => {
-    const q = encodeURIComponent(loc || '');
-    if (!q) return;
-    const googleAppUrl = Platform.select({
-      ios: `comgooglemaps://?q=${q}`,
-      android: `geo:0,0?q=${q}`,
-      default: `https://www.google.com/maps/search/?api=1&query=${q}`,
-    });
-    const googleWebUrl = `https://www.google.com/maps/search/?api=1&query=${q}`;
-    Linking.canOpenURL(googleAppUrl)
-      .then(supported => (supported ? Linking.openURL(googleAppUrl) : Linking.openURL(googleWebUrl)))
-      .catch(() => Alert.alert('Error', 'Unable to open Google Maps.'));
   };
 
   const addNote = async () => {
@@ -606,8 +616,8 @@ export default function ViewWorkOrder() {
     }
   };
 
-  const handleDeletePhoto = idx => {
-    const keys = (workOrder.photoPath || '').split(',').map(s => s.trim()).filter(Boolean);
+  const handleDeletePhoto = (idx) => {
+    const keys = (workOrder?.photoPath || '').split(',').map(s => s.trim()).filter(Boolean);
     if (idx < 0 || idx >= keys.length) return;
 
     Alert.alert('Delete Photo?', 'This will permanently remove it.', [
@@ -663,7 +673,7 @@ export default function ViewWorkOrder() {
         await FileSystem.writeAsStringAsync(signedUri, b64, { encoding: FileSystem.EncodingType.Base64 });
 
         const form = new FormData();
-        const name = `WO-${workOrder.poNumber || workOrderId}-signed.pdf`;
+        const name = `WO-${workOrder?.poNumber || workOrderId}-signed.pdf`;
         form.append('pdfFile', { uri: signedUri, name, type: 'application/pdf' });
 
         await api.put(`/work-orders/${workOrderId}/edit`, form, { headers: { 'Content-Type': 'multipart/form-data' } });
@@ -677,27 +687,110 @@ export default function ViewWorkOrder() {
     }
   };
 
+  // ------- derived fields for display (with fallbacks) -------
+  const poNumber = workOrder?.poNumber || '—';
+  const customer = workOrder?.customer || workOrder?.customerName || '—';
+  const siteLocation = workOrder?.siteLocation || workOrder?.serviceAddress || workOrder?.address || '—';
+  const problem = workOrder?.problemDescription || workOrder?.problem || '—';
+  const status = workOrder?.status || '—';
+  const scheduled = workOrder?.scheduledDate
+    ? moment(workOrder.scheduledDate).format('YYYY-MM-DD HH:mm')
+    : 'Not Scheduled';
+
+  const customerPhone =
+    workOrder?.customerPhone ||
+    workOrder?.phone ||
+    workOrder?.customerPhoneNumber ||
+    '';
+
+  const customerEmail =
+    workOrder?.customerEmail ||
+    workOrder?.email ||
+    '';
+
+  // Try a few common shapes for billing address
+  const billingAddress =
+    workOrder?.billingAddress ||
+    [workOrder?.billingAddress1, workOrder?.billingAddress2, workOrder?.billingCity, workOrder?.billingState, workOrder?.billingZip]
+      .filter(Boolean)
+      .join(', ') ||
+    '';
+
+  // -----------------------------------------------------------
+
   return (
     <View style={styles.screen}>
       <ScrollView contentContainerStyle={styles.details}>
         <Text style={styles.title}>Work Order Details</Text>
 
         <View style={styles.card}>
-          <View style={styles.row}><Text style={styles.label}>WO/PO #:</Text><Text style={styles.value}>{workOrder?.poNumber || '—'}</Text></View>
-          <View style={styles.row}><Text style={styles.label}>Customer:</Text><Text style={styles.value}>{workOrder?.customer || '—'}</Text></View>
+          <View style={styles.row}>
+            <Text style={styles.label}>WO/PO #:</Text>
+            <Text style={styles.value}>{poNumber}</Text>
+          </View>
+
+          <View style={styles.row}>
+            <Text style={styles.label}>Customer:</Text>
+            <Text style={styles.value}>{customer}</Text>
+          </View>
+
+          <View style={styles.row}>
+            <Text style={styles.label}>Customer Phone:</Text>
+            {customerPhone ? (
+              <TouchableOpacity onPress={() => callNumber(customerPhone)}>
+                <Text style={[styles.value, styles.linkText]}>{customerPhone}</Text>
+              </TouchableOpacity>
+            ) : (
+              <Text style={styles.value}>—</Text>
+            )}
+          </View>
+
+          <View style={styles.row}>
+            <Text style={styles.label}>Customer Email:</Text>
+            {customerEmail ? (
+              <TouchableOpacity onPress={() => emailTo(customerEmail)}>
+                <Text style={[styles.value, styles.linkText]}>{customerEmail}</Text>
+              </TouchableOpacity>
+            ) : (
+              <Text style={styles.value}>—</Text>
+            )}
+          </View>
+
           <View style={styles.row}>
             <Text style={styles.label}>Site Location:</Text>
-            <TouchableOpacity onPress={() => openMap(workOrder?.siteLocation)}>
-              <Text style={[styles.value, styles.linkText]}>{workOrder?.siteLocation || '—'}</Text>
-            </TouchableOpacity>
+            {siteLocation && siteLocation !== '—' ? (
+              <TouchableOpacity onPress={() => openMap(siteLocation)}>
+                <Text style={[styles.value, styles.linkText]}>{siteLocation}</Text>
+              </TouchableOpacity>
+            ) : (
+              <Text style={styles.value}>—</Text>
+            )}
           </View>
-          <View style={styles.row}><Text style={styles.label}>Problem:</Text><Text style={styles.value}>{workOrder?.problemDescription || '—'}</Text></View>
-          <View style={styles.row}><Text style={styles.label}>Status:</Text><Text style={styles.value}>{workOrder?.status || '—'}</Text></View>
+
           <View style={styles.row}>
-            <Text style={styles.label}>Scheduled:</Text>
-            <Text style={styles.value}>
-              {workOrder?.scheduledDate ? moment(workOrder.scheduledDate).format('YYYY-MM-DD HH:mm') : 'Not Scheduled'}
-            </Text>
+            <Text style={styles.label}>Billing Address:</Text>
+            {billingAddress ? (
+              <TouchableOpacity onPress={() => openMap(billingAddress)}>
+                <Text style={[styles.value, styles.linkText]}>{billingAddress}</Text>
+              </TouchableOpacity>
+            ) : (
+              <Text style={styles.value}>—</Text>
+            )}
+          </View>
+
+          <View style={styles.row}>
+            <Text style={styles.label}>Problem Description:</Text>
+            <Text style={styles.value}>{problem}</Text>
+          </View>
+
+          <View style={styles.row}>
+            <Text style={styles.label}>Status:</Text>
+            <Text style={styles.value}>{status}</Text>
+          </View>
+
+          <View style={styles.row}>
+            <Text style={styles.label}>Scheduled Date:</Text>
+            <Text style={styles.value}>{scheduled}</Text>
           </View>
         </View>
 
@@ -895,7 +988,7 @@ export default function ViewWorkOrder() {
         </View>
       </Modal>
 
-      {/* Draw Note Modal with true Eraser */}
+      {/* Draw Note Modal */}
       <Modal visible={showDrawModal} animationType="slide" onRequestClose={() => setShowDrawModal(false)}>
         <View style={styles.drawContainer}>
           <Canvas ref={handleCanvas} style={styles.canvas} />
@@ -970,7 +1063,7 @@ const styles = StyleSheet.create({
   title: { fontSize: 24, fontWeight: '700', color: '#2B2D42', textAlign: 'center', marginBottom: 12 },
   card: { backgroundColor: '#FFF', borderRadius: 8, padding: 16, marginBottom: 16, elevation: 3 },
   row: { flexDirection: 'row', marginBottom: 8 },
-  label: { width: 120, fontWeight: '600', color: '#3D5A80' },
+  label: { width: 140, fontWeight: '600', color: '#3D5A80' },
   value: { flex: 1, color: '#2B2D42' },
   linkText: { color: '#007bff', textDecorationLine: 'underline' },
   pdfInline: { width: '100%', backgroundColor: '#E2E8F0', borderRadius: 6, overflow: 'hidden', marginTop: 8 },
@@ -1003,7 +1096,7 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     gap: 8,
     justifyContent: 'flex-start',
-    backgroundColor: 'rgba(255,255,255,0.85)',
+    backgroundColor: 'rgba(255,255,255,0.9)',
     padding: 8,
     borderRadius: 8,
     borderWidth: 1,
@@ -1059,14 +1152,4 @@ const styles = StyleSheet.create({
   deleteText: { color: '#fff', fontSize: 14, lineHeight: 18 },
   cancelBtn: { backgroundColor: '#dc3545', padding: 12, borderRadius: 6, alignItems: 'center', marginTop: 16 },
   cancelText: { color: '#fff', fontWeight: '600', fontSize: 16 },
-
-  addNoteOverlay: { flex: 1, backgroundColor: 'rgba(0,0,0,0.4)', justifyContent: 'center', padding: 16 },
-  addNoteContainer: { backgroundColor: '#fff', borderRadius: 6, padding: 16 },
-  addNoteTitle: { fontSize: 18, fontWeight: '600', marginBottom: 12, textAlign: 'center', color: '#2B2D42' },
-  addNoteInput: { height: 100, borderColor: '#ccc', borderWidth: 1, borderRadius: 4, padding: 8, textAlignVertical: 'top', marginBottom: 12 },
-  addNoteButtons: { flexDirection: 'row', justifyContent: 'space-around' },
-  saveNoteBtn: { backgroundColor: '#28a745', padding: 10, borderRadius: 4, flex: 1, marginHorizontal: 4 },
-  saveNoteText: { color: '#fff', textAlign: 'center', fontWeight: '600' },
-  cancelNoteBtn: { backgroundColor: '#dc3545', padding: 10, borderRadius: 4, flex: 1, marginHorizontal: 4 },
-  cancelNoteText: { color: '#fff', textAlign: 'center', fontWeight: '600' },
 });
