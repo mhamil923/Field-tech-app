@@ -14,24 +14,15 @@ import { useRouter } from 'expo-router';
 import * as ImagePicker from 'expo-image-picker';
 import * as ImageManipulator from 'expo-image-manipulator';
 import * as DocumentPicker from 'expo-document-picker';
-import Constants from 'expo-constants';
 
 import api, * as API_CONST from '../../constants/api';
 import { getMe } from '../../constants/api';
 
 /**
- * Google Places config
- * We try a few common locations for the key so you don't have to change this file:
- * - export from ../../constants/api (googlePlacesKey or GOOGLE_PLACES_API_KEY)
- * - app.json/app.config.js extra.googlePlacesApiKey
- * - EXPO_PUBLIC_GOOGLE_PLACES_KEY env
+ * Google Places API key
+ * (per your request, hard-coded here for Site Location autofill)
  */
-const GOOGLE_PLACES_KEY =
-  API_CONST.googlePlacesKey ||
-  API_CONST.GOOGLE_PLACES_API_KEY ||
-  Constants?.expoConfig?.extra?.googlePlacesApiKey ||
-  process.env?.EXPO_PUBLIC_GOOGLE_PLACES_KEY ||
-  '';
+const GOOGLE_PLACES_KEY = 'AIzaSyCVEFeBpSVhhhct5ILlOXAvEZip0B9tC4M';
 
 export default function AddWorkOrder() {
   const router = useRouter();
@@ -100,9 +91,7 @@ export default function AddWorkOrder() {
   };
 
   const submit = async () => {
-    if (me?.username !== 'Jeff') {
-      return Alert.alert('Not allowed', 'Only Jeff can add work orders from the app.');
-    }
+    // ❌ Removed the “Only Jeff” client-side gate that caused the alert.
     if (!customer.trim() || !billingAddress.trim() || !problemDescription.trim()) {
       return Alert.alert('Missing info', 'Customer, Billing Address, and Problem Description are required.');
     }
@@ -114,7 +103,7 @@ export default function AddWorkOrder() {
       form.append('customerPhone', customerPhone.trim());
       form.append('customerEmail', customerEmail.trim());
 
-      // Automatically assign to Jeff and set status to "Needs to be Scheduled"
+      // Assign to the current user if present; default status
       if (me?.id != null) form.append('assignedTo', String(me.id));
       form.append('status', 'Needs to be Scheduled');
 
@@ -151,16 +140,6 @@ export default function AddWorkOrder() {
     }
   };
 
-  if (me && me.username !== 'Jeff') {
-    return (
-      <View style={styles.center}>
-        <Text style={{ color: '#ef4444', fontWeight: '700' }}>
-          You are not authorized to add work orders.
-        </Text>
-      </View>
-    );
-  }
-
   return (
     <ScrollView contentContainerStyle={styles.form} keyboardShouldPersistTaps="handled">
       <Text style={styles.title}>Add Work Order</Text>
@@ -186,28 +165,13 @@ export default function AddWorkOrder() {
       <LabeledInput label="PO Number" value={poNumber} onChangeText={setPoNumber} placeholder="Optional" />
 
       {/* Site Location with Google Places autocomplete */}
-      {GOOGLE_PLACES_KEY ? (
-        <PlacesAutocompleteInput
-          label="Site Location"
-          value={siteLocation}
-          onChangeValue={setSiteLocation}
-          googleKey={GOOGLE_PLACES_KEY}
-          required
-        />
-      ) : (
-        <>
-          <LabeledInput
-            required
-            label="Site Location"
-            value={siteLocation}
-            onChangeText={setSiteLocation}
-            placeholder="Start typing address…"
-          />
-          <Text style={styles.helperText}>
-            (Tip: Add your Google Places API key to enable address autocomplete.)
-          </Text>
-        </>
-      )}
+      <PlacesAutocompleteInput
+        label="Site Location"
+        value={siteLocation}
+        onChangeValue={setSiteLocation}
+        googleKey={GOOGLE_PLACES_KEY}
+        required
+      />
 
       <LabeledInput required label="Billing Address" value={billingAddress} onChangeText={setBillingAddress} multiline />
       <LabeledInput required label="Problem Description" value={problemDescription} onChangeText={setProblemDescription} multiline />
@@ -399,13 +363,6 @@ const styles = StyleSheet.create({
   },
   submitText: { color: '#fff', fontWeight: '900' },
 
-  center: {
-    flex: 1,
-    alignItems: 'center',
-    justifyContent: 'center',
-    backgroundColor: '#F1F5F9',
-  },
-
   // Autocomplete styles
   autocompleteList: {
     position: 'absolute',
@@ -433,12 +390,5 @@ const styles = StyleSheet.create({
     position: 'absolute',
     right: 10,
     top: 12,
-  },
-
-  helperText: {
-    color: '#64748b',
-    fontSize: 12,
-    marginTop: -6,
-    marginBottom: 10,
   },
 });

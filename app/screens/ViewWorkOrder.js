@@ -16,11 +16,10 @@ import {
   TextInput,
   Linking,
   Platform,
-  PanResponder,
   SafeAreaView,
+  KeyboardAvoidingView,
 } from 'react-native';
 import { WebView } from 'react-native-webview';
-import Canvas from 'react-native-canvas';
 import * as FileSystem from 'expo-file-system';
 import * as ImagePicker from 'expo-image-picker';
 import * as ImageManipulator from 'expo-image-manipulator';
@@ -30,6 +29,16 @@ import { useLocalSearchParams, useRouter } from 'expo-router';
 import api, { fileUrl } from '../../constants/api';
 
 const { width: screenWidth, height: screenHeight } = Dimensions.get('window');
+
+// Standard statuses
+const STATUS_OPTIONS = [
+  'Needs to be Scheduled',
+  'Scheduled',
+  'Waiting for Approval',
+  'Waiting on Parts',
+  'Parts In',
+  'Completed',
+];
 
 /**
  * Read-only multi-page PDF viewer using pdf.js
@@ -111,7 +120,7 @@ const PDF_VIEWER_HTML = `
 `;
 
 /**
- * Annotator HTML (PDF signer/annotator) with white-paint eraser
+ * PDF Annotator (used for "Annotate & Sign PDF")
  */
 const ANNOTATOR_HTML = `
 <!doctype html>
@@ -119,7 +128,7 @@ const ANNOTATOR_HTML = `
 <head>
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no" />
-<title>Annotate PDF</title>
+<title>Annotate</title>
 <style>
   html,body { margin:0; padding:0; background:#fff; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Arial, sans-serif; }
   body { padding-top: calc(env(safe-area-inset-top, 0px) + 6px); }
@@ -133,6 +142,8 @@ const ANNOTATOR_HTML = `
   canvas.page { width:100%; height:auto; display:block; background:#fafafa; }
   canvas.overlay { position:absolute; left:0; top:0; touch-action:none; }
   .hint { text-align:center; font-size:12px; color:#6b7280; margin:8px 0 12px; }
+  .cursor { position: fixed; pointer-events:none; z-index: 2000; width: 24px; height: 24px; border-radius: 999px; border: 2px solid rgba(0,0,0,0.6); background: rgba(255,255,255,0.9); display:none; transform: translate(-50%, -50%); }
+  .cursor.pen { width: 10px; height: 10px; background: #111827; border-color: #111827; }
 </style>
 </head>
 <body>
@@ -143,10 +154,14 @@ const ANNOTATOR_HTML = `
     <button id="undo">Undo</button>
     <button id="clear">Clear Page</button>
     <div class="sep"></div>
-    <button id="save" class="primary">Save & Upload</button>
+    <div style="display:flex; gap:8px;">
+      <button id="close">Close</button>
+      <button id="save" class="primary">Save & Upload</button>
+    </div>
   </div>
   <div id="pages"></div>
   <div class="hint">Turn OFF “Draw Mode” to scroll. Turn it ON to sign/annotate.</div>
+  <div id="cursor" class="cursor"></div>
 
   <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
   <script>pdfjsLib.GlobalWorkerOptions.workerSrc = "https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js";</script>
@@ -166,6 +181,10 @@ const ANNOTATOR_HTML = `
           ? (state.tool === 'erase' ? 'cell' : 'crosshair')
           : 'default';
       }
+      const c = document.getElementById('cursor');
+      if (!state.drawEnabled) { c.style.display = 'none'; return; }
+      c.style.display = 'block';
+      c.className = state.tool === 'erase' ? 'cursor' : 'cursor pen';
     }
     function setTool(t){ state.tool=t; applyPointerMode(); }
     function setDrawEnabled(on){ state.drawEnabled=!!on; applyPointerMode(); }
@@ -178,6 +197,13 @@ const ANNOTATOR_HTML = `
     }
     function undo(p){ if(p.strokes.length) p.overlayCtx.putImageData(p.strokes.pop(),0,0); }
     function clearPage(p){ pushUndo(p); p.overlayCtx.clearRect(0,0,p.overlayCanvas.width,p.overlayCanvas.height); }
+
+    function updateCursor(ev){
+      const c = document.getElementById('cursor');
+      const x = (ev.touches?ev.touches[0].clientX:ev.clientX);
+      const y = (ev.touches?ev.touches[0].clientY:ev.clientY);
+      c.style.left = x + 'px'; c.style.top  = y + 'px';
+    }
 
     async function renderPDF(){
       try{
@@ -224,30 +250,21 @@ const ANNOTATOR_HTML = `
           }
           function start(ev){
             if(!state.drawEnabled) return;
-            ev.preventDefault();
-            pushUndo(pState);
-            drawing=true;
+            ev.preventDefault(); updateCursor(ev);
+            pushUndo(pState); drawing=true;
             const {x,y}=pos(ev); lastX=x; lastY=y;
           }
           function move(ev){
+            updateCursor(ev);
             if(!state.drawEnabled || !drawing) return;
             ev.preventDefault();
             const {x,y}=pos(ev);
             if(state.tool==='erase'){
-              // White-paint eraser to avoid full-canvas clears on some devices
-              octx.save();
-              octx.globalCompositeOperation='source-over';
-              octx.strokeStyle='#FFFFFF';
-              octx.lineWidth=18;
-              octx.beginPath(); octx.moveTo(lastX,lastY); octx.lineTo(x,y); octx.stroke();
-              octx.restore();
+              octx.save(); octx.globalCompositeOperation='source-over'; octx.strokeStyle='#FFFFFF'; octx.lineWidth=18;
+              octx.beginPath(); octx.moveTo(lastX,lastY); octx.lineTo(x,y); octx.stroke(); octx.restore();
             } else {
-              octx.save();
-              octx.globalCompositeOperation='source-over';
-              octx.strokeStyle='#000000';
-              octx.lineWidth=3;
-              octx.beginPath(); octx.moveTo(lastX,lastY); octx.lineTo(x,y); octx.stroke();
-              octx.restore();
+              octx.save(); octx.globalCompositeOperation='source-over'; octx.strokeStyle='#000000'; octx.lineWidth=3;
+              octx.beginPath(); octx.moveTo(lastX,lastY); octx.lineTo(x,y); octx.stroke(); octx.restore();
             }
             lastX=x; lastY=y;
           }
@@ -297,6 +314,7 @@ const ANNOTATOR_HTML = `
       document.getElementById('pen').addEventListener('click',()=>setTool('pen'));
       document.getElementById('erase').addEventListener('click',()=>setTool('erase'));
       document.getElementById('save').addEventListener('click',saveAndUpload);
+      document.getElementById('close').addEventListener('click',()=>window.ReactNativeWebView?.postMessage('CLOSE'));
       document.getElementById('undo').addEventListener('click',()=>{
         const winTop=window.scrollY; let target=state.pages[0];
         for(const p of state.pages){
@@ -321,60 +339,187 @@ const ANNOTATOR_HTML = `
 </html>
 `;
 
+/**
+ * SKETCH HTML (used for "Draw Note")
+ */
+const SKETCH_HTML = `
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no" />
+<title>Draw Note</title>
+<style>
+  html,body { margin:0; padding:0; background:#fff; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Arial, sans-serif; }
+  body { padding-top: calc(env(safe-area-inset-top, 0px) + 6px); }
+  #toolbar { position: sticky; top: 0; z-index: 1000; background: #111827; color:#fff; display:flex; gap:8px; align-items:center; padding:8px 10px; flex-wrap: wrap; }
+  #toolbar button { background:#374151; border:0; color:#fff; padding:8px 10px; border-radius:6px; font-weight:600; }
+  #toolbar button.primary { background:#2563EB; }
+  #toolbar label { display:flex; align-items:center; gap:6px; font-size:13px; background:#1f2937; padding:6px 10px; border-radius:6px; }
+  #toolbar .sep { flex:1; }
+  #pages { padding: 8px; }
+  .pageWrap { position:relative; margin: 0 auto 16px; max-width: 900px; }
+  canvas.page { width:100%; height:auto; display:block; background:#ffffff; }
+  canvas.overlay { position:absolute; left:0; top:0; touch-action:none; }
+  .hint { text-align:center; font-size:12px; color:#6b7280; margin:8px 0 12px; }
+  .cursor { position: fixed; pointer-events:none; z-index: 2000; width: 24px; height: 24px; border-radius: 999px; border: 2px solid rgba(0,0,0,0.6); background: rgba(255,255,255,0.9); display:none; transform: translate(-50%, -50%); }
+  .cursor.pen { width: 10px; height: 10px; background: #111827; border-color: #111827; }
+</style>
+</head>
+<body>
+  <div id="toolbar">
+    <label><input type="checkbox" id="drawToggle" /> Draw Mode</label>
+    <button id="pen">Pen</button>
+    <button id="erase">Erase</button>
+    <button id="undo">Undo</button>
+    <button id="clear">Clear Page</button>
+    <div class="sep"></div>
+    <div style="display:flex; gap:8px;">
+      <button id="close">Close</button>
+      <button id="save" class="primary">Save & Upload</button>
+    </div>
+  </div>
+  <div id="pages"></div>
+  <div class="hint">Turn OFF “Draw Mode” to scroll. Turn it ON to sketch.</div>
+  <div id="cursor" class="cursor"></div>
+
+  <script>
+    const state = { tool: 'pen', drawEnabled: false, page: null };
+
+    function applyPointerMode() {
+      const { overlayCanvas } = state.page || {};
+      if (!overlayCanvas) return;
+      overlayCanvas.style.pointerEvents = state.drawEnabled ? 'auto' : 'none';
+      overlayCanvas.style.touchAction = state.drawEnabled ? 'none' : 'auto';
+      const c = document.getElementById('cursor');
+      if (!state.drawEnabled) { c.style.display = 'none'; return; }
+      c.style.display = 'block';
+      c.className = state.tool === 'erase' ? 'cursor' : 'cursor pen';
+    }
+    function setTool(t){ state.tool=t; applyPointerMode(); }
+    function setDrawEnabled(on){ state.drawEnabled=!!on; applyPointerMode(); }
+
+    function pushUndo(){
+      try{
+        const { overlayCtx, overlayCanvas } = state.page;
+        const snap = overlayCtx.getImageData(0,0,overlayCanvas.width,overlayCanvas.height);
+        state.page.strokes.push(snap); if(state.page.strokes.length>50) state.page.strokes.shift();
+      }catch(e){}
+    }
+    function undo(){ if(state.page?.strokes?.length){ state.page.overlayCtx.putImageData(state.page.strokes.pop(),0,0); } }
+    function clearPage(){ pushUndo(); const { overlayCtx, overlayCanvas } = state.page; overlayCtx.clearRect(0,0,overlayCanvas.width,overlayCanvas.height); }
+
+    function updateCursor(ev){
+      const c = document.getElementById('cursor');
+      const x = (ev.touches?ev.touches[0].clientX:ev.clientX);
+      const y = (ev.touches?ev.touches[0].clientY:ev.clientY);
+      c.style.left = x + 'px'; c.style.top  = y + 'px';
+    }
+
+    function setup() {
+      const container = document.getElementById('pages');
+      const wrap = document.createElement('div'); wrap.className = 'pageWrap';
+
+      const targetWidth = Math.min(900, Math.max(600, window.innerWidth-24));
+      const ratio = 792/612; // letter h/w
+      const pageW = Math.floor(targetWidth);
+      const pageH = Math.floor(targetWidth * ratio);
+
+      const pageCanvas = document.createElement('canvas'); pageCanvas.className='page';
+      pageCanvas.width = pageW; pageCanvas.height = pageH;
+      wrap.appendChild(pageCanvas);
+
+      const overlay = document.createElement('canvas'); overlay.className='overlay';
+      overlay.width=pageW; overlay.height=pageH;
+      overlay.style.width = pageCanvas.style.width = '100%';
+      overlay.style.height = pageCanvas.style.height = 'auto';
+      wrap.appendChild(overlay);
+
+      container.appendChild(wrap);
+
+      const bctx = pageCanvas.getContext('2d');
+      bctx.fillStyle = '#FFFFFF';
+      bctx.fillRect(0,0,pageW,pageH);
+
+      const octx=overlay.getContext('2d');
+      octx.lineWidth=3; octx.lineCap='round'; octx.lineJoin='round'; octx.strokeStyle='#000'; octx.globalCompositeOperation='source-over';
+
+      state.page = { pageCanvas, overlayCanvas: overlay, overlayCtx: octx, strokes: [] };
+      applyPointerMode();
+
+      let drawing=false,lastX=0,lastY=0;
+      function pos(ev){
+        const r=overlay.getBoundingClientRect();
+        const x=(ev.touches?ev.touches[0].clientX:ev.clientX)-r.left;
+        const y=(ev.touches?ev.touches[0].clientY:ev.clientY)-r.top;
+        const sx=overlay.width/r.width, sy=overlay.height/r.height;
+        return {x:x*sx,y:y*sy};
+      }
+      function start(ev){
+        if(!state.drawEnabled) return;
+        ev.preventDefault(); updateCursor(ev);
+        pushUndo(); drawing=true;
+        const {x,y}=pos(ev); lastX=x; lastY=y;
+      }
+      function move(ev){
+        updateCursor(ev);
+        if(!state.drawEnabled || !drawing) return;
+        ev.preventDefault();
+        const {x,y}=pos(ev);
+        if(state.tool==='erase'){
+          octx.save(); octx.globalCompositeOperation='source-over'; octx.strokeStyle='#FFFFFF'; octx.lineWidth=18;
+          octx.beginPath(); octx.moveTo(lastX,lastY); octx.lineTo(x,y); octx.stroke(); octx.restore();
+        } else {
+          octx.save(); octx.globalCompositeOperation='source-over'; octx.strokeStyle='#000000'; octx.lineWidth=3;
+          octx.beginPath(); octx.moveTo(lastX,lastY); octx.lineTo(x,y); octx.stroke(); octx.restore();
+        }
+        lastX=x; lastY=y;
+      }
+      function end(){ drawing=false; }
+
+      overlay.addEventListener('touchstart',start,{passive:false});
+      overlay.addEventListener('touchmove', move ,{passive:false});
+      overlay.addEventListener('touchend',  end  ,{passive:false});
+      overlay.addEventListener('mousedown',start);
+      overlay.addEventListener('mousemove',move);
+      window.addEventListener('mouseup',end);
+    }
+
+    function saveAsJPEG(){
+      try{
+        const { pageCanvas, overlayCanvas } = state.page;
+        const merged = document.createElement('canvas');
+        merged.width = pageCanvas.width; merged.height = pageCanvas.height;
+        const mctx = merged.getContext('2d');
+        mctx.drawImage(pageCanvas, 0, 0);
+        mctx.drawImage(overlayCanvas, 0, 0);
+        const dataUrl = merged.toDataURL('image/jpeg', 0.9);
+        const b64 = dataUrl.split(',')[1];
+        window.ReactNativeWebView?.postMessage('IMAGE:'+b64);
+      }catch(e){
+        window.ReactNativeWebView?.postMessage('ERROR:'+(e?.message||String(e)));
+      }
+    }
+
+    window.addEventListener('DOMContentLoaded',()=>{
+      document.getElementById('pen').addEventListener('click',()=>setTool('pen'));
+      document.getElementById('erase').addEventListener('click',()=>setTool('erase'));
+      document.getElementById('save').addEventListener('click',saveAsJPEG);
+      document.getElementById('close').addEventListener('click',()=>window.ReactNativeWebView?.postMessage('CLOSE'));
+      document.getElementById('undo').addEventListener('click',undo);
+      document.getElementById('clear').addEventListener('click',clearPage);
+      document.getElementById('drawToggle').addEventListener('change',e=>setDrawEnabled(e.target.checked));
+      setup();
+    });
+  </script>
+</body>
+</html>
+`;
+
 export default function ViewWorkOrder() {
   const params = useLocalSearchParams();
   const workOrderId = params?.id ? (Array.isArray(params.id) ? params.id[0] : params.id) : null;
   const router = useRouter();
-
-  // Draw-note canvas refs
-  const canvasRef = useRef(null);
-  const ctxRef = useRef(null);
-
-  // Draw-note tool state
-  const [drawTool, setDrawTool] = useState('pen'); // 'pen' | 'erase'
-  const lastPt = useRef({ x: 0, y: 0, has: false });
-  const PEN_WIDTH = 4;
-  const ERASER_WIDTH = 20;
-
-  // Draw a single segment based on tool (eraser paints white)
-  const drawSegment = (x1, y1, x2, y2) => {
-    const ctx = ctxRef.current;
-    if (!ctx) return;
-    ctx.save();
-    ctx.globalCompositeOperation = 'source-over';
-    ctx.strokeStyle = drawTool === 'erase' ? '#FFFFFF' : '#000000';
-    ctx.lineWidth = drawTool === 'erase' ? ERASER_WIDTH : PEN_WIDTH;
-    ctx.lineCap = 'round';
-    ctx.lineJoin = 'round';
-    ctx.beginPath();
-    ctx.moveTo(x1, y1);
-    ctx.lineTo(x2, y2);
-    ctx.stroke();
-    ctx.restore();
-  };
-
-  // PanResponder for drawing/erasing
-  const panResponder = useRef(
-    PanResponder.create({
-      onStartShouldSetPanResponder: () => true,
-      onMoveShouldSetPanResponder: () => true,
-      onPanResponderGrant: e => {
-        const { locationX, locationY } = e.nativeEvent;
-        lastPt.current = { x: locationX, y: locationY, has: true };
-        // Dot on tap
-        drawSegment(locationX, locationY, locationX + 0.01, locationY + 0.01);
-      },
-      onPanResponderMove: e => {
-        const { locationX, locationY } = e.nativeEvent;
-        if (lastPt.current.has) {
-          drawSegment(lastPt.current.x, lastPt.current.y, locationX, locationY);
-        }
-        lastPt.current = { x: locationX, y: locationY, has: true };
-      },
-      onPanResponderRelease: () => { lastPt.current.has = false; },
-      onPanResponderTerminate: () => { lastPt.current.has = false; },
-    })
-  ).current;
 
   const [workOrder, setWorkOrder] = useState(null);
   const [photos, setPhotos] = useState([]);
@@ -383,20 +528,25 @@ export default function ViewWorkOrder() {
   const [showAddNoteModal, setShowAddNoteModal] = useState(false);
   const [newNoteText, setNewNoteText] = useState('');
 
-  const [showDrawModal, setShowDrawModal] = useState(false);
+  // FIX: missing state caused crashes in some builds
   const [viewAttachmentsVisible, setViewAttachmentsVisible] = useState(false);
-  const [photoViewerVisible, setPhotoViewerVisible] = useState(false);
-  const [viewerIndex, setViewerIndex] = useState(0);
 
-  // Annotator modal state
+  // Draw Notes (web sketch -> JPEG)
+  const [sketchVisible, setSketchVisible] = useState(false);
+
+  // Annotate & Sign existing PDF
   const [annotateVisible, setAnnotateVisible] = useState(false);
   const [pdfBase64, setPdfBase64] = useState(null);
   const annotatorRef = useRef(null);
 
-  // Inline viewer state (multi-page pdf.js)
+  // Inline viewer (read-only preview)
   const [pdfInlineB64, setPdfInlineB64] = useState(null);
   const [pdfPreviewError, setPdfPreviewError] = useState(null);
   const [pdfInlineHeight, setPdfInlineHeight] = useState(Math.max(600, screenHeight * 0.8));
+
+  // Status modal
+  const [showStatusModal, setShowStatusModal] = useState(false);
+  const [pendingStatus, setPendingStatus] = useState('');
 
   // -------- helpers for contact actions & address --------
   const normPhone = (p) => String(p || '').replace(/[^\d+]/g, '');
@@ -473,71 +623,6 @@ export default function ViewWorkOrder() {
   useEffect(() => {
     fetchWorkOrder();
   }, [fetchWorkOrder]);
-
-  // Canvas setup for Draw Notes
-  const handleCanvas = (canvas) => {
-    if (!canvas) return;
-    canvas.width = screenWidth;
-    canvas.height = screenHeight;
-    const ctx = canvas.getContext('2d');
-
-    // Solid white background so eraser (white paint) restores the page
-    ctx.save();
-    ctx.globalCompositeOperation = 'source-over';
-    ctx.fillStyle = '#FFFFFF';
-    ctx.fillRect(0, 0, canvas.width, canvas.height);
-    ctx.restore();
-
-    ctxRef.current = ctx;
-    canvasRef.current = canvas;
-  };
-
-  const clearCanvas = () => {
-    if (!canvasRef.current || !ctxRef.current) return;
-    const ctx = ctxRef.current;
-    ctx.save();
-    ctx.globalCompositeOperation = 'source-over';
-    ctx.fillStyle = '#FFFFFF';
-    ctx.fillRect(0, 0, canvasRef.current.width, canvasRef.current.height);
-    ctx.restore();
-  };
-
-  const saveDrawing = async () => {
-    try {
-      if (!canvasRef.current) throw new Error('Canvas not ready.');
-      const dataUrl = await canvasRef.current.toDataURL();
-      const base64Png = dataUrl.split(',')[1];
-
-      const pngPath = FileSystem.cacheDirectory + `drawing_${Date.now()}.png`;
-      await FileSystem.writeAsStringAsync(pngPath, base64Png, { encoding: FileSystem.EncodingType.Base64 });
-
-      // Compress to JPEG to keep uploads small
-      let uploadUri = pngPath;
-      let uploadType = 'image/png';
-      let uploadName = 'drawing.png';
-      try {
-        const jpeg = await ImageManipulator.manipulateAsync(
-          pngPath,
-          [],
-          { compress: 0.8, format: ImageManipulator.SaveFormat.JPEG }
-        );
-        uploadUri = jpeg.uri;
-        uploadType = 'image/jpeg';
-        uploadName = 'drawing.jpg';
-      } catch {}
-
-      const form = new FormData();
-      form.append('photoFile', { uri: uploadUri, name: uploadName, type: uploadType });
-
-      await api.put(`/work-orders/${workOrderId}/edit`, form, { headers: { 'Content-Type': 'multipart/form-data' } });
-
-      setShowDrawModal(false);
-      fetchWorkOrder();
-    } catch (err) {
-      Alert.alert('Error', err.message || 'Error uploading drawing');
-      setShowDrawModal(false);
-    }
-  };
 
   const addNote = async () => {
     if (!newNoteText.trim()) return;
@@ -638,6 +723,9 @@ export default function ViewWorkOrder() {
     ]);
   };
 
+  const [photoViewerVisible, setPhotoViewerVisible] = useState(false);
+  const [viewerIndex, setViewerIndex] = useState(0);
+
   const handleShare = async () => {
     if (!photos.length) return;
     const url = photos[viewerIndex];
@@ -660,10 +748,18 @@ export default function ViewWorkOrder() {
     }
   };
 
+  // Use web sketch for “Draw Note” (exports JPEG)
+  const openSketch = () => setSketchVisible(true);
+
+  // WebView message handlers
   const onAnnotatorMessage = async (ev) => {
     const msg = ev?.nativeEvent?.data || '';
     if (msg.startsWith('ERROR:')) {
       Alert.alert('Annotator Error', msg.slice(6));
+      return;
+    }
+    if (msg === 'CLOSE') {
+      setAnnotateVisible(false);
       return;
     }
     if (msg.startsWith('SIGNED:')) {
@@ -683,6 +779,42 @@ export default function ViewWorkOrder() {
         Alert.alert('Success', 'Signed PDF uploaded.');
       } catch (e) {
         Alert.alert('Upload Error', e?.message || 'Failed to upload signed PDF.');
+      }
+    }
+  };
+
+  const onSketchMessage = async (ev) => {
+    const msg = ev?.nativeEvent?.data || '';
+    if (msg.startsWith('ERROR:')) {
+      Alert.alert('Draw Notes Error', msg.slice(6));
+      return;
+    }
+    if (msg === 'CLOSE') {
+      setSketchVisible(false);
+      return;
+    }
+    if (msg.startsWith('IMAGE:')) {
+      const b64 = msg.slice(6);
+      try {
+        const jpgPath = FileSystem.cacheDirectory + `drawing_${Date.now()}.jpg`;
+        await FileSystem.writeAsStringAsync(jpgPath, b64, { encoding: FileSystem.EncodingType.Base64 });
+
+        const processed = await processImageForUpload(jpgPath);
+
+        const form = new FormData();
+        form.append('photoFile', {
+          uri: processed,
+          name: `drawing-note-${Date.now()}.jpg`,
+          type: 'image/jpeg',
+        });
+
+        await api.put(`/work-orders/${workOrderId}/edit`, form, { headers: { 'Content-Type': 'multipart/form-data' } });
+
+        setSketchVisible(false);
+        fetchWorkOrder();
+        Alert.alert('Uploaded', 'Drawing note uploaded as photo.');
+      } catch (e) {
+        Alert.alert('Upload Error', e?.message || 'Failed to upload drawing note.');
       }
     }
   };
@@ -708,7 +840,6 @@ export default function ViewWorkOrder() {
     workOrder?.email ||
     '';
 
-  // Try a few common shapes for billing address
   const billingAddress =
     workOrder?.billingAddress ||
     [workOrder?.billingAddress1, workOrder?.billingAddress2, workOrder?.billingCity, workOrder?.billingState, workOrder?.billingZip]
@@ -716,11 +847,28 @@ export default function ViewWorkOrder() {
       .join(', ') ||
     '';
 
-  // -----------------------------------------------------------
+  // ----- status update -----
+  const openStatusModal = () => {
+    setPendingStatus(workOrder?.status || STATUS_OPTIONS[0]);
+    setShowStatusModal(true);
+  };
+
+  const applyStatus = async () => {
+    try {
+      const form = new FormData();
+      form.append('status', pendingStatus || STATUS_OPTIONS[0]);
+      await api.put(`/work-orders/${workOrderId}/edit`, form);
+      setShowStatusModal(false);
+      fetchWorkOrder();
+    } catch (e) {
+      Alert.alert('Error', e?.response?.data?.error || e?.message || 'Failed to update status.');
+    }
+  };
+  // -------------------------
 
   return (
     <View style={styles.screen}>
-      <ScrollView contentContainerStyle={styles.details}>
+      <ScrollView contentContainerStyle={styles.details} keyboardShouldPersistTaps="handled">
         <Text style={styles.title}>Work Order Details</Text>
 
         <View style={styles.card}>
@@ -783,9 +931,12 @@ export default function ViewWorkOrder() {
             <Text style={styles.value}>{problem}</Text>
           </View>
 
-          <View style={styles.row}>
+          <View style={[styles.row, { alignItems: 'center' }]}>
             <Text style={styles.label}>Status:</Text>
-            <Text style={styles.value}>{status}</Text>
+            <Text style={[styles.value, { flex: 0 }]}>{status}</Text>
+            <TouchableOpacity style={styles.smallBtn} onPress={openStatusModal}>
+              <Text style={styles.smallBtnText}>Change</Text>
+            </TouchableOpacity>
           </View>
 
           <View style={styles.row}>
@@ -815,7 +966,7 @@ export default function ViewWorkOrder() {
         <TouchableOpacity style={[styles.buttonBase, styles.noteBtn]} onPress={() => setShowAddNoteModal(true)}>
           <Text style={styles.noteText}>Add Note</Text>
         </TouchableOpacity>
-        <TouchableOpacity style={[styles.buttonBase, styles.drawBtn]} onPress={() => setShowDrawModal(true)}>
+        <TouchableOpacity style={[styles.buttonBase, styles.drawBtn]} onPress={() => setSketchVisible(true)}>
           <Text style={styles.drawText}>Draw Note</Text>
         </TouchableOpacity>
 
@@ -920,6 +1071,8 @@ export default function ViewWorkOrder() {
         visible={viewAttachmentsVisible}
         animationType="fade"
         transparent
+        statusBarTranslucent
+        presentationStyle="overFullScreen"
         onRequestClose={() => setViewAttachmentsVisible(false)}
       >
         <View style={styles.modal}>
@@ -943,7 +1096,7 @@ export default function ViewWorkOrder() {
                   >
                     <Image source={{ uri: item }} style={styles.thumbnail} />
                   </TouchableOpacity>
-                  <TouchableOpacity style={styles.deleteIcon} onPress={() => handleDeletePhoto(index)}>
+                  <TouchableOpacity style={styles.deleteIcon} onPress={() => handleDeletePhoto(index)} hitSlop={{ top: 8, left: 8, right: 8, bottom: 8 }}>
                     <Text style={styles.deleteText}>×</Text>
                   </TouchableOpacity>
                 </View>
@@ -956,14 +1109,20 @@ export default function ViewWorkOrder() {
         </View>
       </Modal>
 
-      {/* Add Note Modal */}
+      {/* Add Note Modal — FIX: overFullScreen + keyboard-safe */}
       <Modal
         visible={showAddNoteModal}
-        animationType="slide"
+        animationType="fade"
         transparent
+        statusBarTranslucent
+        presentationStyle="overFullScreen"
         onRequestClose={() => setShowAddNoteModal(false)}
       >
-        <View style={styles.addNoteOverlay}>
+        <KeyboardAvoidingView
+          behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
+          keyboardVerticalOffset={Platform.select({ ios: 80, android: 0 })}
+          style={styles.addNoteOverlay}
+        >
           <View style={styles.addNoteContainer}>
             <Text style={styles.addNoteTitle}>New Note</Text>
             <TextInput
@@ -972,6 +1131,8 @@ export default function ViewWorkOrder() {
               placeholder="Enter your note…"
               value={newNoteText}
               onChangeText={setNewNoteText}
+              autoFocus
+              returnKeyType="done"
             />
             <View style={styles.addNoteButtons}>
               <TouchableOpacity style={styles.saveNoteBtn} onPress={addNote}>
@@ -985,42 +1146,59 @@ export default function ViewWorkOrder() {
               </TouchableOpacity>
             </View>
           </View>
+        </KeyboardAvoidingView>
+      </Modal>
+
+      {/* Change Status Modal */}
+      <Modal
+        visible={showStatusModal}
+        animationType="fade"
+        transparent
+        statusBarTranslucent
+        presentationStyle="overFullScreen"
+        onRequestClose={() => setShowStatusModal(false)}
+      >
+        <View style={styles.addNoteOverlay}>
+          <View style={styles.addNoteContainer}>
+            <Text style={styles.addNoteTitle}>Change Status</Text>
+            <View style={styles.statusList}>
+              {STATUS_OPTIONS.map(s => (
+                <TouchableOpacity
+                  key={s}
+                  style={[styles.statusOption, pendingStatus === s && styles.statusOptionActive]}
+                  onPress={() => setPendingStatus(s)}
+                >
+                  <Text style={[styles.statusText, pendingStatus === s && styles.statusTextActive]}>{s}</Text>
+                </TouchableOpacity>
+              ))}
+            </View>
+            <View style={styles.addNoteButtons}>
+              <TouchableOpacity style={styles.saveNoteBtn} onPress={applyStatus}>
+                <Text style={styles.saveNoteText}>Apply</Text>
+              </TouchableOpacity>
+              <TouchableOpacity
+                style={styles.cancelNoteBtn}
+                onPress={() => setShowStatusModal(false)}
+              >
+                <Text style={styles.cancelNoteText}>Cancel</Text>
+              </TouchableOpacity>
+            </View>
+          </View>
         </View>
       </Modal>
 
-      {/* Draw Note Modal */}
-      <Modal visible={showDrawModal} animationType="slide" onRequestClose={() => setShowDrawModal(false)}>
-        <View style={styles.drawContainer}>
-          <Canvas ref={handleCanvas} style={styles.canvas} />
-          <View style={StyleSheet.absoluteFill} {...panResponder.panHandlers} />
-
-          <View style={styles.drawToolbar}>
-            <TouchableOpacity
-              style={[styles.toolBtn, drawTool === 'pen' ? styles.toolBtnActive : null]}
-              onPress={() => setDrawTool('pen')}
-            >
-              <Text style={[styles.toolText, drawTool === 'pen' ? styles.toolTextActive : null]}>Pen</Text>
-            </TouchableOpacity>
-            <TouchableOpacity
-              style={[styles.toolBtn, drawTool === 'erase' ? styles.toolBtnActive : null]}
-              onPress={() => setDrawTool('erase')}
-            >
-              <Text style={[styles.toolText, drawTool === 'erase' ? styles.toolTextActive : null]}>Eraser</Text>
-            </TouchableOpacity>
-            <TouchableOpacity style={[styles.toolBtn, styles.clearBtn]} onPress={clearCanvas}>
-              <Text style={[styles.toolText, styles.clearText]}>Clear</Text>
-            </TouchableOpacity>
-          </View>
-
-          <View style={styles.drawFooter}>
-            <TouchableOpacity style={styles.saveDrawBtn} onPress={saveDrawing}>
-              <Text style={styles.saveDrawText}>Save</Text>
-            </TouchableOpacity>
-            <TouchableOpacity style={styles.closeDrawBtn} onPress={() => setShowDrawModal(false)}>
-              <Text style={styles.closeDrawText}>Close</Text>
-            </TouchableOpacity>
-          </View>
-        </View>
+      {/* Draw Note Modal (JPEG export) */}
+      <Modal visible={sketchVisible} animationType="slide" onRequestClose={() => setSketchVisible(false)}>
+        <SafeAreaView style={{ flex: 1, backgroundColor: '#000' }}>
+          <WebView
+            originWhitelist={['*']}
+            source={{ html: SKETCH_HTML }}
+            javaScriptEnabled
+            domStorageEnabled
+            onMessage={onSketchMessage}
+            style={{ flex: 1 }}
+          />
+        </SafeAreaView>
       </Modal>
 
       {/* Annotate & Sign Modal */}
@@ -1044,11 +1222,6 @@ export default function ViewWorkOrder() {
               <Text style={styles.loadingText}>Loading PDF…</Text>
             </View>
           )}
-          <View style={{ position:'absolute', top: 8, right: 16 }}>
-            <TouchableOpacity onPress={() => setAnnotateVisible(false)} style={{ backgroundColor:'#dc3545', padding:10, borderRadius:8 }}>
-              <Text style={{ color:'#fff', fontWeight:'700' }}>Close</Text>
-            </TouchableOpacity>
-          </View>
         </SafeAreaView>
       </Modal>
     </View>
@@ -1062,7 +1235,7 @@ const styles = StyleSheet.create({
   loadingText: { fontSize: 18, color: '#3D5A80' },
   title: { fontSize: 24, fontWeight: '700', color: '#2B2D42', textAlign: 'center', marginBottom: 12 },
   card: { backgroundColor: '#FFF', borderRadius: 8, padding: 16, marginBottom: 16, elevation: 3 },
-  row: { flexDirection: 'row', marginBottom: 8 },
+  row: { flexDirection: 'row', marginBottom: 8, flexWrap: 'wrap' },
   label: { width: 140, fontWeight: '600', color: '#3D5A80' },
   value: { flex: 1, color: '#2B2D42' },
   linkText: { color: '#007bff', textDecorationLine: 'underline' },
@@ -1080,59 +1253,19 @@ const styles = StyleSheet.create({
   drawBtn: { backgroundColor: '#28a745' },
   drawText: { color: '#FFF', fontWeight: '600', fontSize: 16 },
 
+  smallBtn: {
+    marginLeft: 8,
+    paddingHorizontal: 10,
+    paddingVertical: 6,
+    backgroundColor: '#0ea5e9',
+    borderRadius: 6,
+  },
+  smallBtnText: { color: '#fff', fontWeight: '700' },
+
   sectionHeader: { fontSize: 18, fontWeight: '600', marginVertical: 8, color: '#2B2D42' },
   noteCard: { backgroundColor: '#FFF', borderRadius: 6, padding: 12, marginBottom: 8, borderWidth: 1, borderColor: '#E2E8F0' },
   noteTimestamp: { fontSize: 12, color: '#8D99AE', marginBottom: 4 },
   noteBody: { fontSize: 14, color: '#2B2D42' },
-
-  drawContainer: { flex: 1, backgroundColor: '#FFF' },
-  canvas: { width: screenWidth, height: screenHeight, backgroundColor: '#FFF' },
-
-  drawToolbar: {
-    position: 'absolute',
-    top: 12,
-    left: 12,
-    right: 12,
-    flexDirection: 'row',
-    gap: 8,
-    justifyContent: 'flex-start',
-    backgroundColor: 'rgba(255,255,255,0.9)',
-    padding: 8,
-    borderRadius: 8,
-    borderWidth: 1,
-    borderColor: '#EEE',
-  },
-  toolBtn: {
-    paddingVertical: 8,
-    paddingHorizontal: 12,
-    borderRadius: 6,
-    backgroundColor: '#f1f5f9',
-    borderWidth: 1,
-    borderColor: '#e2e8f0',
-  },
-  toolBtnActive: {
-    backgroundColor: '#0d6efd',
-    borderColor: '#0d6efd',
-  },
-  toolText: { color: '#2B2D42', fontWeight: '600' },
-  toolTextActive: { color: '#fff' },
-  clearBtn: { backgroundColor: '#dc3545', borderColor: '#dc3545' },
-  clearText: { color: '#fff' },
-
-  drawFooter: {
-    position: 'absolute',
-    bottom: 0, left: 0, right: 0,
-    flexDirection: 'row',
-    justifyContent: 'space-around',
-    padding: 16,
-    backgroundColor: '#FFF',
-    borderTopWidth: 1,
-    borderColor: '#EEE'
-  },
-  saveDrawBtn: { backgroundColor: '#28a745', padding: 12, borderRadius: 6 },
-  saveDrawText: { color: '#FFF', fontWeight: '600', fontSize: 16 },
-  closeDrawBtn: { backgroundColor: '#dc3545', padding: 12, borderRadius: 6 },
-  closeDrawText: { color: '#FFF', fontWeight: '600', fontSize: 16 },
 
   viewerContainer: { flex: 1, backgroundColor: '#000' },
   fullScreenImage: { width: screenWidth, height: screenHeight, resizeMode: 'contain' },
@@ -1152,4 +1285,21 @@ const styles = StyleSheet.create({
   deleteText: { color: '#fff', fontSize: 14, lineHeight: 18 },
   cancelBtn: { backgroundColor: '#dc3545', padding: 12, borderRadius: 6, alignItems: 'center', marginTop: 16 },
   cancelText: { color: '#fff', fontWeight: '600', fontSize: 16 },
+
+  // Overlay for modals that need transparency (iOS fix uses overFullScreen)
+  addNoteOverlay: { flex: 1, backgroundColor: 'rgba(0,0,0,0.45)', justifyContent: 'center', padding: 16 },
+  addNoteContainer: { backgroundColor: '#fff', borderRadius: 10, padding: 16 },
+  addNoteTitle: { fontSize: 18, fontWeight: '600', marginBottom: 12, textAlign: 'center', color: '#2B2D42' },
+  addNoteInput: { height: 120, borderColor: '#cfd5dd', borderWidth: 1, borderRadius: 8, padding: 10, textAlignVertical: 'top', marginBottom: 12 },
+  addNoteButtons: { flexDirection: 'row', justifyContent: 'space-around' },
+  saveNoteBtn: { backgroundColor: '#28a745', padding: 10, borderRadius: 6, flex: 1, marginHorizontal: 4 },
+  saveNoteText: { color: '#fff', textAlign: 'center', fontWeight: '600' },
+  cancelNoteBtn: { backgroundColor: '#dc3545', padding: 10, borderRadius: 6, flex: 1, marginHorizontal: 4 },
+  cancelNoteText: { color: '#fff', textAlign: 'center', fontWeight: '600' },
+
+  statusList: { gap: 8 },
+  statusOption: { padding: 12, borderWidth: 1, borderColor: '#e2e8f0', borderRadius: 8, backgroundColor: '#fff' },
+  statusOptionActive: { backgroundColor: '#0ea5e9' },
+  statusText: { color: '#2B2D42', fontWeight: '600' },
+  statusTextActive: { color: '#fff' },
 });
