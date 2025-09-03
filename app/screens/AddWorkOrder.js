@@ -15,12 +15,11 @@ import * as ImagePicker from 'expo-image-picker';
 import * as ImageManipulator from 'expo-image-manipulator';
 import * as DocumentPicker from 'expo-document-picker';
 
-import api, * as API_CONST from '../../constants/api';
+import api from '../../constants/api';
 import { getMe } from '../../constants/api';
 
 /**
- * Google Places API key
- * (per your request, hard-coded here for Site Location autofill)
+ * Google Places API key (as requested)
  */
 const GOOGLE_PLACES_KEY = 'AIzaSyCVEFeBpSVhhhct5ILlOXAvEZip0B9tC4M';
 
@@ -91,7 +90,6 @@ export default function AddWorkOrder() {
   };
 
   const submit = async () => {
-    // ❌ Removed the “Only Jeff” client-side gate that caused the alert.
     if (!customer.trim() || !billingAddress.trim() || !problemDescription.trim()) {
       return Alert.alert('Missing info', 'Customer, Billing Address, and Problem Description are required.');
     }
@@ -103,7 +101,7 @@ export default function AddWorkOrder() {
       form.append('customerPhone', customerPhone.trim());
       form.append('customerEmail', customerEmail.trim());
 
-      // Assign to the current user if present; default status
+      // Assign to current user if present; default status
       if (me?.id != null) form.append('assignedTo', String(me.id));
       form.append('status', 'Needs to be Scheduled');
 
@@ -214,13 +212,14 @@ function LabeledInput({ label, required, multiline, style, ...props }) {
 }
 
 /**
- * Google Places Autocomplete Input (no extra libs)
- * - Shows a dropdown of suggestions
- * - On selection, fetches place details and fills the formatted address
+ * Google Places Autocomplete Input
+ * - First tries the **v1** Places API (`places:autocomplete`) with field masks.
+ * - Falls back to the legacy `/place/autocomplete/json` if v1 isn't enabled.
+ * - Details also use v1 first, then legacy `/place/details/json`.
  */
 function PlacesAutocompleteInput({ label, value, onChangeValue, googleKey, required }) {
   const [query, setQuery] = useState(value || '');
-  const [predictions, setPredictions] = useState([]);
+  const [predictions, setPredictions] = useState([]); // [{place_id, description}]
   const [loading, setLoading] = useState(false);
   const [showList, setShowList] = useState(false);
   const debounceRef = useRef(null);
@@ -230,27 +229,70 @@ function PlacesAutocompleteInput({ label, value, onChangeValue, googleKey, requi
     setQuery(value || '');
   }, [value]);
 
+  // --- v1 Autocomplete
+  const runAutocompleteV1 = async (text) => {
+    const resp = await fetch('https://places.googleapis.com/v1/places:autocomplete', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'X-Goog-Api-Key': googleKey,
+        // Only request what we need
+        'X-Goog-FieldMask': 'suggestions.placePrediction.placeId,suggestions.placePrediction.text',
+      },
+      body: JSON.stringify({
+        input: text,
+        sessionToken,
+        languageCode: 'en',
+        includedPrimaryTypes: ['address'],
+        // Increase US relevance; comment out if you want global
+        regionCode: 'US',
+      }),
+    });
+    const json = await resp.json();
+    if (!Array.isArray(json?.suggestions)) return [];
+    return json.suggestions
+      .map((s) => s?.placePrediction)
+      .filter(Boolean)
+      .map((p) => ({
+        place_id: p.placeId, // e.g. "places/ChIJ....."
+        description: p?.text?.text || '',
+      }))
+      .filter((x) => x.description);
+  };
+
+  // --- Legacy Autocomplete
+  const runAutocompleteLegacy = async (text) => {
+    const url =
+      'https://maps.googleapis.com/maps/api/place/autocomplete/json' +
+      `?input=${encodeURIComponent(text)}` +
+      `&types=address` +
+      `&components=country:us` +
+      `&sessiontoken=${sessionToken}` +
+      `&key=${googleKey}`;
+    const resp = await fetch(url);
+    const json = await resp.json();
+    if (json?.status === 'OK' && Array.isArray(json?.predictions)) {
+      return json.predictions.slice(0, 8).map((p) => ({
+        place_id: p.place_id,
+        description: p.description,
+      }));
+    }
+    return [];
+  };
+
   const runAutocomplete = async (text) => {
+    if (!googleKey) return setPredictions([]);
     if (!text || text.length < 3) {
       setPredictions([]);
       return;
     }
     try {
       setLoading(true);
-      const url =
-        'https://maps.googleapis.com/maps/api/place/autocomplete/json' +
-        `?input=${encodeURIComponent(text)}` +
-        `&types=address` +
-        `&sessiontoken=${sessionToken}` +
-        `&key=${googleKey}`;
-      const resp = await fetch(url);
-      const json = await resp.json();
-      if (json?.status === 'OK' && Array.isArray(json?.predictions)) {
-        setPredictions(json.predictions.slice(0, 6));
-      } else {
-        setPredictions([]);
-      }
+      let preds = await runAutocompleteV1(text);
+      if (!preds.length) preds = await runAutocompleteLegacy(text);
+      setPredictions(preds);
     } catch {
+      // final fallback: nothing
       setPredictions([]);
     } finally {
       setLoading(false);
@@ -264,25 +306,43 @@ function PlacesAutocompleteInput({ label, value, onChangeValue, googleKey, requi
     debounceRef.current = setTimeout(() => runAutocomplete(text), 250);
   };
 
+  // --- v1 Details
+  const fetchDetailsV1 = async (placeId) => {
+    // placeId may already include "places/" prefix from v1
+    const rid = placeId.startsWith('places/') ? placeId : `places/${placeId}`;
+    const url = `https://places.googleapis.com/v1/${encodeURIComponent(rid)}?fields=formattedAddress`;
+    const resp = await fetch(url, {
+      headers: { 'X-Goog-Api-Key': googleKey },
+    });
+    const json = await resp.json();
+    return json?.formattedAddress || '';
+  };
+
+  // --- Legacy Details
+  const fetchDetailsLegacy = async (placeId) => {
+    const url =
+      'https://maps.googleapis.com/maps/api/place/details/json' +
+      `?place_id=${encodeURIComponent(placeId)}` +
+      `&fields=formatted_address` +
+      `&key=${googleKey}`;
+    const resp = await fetch(url);
+    const json = await resp.json();
+    return json?.result?.formatted_address || '';
+  };
+
   const choosePrediction = async (p) => {
     setShowList(false);
     setLoading(true);
     try {
-      // Fetch details to get the fully formatted address
-      const url =
-        'https://maps.googleapis.com/maps/api/place/details/json' +
-        `?place_id=${encodeURIComponent(p.place_id)}` +
-        `&fields=formatted_address` +
-        `&sessiontoken=${sessionToken}` +
-        `&key=${googleKey}`;
-      const resp = await fetch(url);
-      const json = await resp.json();
-      const formatted = json?.result?.formatted_address || p.description || '';
-      setQuery(formatted);
-      onChangeValue?.(formatted);
+      let formatted = await fetchDetailsV1(p.place_id);
+      if (!formatted) formatted = await fetchDetailsLegacy(p.place_id);
+      const addr = formatted || p.description || '';
+      setQuery(addr);
+      onChangeValue?.(addr);
     } catch {
-      setQuery(p.description || '');
-      onChangeValue?.(p.description || '');
+      const addr = p.description || '';
+      setQuery(addr);
+      onChangeValue?.(addr);
     } finally {
       setLoading(false);
     }
@@ -298,7 +358,10 @@ function PlacesAutocompleteInput({ label, value, onChangeValue, googleKey, requi
           style={[styles.input]}
           value={query}
           onChangeText={onChangeText}
-          onFocus={() => setShowList(true)}
+          onFocus={() => {
+            setShowList(true);
+            if (query && query.length >= 3) runAutocomplete(query);
+          }}
           placeholder="Start typing address…"
           autoCorrect={false}
           autoCapitalize="none"
@@ -312,7 +375,11 @@ function PlacesAutocompleteInput({ label, value, onChangeValue, googleKey, requi
         {showList && predictions.length > 0 && (
           <View style={styles.autocompleteList}>
             {predictions.map((p) => (
-              <TouchableOpacity key={p.place_id} onPress={() => choosePrediction(p)} style={styles.autocompleteItem}>
+              <TouchableOpacity
+                key={p.place_id}
+                onPress={() => choosePrediction(p)}
+                style={styles.autocompleteItem}
+              >
                 <Text style={styles.autocompleteText}>{p.description}</Text>
               </TouchableOpacity>
             ))}
@@ -369,11 +436,12 @@ const styles = StyleSheet.create({
     left: 0,
     right: 0,
     top: 50,
+    maxHeight: 260,
     backgroundColor: '#fff',
     borderWidth: 1,
     borderColor: '#e5e7eb',
     borderRadius: 8,
-    zIndex: 10,
+    zIndex: 999,
     elevation: 6,
     overflow: 'hidden',
   },

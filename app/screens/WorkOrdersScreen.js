@@ -16,6 +16,8 @@ import moment from 'moment';
 import { Picker } from '@react-native-picker/picker';
 import { useRouter } from 'expo-router';
 import { useFocusEffect } from '@react-navigation/native';
+import AsyncStorage from '@react-native-async-storage/async-storage';
+import DraggableFlatList, { ScaleDecorator } from 'react-native-draggable-flatlist';
 import api from '../../constants/api';
 
 const STATUSES = [
@@ -37,6 +39,29 @@ export default function WorkOrdersScreen() {
   const [refreshing, setRefreshing] = useState(false);
   const [loadingFirst, setLoadingFirst] = useState(true);
 
+  // ---------- Today drag-order persistence ----------
+  const todayKey = `woOrder:${moment().format('YYYY-MM-DD')}`;
+  const [todayOrderIds, setTodayOrderIds] = useState([]); // array of string ids in desired order
+
+  const loadTodayOrder = useCallback(async () => {
+    try {
+      const raw = await AsyncStorage.getItem(todayKey);
+      if (raw) setTodayOrderIds(JSON.parse(raw));
+      else setTodayOrderIds([]);
+    } catch {
+      setTodayOrderIds([]);
+    }
+  }, [todayKey]);
+
+  const saveTodayOrder = useCallback(async (ids) => {
+    try {
+      setTodayOrderIds(ids);
+      await AsyncStorage.setItem(todayKey, JSON.stringify(ids));
+    } catch {
+      // ignore
+    }
+  }, [todayKey]);
+
   // ---------- load current user (for Jeff-only button)
   useEffect(() => {
     (async () => {
@@ -44,7 +69,7 @@ export default function WorkOrdersScreen() {
         const r = await api.get('/auth/me');
         setMe(r.data || null);
       } catch {
-        // not fatal if /auth/me fails; UI just won't show Jeff button
+        // not fatal if /auth/me fails
       }
     })();
   }, []);
@@ -73,6 +98,9 @@ export default function WorkOrdersScreen() {
   useEffect(() => { fetchWorkOrders(); }, [fetchWorkOrders]);
   useFocusEffect(useCallback(() => { fetchWorkOrders(); }, [fetchWorkOrders]));
 
+  // Load saved order whenever the day (key) or list changes
+  useEffect(() => { loadTodayOrder(); }, [loadTodayOrder, workOrders.length]);
+
   // ---------- counts
   const counts = useMemo(() => {
     const map = Object.fromEntries(STATUSES.map(s => [s, 0]));
@@ -88,7 +116,40 @@ export default function WorkOrdersScreen() {
     };
   }, [workOrders]);
 
-  // ---------- filtered list
+  // ---------- helpers
+  const openInGoogleMaps = async (query) => {
+    const q = encodeURIComponent(query || '');
+    const gmScheme = `comgooglemaps://?q=${q}`;
+    const webUrl = `https://www.google.com/maps/search/?api=1&query=${q}`;
+    try {
+      const supportsGm = await Linking.canOpenURL(gmScheme);
+      if (supportsGm) return Linking.openURL(gmScheme);
+      return Linking.openURL(webUrl);
+    } catch {
+      Alert.alert('Error', 'Failed to open map.');
+    }
+  };
+
+  const getLatestNote = (item) => {
+    let arr = [];
+    if (Array.isArray(item?.notes)) arr = item.notes;
+    else if (typeof item?.notes === 'string') {
+      try { arr = JSON.parse(item.notes); } catch { arr = []; }
+    }
+    if (!arr.length) return null;
+    const sorted = [...arr].sort((a, b) => {
+      const ta = new Date(a?.createdAt || 0).getTime();
+      const tb = new Date(b?.createdAt || 0).getTime();
+      return tb - ta;
+    });
+    const n = sorted[0];
+    const time = n?.createdAt ? moment(n.createdAt).format('YYYY-MM-DD HH:mm') : '';
+    const by = n?.by ? ` • ${n.by}` : '';
+    const text = String(n?.text || '').trim().replace(/\s+/g, ' ');
+    return { time, by, text };
+  };
+
+  // ---------- filtered & ordered lists
   const filteredOrders = useMemo(() => {
     if (selectedStatus === 'All') return workOrders;
     if (selectedStatus === 'Today') {
@@ -99,6 +160,21 @@ export default function WorkOrdersScreen() {
     }
     return workOrders.filter(o => o.status === selectedStatus);
   }, [workOrders, selectedStatus]);
+
+  // Apply saved order for Today
+  const orderedToday = useMemo(() => {
+    if (selectedStatus !== 'Today') return filteredOrders;
+    const map = new Map(filteredOrders.map(o => [String(o.id), o]));
+    const ordered = [];
+    for (const id of todayOrderIds) {
+      if (map.has(id)) {
+        ordered.push(map.get(id));
+        map.delete(id);
+      }
+    }
+    // any new items not in saved order appended to the end
+    return [...ordered, ...Array.from(map.values())];
+  }, [filteredOrders, selectedStatus, todayOrderIds]);
 
   // ---------- actions
   const onRefresh = () => {
@@ -119,32 +195,12 @@ export default function WorkOrdersScreen() {
     }
   };
 
-  const openInGoogleMaps = async (query) => {
-    const q = encodeURIComponent(query || '');
-    const gmScheme = `comgooglemaps://?q=${q}`;
-    const webUrl = `https://www.google.com/maps/search/?api=1&query=${q}`;
-    try {
-      const supportsGm = await Linking.canOpenURL(gmScheme);
-      if (supportsGm) return Linking.openURL(gmScheme);
-      return Linking.openURL(webUrl);
-    } catch {
-      Alert.alert('Error', 'Failed to open map.');
-    }
-  };
-
-  // ---------- top chips
+  // ---------- chips
   const TopChip = ({ label, active, onPress, count }) => (
-    <TouchableOpacity
-      onPress={onPress}
-      style={[styles.chip, active && styles.chipActive]}
-    >
-      <Text style={[styles.chipText, active && styles.chipTextActive]}>
-        {label}
-      </Text>
+    <TouchableOpacity onPress={onPress} style={[styles.chip, active && styles.chipActive]}>
+      <Text style={[styles.chipText, active && styles.chipTextActive]}>{label}</Text>
       <View style={[styles.badge, active && styles.badgeActive]}>
-        <Text style={[styles.badgeText, active && styles.badgeTextActive]}>
-          {count}
-        </Text>
+        <Text style={[styles.badgeText, active && styles.badgeTextActive]}>{count}</Text>
       </View>
     </TouchableOpacity>
   );
@@ -170,64 +226,142 @@ export default function WorkOrdersScreen() {
     );
   };
 
-  // ---------- list item
-  const renderOrderItem = ({ item }) => {
+  // ---------- card UI (shared by regular & draggable lists)
+  const Card = ({ item, drag }) => {
     const isPickerOpen = !!openPickers[item.id];
+    const latest = getLatestNote(item);
+
     return (
-      <View style={styles.card}>
-        <Text style={styles.cardTitle}>WO/PO #: {item.poNumber || 'N/A'}</Text>
-        <Text style={styles.cardText}>Customer: {item.customer}</Text>
+      <ScaleDecorator>
+        <View style={styles.card}>
+          {/* Title row with optional drag handle in Today view */}
+          <View style={styles.cardHeaderRow}>
+            <Text style={styles.cardTitle}>WO/PO #: {item.poNumber || 'N/A'}</Text>
+            {selectedStatus === 'Today' ? (
+              <TouchableOpacity onLongPress={drag} delayLongPress={120} style={styles.dragHandle}>
+                <Text style={styles.dragGlyph}>≡</Text>
+                <Text style={styles.dragHint}>Hold to drag</Text>
+              </TouchableOpacity>
+            ) : null}
+          </View>
 
-        <TouchableOpacity onPress={() => openInGoogleMaps(item.siteLocation)}>
-          <Text style={styles.linkText}>Site Location: {item.siteLocation}</Text>
-        </TouchableOpacity>
+          <Text style={styles.cardText}>Customer: {item.customer}</Text>
 
-        <Text style={styles.cardText}>
-          Problem: {item.problemDescription}
-        </Text>
-        <Text style={styles.cardText}>
-          Scheduled:{' '}
-          {item.scheduledDate
-            ? moment(item.scheduledDate).format('YYYY-MM-DD HH:mm')
-            : 'Not Scheduled'}
-        </Text>
-
-        <View style={styles.actionsRow}>
-          <TouchableOpacity
-            style={styles.viewButton}
-            onPress={() => router.push(`/screens/ViewWorkOrder?id=${item.id}`)}
-          >
-            <Text style={styles.viewButtonText}>View Details</Text>
+          <TouchableOpacity onPress={() => openInGoogleMaps(item.siteLocation)}>
+            <Text style={styles.linkText}>Site Location: {item.siteLocation}</Text>
           </TouchableOpacity>
 
-          {isPickerOpen ? (
-            <Picker
-              mode={Platform.OS === 'ios' ? 'dialog' : 'dropdown'}
-              style={styles.picker}
-              itemStyle={styles.pickerItem}
-              selectedValue={item.status}
-              onValueChange={(v) => {
-                handleUpdateStatus(item.id, v);
-                setOpenPickers(p => ({ ...p, [item.id]: false }));
-              }}
-            >
-              {STATUSES.map(s => (
-                <Picker.Item key={s} label={s} value={s} />
-              ))}
-            </Picker>
-          ) : (
+          <Text style={styles.cardText}>Problem: {item.problemDescription}</Text>
+          <Text style={styles.cardText}>
+            Scheduled:{' '}
+            {item.scheduledDate
+              ? moment(item.scheduledDate).format('YYYY-MM-DD HH:mm')
+              : 'Not Scheduled'}
+          </Text>
+
+          <View style={styles.actionsRow}>
             <TouchableOpacity
-              style={[styles.statusWrap, styles.pickerToggle]}
-              onPress={() => setOpenPickers(p => ({ ...p, [item.id]: true }))}
+              style={styles.viewButton}
+              onPress={() => router.push(`/screens/ViewWorkOrder?id=${item.id}`)}
             >
-              <Text style={styles.statusText}>{item.status}</Text>
-              <Text style={styles.changeLink}>Change ▾</Text>
+              <Text style={styles.viewButtonText}>View Details</Text>
             </TouchableOpacity>
-          )}
+
+            {/* Right column: latest note (top) + status control (bottom) */}
+            <View style={styles.rightCol}>
+              {latest ? (
+                <View style={styles.latestNoteBox}>
+                  <Text style={styles.latestNoteMeta} numberOfLines={1}>
+                    {latest.time}{latest.by}
+                  </Text>
+                  <Text style={styles.latestNoteText} numberOfLines={2}>
+                    {latest.text}
+                  </Text>
+                </View>
+              ) : null}
+
+              {isPickerOpen ? (
+                <Picker
+                  mode={Platform.OS === 'ios' ? 'dialog' : 'dropdown'}
+                  style={styles.picker}
+                  itemStyle={styles.pickerItem}
+                  selectedValue={item.status}
+                  onValueChange={(v) => {
+                    handleUpdateStatus(item.id, v);
+                    setOpenPickers(p => ({ ...p, [item.id]: false }));
+                  }}
+                >
+                  {STATUSES.map(s => (
+                    <Picker.Item key={s} label={s} value={s} />
+                  ))}
+                </Picker>
+              ) : (
+                <TouchableOpacity
+                  style={[styles.statusWrap, styles.pickerToggle]}
+                  onPress={() => setOpenPickers(p => ({ ...p, [item.id]: true }))}
+                >
+                  <Text style={styles.statusText}>{item.status}</Text>
+                  <Text style={styles.changeLink}>Change ▾</Text>
+                </TouchableOpacity>
+              )}
+            </View>
+          </View>
         </View>
-      </View>
+      </ScaleDecorator>
     );
   };
+
+  // ---------- renderers
+  const renderItemRegular = ({ item }) => <Card item={item} />;
+
+  const renderItemDraggable = ({ item, drag, isActive }) => (
+    <Card item={item} drag={drag} isActive={isActive} />
+  );
+
+  // ---------- list components
+  const ListComponent =
+    selectedStatus === 'Today' ? (
+      <>
+        <Text style={styles.dragBanner}>Long-press a card and drag to set today’s order.</Text>
+        <DraggableFlatList
+          data={orderedToday}
+          keyExtractor={(it) => String(it.id)}
+          onDragEnd={({ data }) => {
+            const newIds = data.map(d => String(d.id));
+            saveTodayOrder(newIds);
+          }}
+          renderItem={renderItemDraggable}
+          containerStyle={styles.list}
+          refreshControl={
+            <RefreshControl refreshing={refreshing} onRefresh={onRefresh} />
+          }
+          ListEmptyComponent={
+            !loadingFirst ? (
+              <View style={styles.center}>
+                <Text style={styles.noData}>No work orders today.</Text>
+              </View>
+            ) : null
+          }
+        />
+      </>
+    ) : (
+      <FlatList
+        data={filteredOrders}
+        keyExtractor={item => String(item.id)}
+        renderItem={renderItemRegular}
+        contentContainerStyle={styles.list}
+        refreshControl={
+          <RefreshControl refreshing={refreshing} onRefresh={onRefresh} />
+        }
+        ListEmptyComponent={
+          !loadingFirst ? (
+            <View style={styles.center}>
+              <Text style={styles.noData}>No work orders to display.</Text>
+            </View>
+          ) : null
+        }
+      />
+    );
 
   return (
     <View style={styles.container}>
@@ -245,32 +379,13 @@ export default function WorkOrdersScreen() {
       </View>
 
       {/* Fixed status bar */}
-      <View style={styles.filterBar}>
-        {renderChips()}
-      </View>
+      <View style={styles.filterBar}>{renderChips()}</View>
 
-      {/* List pushed down so chips always visible and not overlapped */}
-      <FlatList
-        data={filteredOrders}
-        keyExtractor={item => String(item.id)}
-        renderItem={renderOrderItem}
-        contentContainerStyle={styles.list}
-        refreshControl={
-          <RefreshControl refreshing={refreshing} onRefresh={onRefresh} />
-        }
-        ListEmptyComponent={
-          !loadingFirst ? (
-            <View style={styles.center}>
-              <Text style={styles.noData}>No work orders to display.</Text>
-            </View>
-          ) : null
-        }
-      />
+      {/* The list (regular or draggable) */}
+      {ListComponent}
     </View>
   );
 }
-
-const CHIP_BAR_HEIGHT = 80; // space for 2 wrapped lines of chips
 
 const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: '#F1F5F9', padding: 16 },
@@ -343,7 +458,6 @@ const styles = StyleSheet.create({
   badgeText: { color: '#17a2b8', fontSize: 12, fontWeight: '700' },
   badgeTextActive: { color: '#fff' },
 
-  /* Give the list some top spacing so it doesn't crowd the chips */
   list: { paddingTop: 8, paddingBottom: 16 },
 
   card: {
@@ -354,13 +468,23 @@ const styles = StyleSheet.create({
     padding: 16,
     marginBottom: 12,
   },
-  cardTitle: { fontSize: 18, fontWeight: '600', color: '#2B2D42', marginBottom: 8 },
+  cardHeaderRow: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    marginBottom: 6,
+  },
+  dragHandle: { flexDirection: 'row', alignItems: 'center' },
+  dragGlyph: { fontSize: 20, color: '#64748b', marginRight: 6 },
+  dragHint: { fontSize: 12, color: '#94a3b8' },
+
+  cardTitle: { fontSize: 18, fontWeight: '600', color: '#2B2D42' },
   cardText: { fontSize: 14, color: '#2B2D42', marginBottom: 4 },
   linkText: { color: '#17a2b8', textDecorationLine: 'underline', marginBottom: 4 },
 
   actionsRow: {
     flexDirection: 'row',
-    alignItems: 'center',
+    alignItems: 'flex-end',
     justifyContent: 'space-between',
     marginTop: 12,
   },
@@ -369,8 +493,28 @@ const styles = StyleSheet.create({
     borderRadius: 6,
     paddingVertical: 10,
     paddingHorizontal: 16,
+    alignSelf: 'flex-start',
   },
   viewButtonText: { color: '#FFFFFF', fontSize: 15, fontWeight: 'bold' },
+
+  rightCol: {
+    flexShrink: 1,
+    alignItems: 'flex-end',
+    maxWidth: '72%', // leave space for the left button
+  },
+
+  latestNoteBox: {
+    backgroundColor: '#F8FAFC',
+    borderWidth: 1,
+    borderColor: '#E2E8F0',
+    borderRadius: 8,
+    paddingHorizontal: 10,
+    paddingVertical: 8,
+    marginBottom: 8,
+    maxWidth: '100%',
+  },
+  latestNoteMeta: { fontSize: 11, color: '#64748B', marginBottom: 4 },
+  latestNoteText: { fontSize: 13, color: '#0F172A' },
 
   statusWrap: { flexDirection: 'row', alignItems: 'center' },
   statusText: { fontSize: 14, color: '#2B2D42', marginRight: 6 },
@@ -387,4 +531,11 @@ const styles = StyleSheet.create({
 
   center: { alignItems: 'center', marginTop: 24 },
   noData: { fontStyle: 'italic', color: '#8D99AE' },
+
+  dragBanner: {
+    textAlign: 'center',
+    color: '#64748b',
+    marginTop: 8,
+    marginBottom: 6,
+  },
 });
