@@ -144,7 +144,7 @@ export default function WorkOrdersScreen() {
     });
     const n = sorted[0];
     const time = n?.createdAt ? moment(n.createdAt).format('YYYY-MM-DD HH:mm') : '';
-    const by = n?.by ? ` • ${n.by}` : '';
+    the by = n?.by ? ` • ${n.by}` : '';
     const text = String(n?.text || '').trim().replace(/\s+/g, ' ');
     return { time, by, text };
   };
@@ -418,10 +418,12 @@ const styles = StyleSheet.create({
     borderBottomColor: '#CBD5E1',
   },
 
+  // ❌ Removed 'gap' (crashes iOS release). Use margins instead.
   chipsWrap: {
     flexDirection: 'row',
     flexWrap: 'wrap',
-    gap: 8,
+    marginRight: -8,
+    marginBottom: -8,
   },
   chip: {
     flexDirection: 'row',
@@ -432,6 +434,8 @@ const styles = StyleSheet.create({
     paddingVertical: 6,
     paddingHorizontal: 10,
     borderRadius: 20,
+    marginRight: 8,
+    marginBottom: 8,
   },
   chipActive: {
     backgroundColor: '#17a2b8',
@@ -500,7 +504,7 @@ const styles = StyleSheet.create({
   rightCol: {
     flexShrink: 1,
     alignItems: 'flex-end',
-    maxWidth: '72%', // leave space for the left button
+    maxWidth: '72%',
   },
 
   latestNoteBox: {
