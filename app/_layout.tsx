@@ -22,18 +22,26 @@ export default function Layout() {
           <TouchableOpacity style={styles.tab} onPress={() => router.push('/')}>
             <Text style={styles.navText}>Home</Text>
           </TouchableOpacity>
+
           <TouchableOpacity style={styles.tab} onPress={() => router.push('/workorders')}>
             <Text style={styles.navText}>Work Orders</Text>
           </TouchableOpacity>
+
+          {/* NEW: History tab points to the new screen */}
+          <TouchableOpacity style={styles.tab} onPress={() => router.push('/screens/HistoryScreen')}>
+            <Text style={styles.navText}>History</Text>
+          </TouchableOpacity>
+
           <TouchableOpacity style={styles.tab} onPress={() => router.push('/calendar')}>
             <Text style={styles.navText}>Calendar</Text>
           </TouchableOpacity>
+
           <TouchableOpacity style={styles.logoutBtn} onPress={handleLogout}>
             <Text style={styles.logoutText}>Logout</Text>
           </TouchableOpacity>
         </View>
 
-        {/* this is where your screens will render */}
+        {/* screens render here */}
         <Slot />
       </SafeAreaView>
     </GestureHandlerRootView>
@@ -55,15 +63,17 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
-    backgroundColor: '#17a2b8',  // accent teal
+    backgroundColor: '#17a2b8', // accent teal
     paddingVertical: 12,
     paddingHorizontal: 16,
   },
+
   // each tab
   tab: {
     paddingHorizontal: 12,
     paddingVertical: 8,
   },
+
   // tab text
   navText: {
     color: '#FFFFFF',
@@ -78,6 +88,7 @@ const styles = StyleSheet.create({
     paddingHorizontal: 12,
     paddingVertical: 8,
   },
+
   // logout text
   logoutText: {
     color: '#FFFFFF',

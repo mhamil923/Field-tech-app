@@ -13,6 +13,7 @@ import moment from 'moment';
 import { useRouter } from 'expo-router';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import API_BASE_URL from '../constants/API_BASE_URL';
+import 'react-native-gesture-handler';
 
 export default function HomeScreen() {
   const router = useRouter();
