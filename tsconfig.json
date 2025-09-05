@@ -3,10 +3,9 @@
   "compilerOptions": {
     "strict": true,
     "paths": {
-      "@/*": [
-        "./*"
-      ]
-    }
+      "@/*": ["./*"]
+    },
+    "types": ["expo-router/types"]       // ✅ enables typedRoutes
   },
   "include": [
     "**/*.ts",
