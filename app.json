@@ -62,15 +62,10 @@
     "experiments": { "typedRoutes": true },
 
     "extra": {
-      "eas": { "projectId": "8a664541-cdcf-4c5a-8156-9b8d93f9599b" },
       "apiUrl": "https://fcgg.us-east-2.elasticbeanstalk.com"
     },
 
     "runtimeVersion": { "policy": "appVersion" },
-
-    "updates": {
-      "url": "https://u.expo.dev/8a664541-cdcf-4c5a-8156-9b8d93f9599b"
-    },
 
     "assetBundlePatterns": ["**/*"]
   }
