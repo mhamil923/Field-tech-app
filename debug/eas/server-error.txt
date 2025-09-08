@@ -1,0 +1,4 @@
+The following error occurred:
+  All of the following must be provided when using --json: --non-interactive
+See more help with --help
+    Error: build command failed.

@@ -1,0 +1,22 @@
+
+  EAS CLI 16.18.0 environment info:
+    System:
+      OS: macOS 15.6.1
+      Shell: 5.9 - /bin/zsh
+    Binaries:
+      Node: 24.3.0 - /opt/homebrew/bin/node
+      npm: 11.4.2 - /opt/homebrew/bin/npm
+    Utilities:
+      Git: 2.39.5 - /usr/bin/git
+    npmPackages:
+      expo: ^53.0.0 => 53.0.22 
+      expo-dev-client: ~5.2.0 => 5.2.4 
+      expo-updates: ~0.28.17 => 0.28.17 
+      react: 19.0.0 => 19.0.0 
+      react-dom: 19.0.0 => 19.0.0 
+      react-native: 0.79.5 => 0.79.5 
+      react-native-web: ^0.20.0 => 0.20.0 
+    npmGlobalPackages:
+      eas-cli: 16.18.0
+    Project workflow: managed
+
