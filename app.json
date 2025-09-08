@@ -2,6 +2,7 @@
   "expo": {
     "name": "field-tech-app",
     "slug": "field-tech-app",
+    "owner": "mhamil",
     "version": "1.0.0",
     "orientation": "portrait",
 
