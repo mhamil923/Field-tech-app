@@ -1,31 +1,19 @@
-# build artifacts / caches
-dist
-build
-.expo
-.expo-shared
-*.ipa
-*.aab
-*.apk
-*.tar.gz
-
-# vcs
-.git
-.gitignore
-
-# native folders (managed workflow doesn’t need to upload these)
-ios
-android
-
-# server / other projects
-server
-backend
-uploads
-tmp
-logs
-
-# package managers
-node_modules
+# SAFE .easignore
+node_modules/
+dist/
+build/
+.android/
+.ios/
+.expo/
+.expo-shared/
 npm-debug.log*
-yarn.lock
-pnpm-lock.yaml
-package-lock.json
+yarn-error.log*
+.DS_Store
+
+# keep these (do NOT ignore them):
+# app.json
+# package.json / package-lock.json or yarn.lock / pnpm-lock.yaml
+# babel.config.js
+# app/
+# assets/
+# eas.json
