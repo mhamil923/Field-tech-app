@@ -1,6 +1,6 @@
 {
   "cli": {
-    "version": ">= 12.0.0",
+    "version": ">= 12.6.0",
     "appVersionSource": "remote"
   },
 
@@ -9,23 +9,47 @@
       "distribution": "internal",
       "developmentClient": true,
       "channel": "development",
+      "env": {
+        "NPM_CONFIG_LEGACY_PEER_DEPS": "true",
+        "NPM_CONFIG_FUND": "false",
+        "NPM_CONFIG_AUDIT": "false",
+        "EXPO_NO_TELEMETRY": "1"
+      },
       "ios": {
-        "simulator": true
+        "simulator": true,
+        "image": "macos-14-xcode-15.4"
       }
     },
+
     "preview": {
       "distribution": "internal",
       "channel": "preview",
+      "env": {
+        "NPM_CONFIG_LEGACY_PEER_DEPS": "true",
+        "NPM_CONFIG_FUND": "false",
+        "NPM_CONFIG_AUDIT": "false",
+        "EXPO_NO_TELEMETRY": "1"
+      },
       "ios": {
-        "credentialsSource": "remote"
+        "credentialsSource": "remote",
+        "image": "macos-14-xcode-15.4"
       }
     },
+
     "production": {
       "distribution": "store",
       "channel": "production",
       "autoIncrement": true,
+      "env": {
+        "NPM_CONFIG_LEGACY_PEER_DEPS": "true",
+        "NPM_CONFIG_FUND": "false",
+        "NPM_CONFIG_AUDIT": "false",
+        "EXPO_NO_TELEMETRY": "1"
+      },
       "ios": {
-        "credentialsSource": "remote"
+        "credentialsSource": "remote",
+        "image": "macos-14-xcode-15.4",
+        "resourceClass": "m-medium"
       }
     }
   },
@@ -34,7 +58,6 @@
     "production": {
       "ios": {
         "appleTeamId": "75F4VG5YNK"
-        /* ascAppId is optional – omit it and EAS will detect it via bundleIdentifier */
       }
     }
   }

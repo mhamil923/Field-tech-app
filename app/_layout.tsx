@@ -1,5 +1,4 @@
 // File: app/_layout.tsx
-
 import React from 'react';
 import { Text, StyleSheet, TouchableOpacity, View } from 'react-native';
 import { Slot, useRouter } from 'expo-router';
@@ -27,7 +26,6 @@ export default function Layout() {
             <Text style={styles.navText}>Work Orders</Text>
           </TouchableOpacity>
 
-          {/* NEW: History tab points to the new screen */}
           <TouchableOpacity style={styles.tab} onPress={() => router.push('/screens/HistoryScreen')}>
             <Text style={styles.navText}>History</Text>
           </TouchableOpacity>
@@ -41,7 +39,6 @@ export default function Layout() {
           </TouchableOpacity>
         </View>
 
-        {/* screens render here */}
         <Slot />
       </SafeAreaView>
     </GestureHandlerRootView>
@@ -49,7 +46,6 @@ export default function Layout() {
 }
 
 const styles = StyleSheet.create({
-  // fill the background with light grey like the web CRM
   wrapper: {
     flex: 1,
     backgroundColor: '#F1F5F9',
@@ -57,42 +53,35 @@ const styles = StyleSheet.create({
   container: {
     flex: 1,
   },
-
-  // navbar container
   header: {
     flexDirection: 'row',
     alignItems: 'center',
-    justifyContent: 'space-between',
-    backgroundColor: '#17a2b8', // accent teal
-    paddingVertical: 12,
-    paddingHorizontal: 16,
-  },
-
-  // each tab
-  tab: {
     paddingHorizontal: 12,
     paddingVertical: 8,
+    backgroundColor: '#FFFFFF',
+    borderBottomWidth: StyleSheet.hairlineWidth,
+    borderBottomColor: '#E2E8F0',
   },
-
-  // tab text
+  tab: {
+    paddingHorizontal: 10,
+    paddingVertical: 6,
+    marginRight: 8,
+    borderRadius: 6,
+    backgroundColor: '#F8FAFC',
+  },
   navText: {
-    color: '#FFFFFF',
-    fontSize: 16,
+    color: '#0F172A',
     fontWeight: '600',
   },
-
-  // logout button container
   logoutBtn: {
-    backgroundColor: '#dc3545',
+    marginLeft: 'auto',
+    paddingHorizontal: 10,
+    paddingVertical: 6,
     borderRadius: 6,
-    paddingHorizontal: 12,
-    paddingVertical: 8,
+    backgroundColor: '#EF4444',
   },
-
-  // logout text
   logoutText: {
     color: '#FFFFFF',
-    fontSize: 16,
-    fontWeight: '600',
+    fontWeight: '700',
   },
 });
