@@ -3,6 +3,11 @@
   "version": "1.0.0",
   "private": true,
   "main": "index.js",
+  "packageManager": "npm@10",
+  "engines": {
+    "node": ">=20 <25",
+    "npm": ">=10"
+  },
   "scripts": {
     "start": "expo start",
     "android": "expo run:android",
@@ -69,7 +74,8 @@
     "typescript": "~5.8.3"
   },
   "overrides": {
-    "@types/react": "~19.0.10"
+    "@types/react": "~19.0.10",
+    "strip-ansi": "7.1.0"
   },
   "expo": {
     "doctor": {
