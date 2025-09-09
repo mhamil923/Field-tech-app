@@ -1,9 +1,8 @@
 {
   "cli": {
-    "version": ">=16.18.0",
+    "version": ">= 16.0.0",
     "appVersionSource": "remote"
   },
-
   "build": {
     "development": {
       "distribution": "internal",
@@ -17,10 +16,10 @@
       },
       "ios": {
         "simulator": true,
-        "image": "macos-14-xcode-15.4"
+        "image": "latest",
+        "resourceClass": "medium"
       }
     },
-
     "preview": {
       "distribution": "internal",
       "channel": "preview",
@@ -32,10 +31,10 @@
       },
       "ios": {
         "credentialsSource": "remote",
-        "image": "macos-14-xcode-15.4"
+        "image": "latest",
+        "resourceClass": "medium"
       }
     },
-
     "production": {
       "distribution": "store",
       "channel": "production",
@@ -48,12 +47,11 @@
       },
       "ios": {
         "credentialsSource": "remote",
-        "image": "macos-14-xcode-15.4",
-        "resourceClass": "m-medium"
+        "image": "latest",
+        "resourceClass": "medium"
       }
     }
   },
-
   "submit": {
     "production": {
       "ios": {
