@@ -5,12 +5,12 @@
     "owner": "mhamil",
     "version": "1.0.0",
     "orientation": "portrait",
-
     "icon": "./assets/images/icon-1024.png",
     "scheme": "myapp",
     "userInterfaceStyle": "automatic",
 
     "ios": {
+      "buildNumber": "100",
       "supportsTablet": true,
       "bundleIdentifier": "com.firstclassglass.fieldtech",
       "infoPlist": {
@@ -34,6 +34,7 @@
 
     "android": {
       "package": "com.firstclassglass.fieldtech",
+      "versionCode": 100,
       "adaptiveIcon": {
         "foregroundImage": "./assets/images/adaptive-foreground-1024.png",
         "backgroundColor": "#FFFFFF"
@@ -62,11 +63,18 @@
     "experiments": { "typedRoutes": true },
 
     "extra": {
-      "apiUrl": "https://fcgg.us-east-2.elasticbeanstalk.com"
+      "apiUrl": "https://fcgg.us-east-2.elasticbeanstalk.com",
+      "eas": {
+        "projectId": "00e5d719-5017-4c75-ad1e-a536447654c0"
+      }
     },
 
     "runtimeVersion": { "policy": "appVersion" },
 
-    "assetBundlePatterns": ["**/*"]
+    "assetBundlePatterns": ["**/*"],
+
+    "updates": {
+      "url": "https://u.expo.dev/00e5d719-5017-4c75-ad1e-a536447654c0"
+    }
   }
 }
