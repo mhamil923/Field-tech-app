@@ -10,7 +10,7 @@
     "userInterfaceStyle": "automatic",
 
     "ios": {
-      "buildNumber": "100",
+      "buildNumber": "101",
       "supportsTablet": true,
       "bundleIdentifier": "com.firstclassglass.fieldtech",
       "infoPlist": {
@@ -34,7 +34,7 @@
 
     "android": {
       "package": "com.firstclassglass.fieldtech",
-      "versionCode": 100,
+      "versionCode": 101,
       "adaptiveIcon": {
         "foregroundImage": "./assets/images/adaptive-foreground-1024.png",
         "backgroundColor": "#FFFFFF"
@@ -64,9 +64,7 @@
 
     "extra": {
       "apiUrl": "https://fcgg.us-east-2.elasticbeanstalk.com",
-      "eas": {
-        "projectId": "00e5d719-5017-4c75-ad1e-a536447654c0"
-      }
+      "eas": { "projectId": "00e5d719-5017-4c75-ad1e-a536447654c0" }
     },
 
     "runtimeVersion": { "policy": "appVersion" },

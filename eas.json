@@ -1,7 +1,7 @@
 {
   "cli": {
     "version": ">= 16.0.0",
-    "appVersionSource": "remote"
+    "appVersionSource": "local"
   },
   "build": {
     "development": {
@@ -16,7 +16,7 @@
       },
       "ios": {
         "simulator": true,
-        "image": "latest",
+        "image": "macos-14-xcode-15.4",
         "resourceClass": "medium"
       }
     },
@@ -31,7 +31,7 @@
       },
       "ios": {
         "credentialsSource": "remote",
-        "image": "latest",
+        "image": "macos-14-xcode-15.4",
         "resourceClass": "medium"
       }
     },
@@ -47,16 +47,14 @@
       },
       "ios": {
         "credentialsSource": "remote",
-        "image": "latest",
+        "image": "macos-14-xcode-15.4",
         "resourceClass": "medium"
       }
     }
   },
   "submit": {
     "production": {
-      "ios": {
-        "appleTeamId": "75F4VG5YNK"
-      }
+      "ios": { "appleTeamId": "75F4VG5YNK" }
     }
   }
 }
