@@ -16,7 +16,7 @@
       },
       "ios": {
         "simulator": true,
-        "image": "macos-14-xcode-15.4",
+        "image": "sdk-53",
         "resourceClass": "medium"
       }
     },
@@ -31,7 +31,7 @@
       },
       "ios": {
         "credentialsSource": "remote",
-        "image": "macos-14-xcode-15.4",
+        "image": "sdk-53",
         "resourceClass": "medium"
       }
     },
@@ -47,14 +47,16 @@
       },
       "ios": {
         "credentialsSource": "remote",
-        "image": "macos-14-xcode-15.4",
+        "image": "sdk-53",
         "resourceClass": "medium"
       }
     }
   },
   "submit": {
     "production": {
-      "ios": { "appleTeamId": "75F4VG5YNK" }
+      "ios": {
+        "appleTeamId": "75F4VG5YNK"
+      }
     }
   }
 }
