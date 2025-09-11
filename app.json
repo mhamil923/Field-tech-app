@@ -8,9 +8,8 @@
     "icon": "./assets/images/icon-1024.png",
     "scheme": "myapp",
     "userInterfaceStyle": "automatic",
-
     "ios": {
-      "buildNumber": "101",
+      "buildNumber": "103",
       "supportsTablet": true,
       "bundleIdentifier": "com.firstclassglass.fieldtech",
       "infoPlist": {
@@ -18,7 +17,9 @@
         "NSCameraUsageDescription": "We use the camera to capture job site photos and signatures for work orders.",
         "NSPhotoLibraryUsageDescription": "We access your photo library so you can upload job photos and signed documents.",
         "NSPhotoLibraryAddUsageDescription": "We save signed PDFs or images to your library when you export them.",
-        "LSApplicationQueriesSchemes": ["comgooglemaps"],
+        "LSApplicationQueriesSchemes": [
+          "comgooglemaps"
+        ],
         "NSAppTransportSecurity": {
           "NSAllowsArbitraryLoads": false,
           "NSAllowsArbitraryLoadsInWebContent": true,
@@ -31,7 +32,6 @@
         }
       }
     },
-
     "android": {
       "package": "com.firstclassglass.fieldtech",
       "versionCode": 101,
@@ -40,13 +40,11 @@
         "backgroundColor": "#FFFFFF"
       }
     },
-
     "web": {
       "bundler": "metro",
       "output": "static",
       "favicon": "./assets/images/favicon.png"
     },
-
     "plugins": [
       [
         "expo-splash-screen",
@@ -59,18 +57,21 @@
       ],
       "expo-dev-client"
     ],
-
-    "experiments": { "typedRoutes": true },
-
+    "experiments": {
+      "typedRoutes": true
+    },
     "extra": {
       "apiUrl": "https://fcgg.us-east-2.elasticbeanstalk.com",
-      "eas": { "projectId": "00e5d719-5017-4c75-ad1e-a536447654c0" }
+      "eas": {
+        "projectId": "00e5d719-5017-4c75-ad1e-a536447654c0"
+      }
     },
-
-    "runtimeVersion": { "policy": "appVersion" },
-
-    "assetBundlePatterns": ["**/*"],
-
+    "runtimeVersion": {
+      "policy": "appVersion"
+    },
+    "assetBundlePatterns": [
+      "**/*"
+    ],
     "updates": {
       "url": "https://u.expo.dev/00e5d719-5017-4c75-ad1e-a536447654c0"
     }

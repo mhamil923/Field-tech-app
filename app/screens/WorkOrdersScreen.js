@@ -1,5 +1,4 @@
 // File: app/screens/WorkOrdersScreen.js
-
 import React, { useEffect, useState, useCallback, useMemo } from 'react';
 import {
   View,
@@ -17,7 +16,7 @@ import { Picker } from '@react-native-picker/picker';
 import { useRouter } from 'expo-router';
 import { useFocusEffect } from '@react-navigation/native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
-import DraggableFlatList, { ScaleDecorator } from 'react-native-draggable-flatlist';
+import DraggableFlatList from 'react-native-draggable-flatlist';
 import api from '../../constants/api';
 
 const STATUSES = [
@@ -53,14 +52,17 @@ export default function WorkOrdersScreen() {
     }
   }, [todayKey]);
 
-  const saveTodayOrder = useCallback(async (ids) => {
-    try {
-      setTodayOrderIds(ids);
-      await AsyncStorage.setItem(todayKey, JSON.stringify(ids));
-    } catch {
-      // ignore
-    }
-  }, [todayKey]);
+  const saveTodayOrder = useCallback(
+    async (ids) => {
+      try {
+        setTodayOrderIds(ids);
+        await AsyncStorage.setItem(todayKey, JSON.stringify(ids));
+      } catch {
+        // ignore
+      }
+    },
+    [todayKey]
+  );
 
   // ---------- load current user (for Jeff-only button)
   useEffect(() => {
@@ -95,15 +97,23 @@ export default function WorkOrdersScreen() {
   }, [router]);
 
   // Initial load + on focus refresh
-  useEffect(() => { fetchWorkOrders(); }, [fetchWorkOrders]);
-  useFocusEffect(useCallback(() => { fetchWorkOrders(); }, [fetchWorkOrders]));
+  useEffect(() => {
+    fetchWorkOrders();
+  }, [fetchWorkOrders]);
+  useFocusEffect(
+    useCallback(() => {
+      fetchWorkOrders();
+    }, [fetchWorkOrders])
+  );
 
   // Load saved order whenever the day (key) or list changes
-  useEffect(() => { loadTodayOrder(); }, [loadTodayOrder, workOrders.length]);
+  useEffect(() => {
+    loadTodayOrder();
+  }, [loadTodayOrder, workOrders.length]);
 
   // ---------- counts
   const counts = useMemo(() => {
-    const map = Object.fromEntries(STATUSES.map(s => [s, 0]));
+    const map = Object.fromEntries(STATUSES.map((s) => [s, 0]));
     let today = 0;
     for (const o of workOrders) {
       if (o?.status && map[o.status] !== undefined) map[o.status] += 1;
@@ -131,22 +141,30 @@ export default function WorkOrdersScreen() {
   };
 
   const getLatestNote = (item) => {
-    let arr = [];
-    if (Array.isArray(item?.notes)) arr = item.notes;
-    else if (typeof item?.notes === 'string') {
-      try { arr = JSON.parse(item.notes); } catch { arr = []; }
+    try {
+      let arr = [];
+      if (Array.isArray(item?.notes)) arr = item.notes;
+      else if (typeof item?.notes === 'string') {
+        try {
+          arr = JSON.parse(item.notes);
+        } catch {
+          arr = [];
+        }
+      }
+      if (!arr.length) return null;
+      const sorted = [...arr].sort((a, b) => {
+        const ta = new Date(a?.createdAt || 0).getTime();
+        const tb = new Date(b?.createdAt || 0).getTime();
+        return tb - ta;
+      });
+      const n = sorted[0] || {};
+      const time = n?.createdAt ? moment(n.createdAt).format('YYYY-MM-DD HH:mm') : '';
+      const by = n?.by ? ` • ${n.by}` : '';
+      const text = String(n?.text || '').trim().replace(/\s+/g, ' ');
+      return { time, by, text };
+    } catch {
+      return null;
     }
-    if (!arr.length) return null;
-    const sorted = [...arr].sort((a, b) => {
-      const ta = new Date(a?.createdAt || 0).getTime();
-      const tb = new Date(b?.createdAt || 0).getTime();
-      return tb - ta;
-    });
-    const n = sorted[0];
-    const time = n?.createdAt ? moment(n.createdAt).format('YYYY-MM-DD HH:mm') : '';
-    const by = n?.by ? ` • ${n.by}` : '';
-    const text = String(n?.text || '').trim().replace(/\s+/g, ' ');
-    return { time, by, text };
   };
 
   // ---------- filtered & ordered lists
@@ -155,16 +173,16 @@ export default function WorkOrdersScreen() {
     if (selectedStatus === 'Today') {
       const todayStr = moment().format('YYYY-MM-DD');
       return workOrders.filter(
-        o => o.scheduledDate && moment(o.scheduledDate).format('YYYY-MM-DD') === todayStr
+        (o) => o?.scheduledDate && moment(o.scheduledDate).format('YYYY-MM-DD') === todayStr
       );
     }
-    return workOrders.filter(o => o.status === selectedStatus);
+    return workOrders.filter((o) => o?.status === selectedStatus);
   }, [workOrders, selectedStatus]);
 
   // Apply saved order for Today
   const orderedToday = useMemo(() => {
     if (selectedStatus !== 'Today') return filteredOrders;
-    const map = new Map(filteredOrders.map(o => [String(o.id), o]));
+    const map = new Map(filteredOrders.map((o) => [String(o?.id ?? ''), o]));
     const ordered = [];
     for (const id of todayOrderIds) {
       if (map.has(id)) {
@@ -184,7 +202,7 @@ export default function WorkOrdersScreen() {
 
   const handleUpdateStatus = async (id, newStatus) => {
     const prev = workOrders;
-    const next = prev.map(o => (o.id === id ? { ...o, status: newStatus } : o));
+    const next = prev.map((o) => (o.id === id ? { ...o, status: newStatus } : o));
     setWorkOrders(next);
     try {
       await api.put(`/work-orders/${id}`, { status: newStatus });
@@ -209,11 +227,11 @@ export default function WorkOrdersScreen() {
     const chips = [
       { key: 'All', label: 'All', count: counts.all },
       { key: 'Today', label: 'Today', count: counts.today },
-      ...STATUSES.map(s => ({ key: s, label: s, count: counts.byStatus[s] || 0 })),
+      ...STATUSES.map((s) => ({ key: s, label: s, count: counts.byStatus[s] || 0 })),
     ];
     return (
       <View style={styles.chipsWrap}>
-        {chips.map(c => (
+        {chips.map((c) => (
           <TopChip
             key={c.key}
             label={c.label}
@@ -232,109 +250,108 @@ export default function WorkOrdersScreen() {
     const latest = getLatestNote(item);
 
     return (
-      <ScaleDecorator>
-        <View style={styles.card}>
-          {/* Title row with optional drag handle in Today view */}
-          <View style={styles.cardHeaderRow}>
-            <Text style={styles.cardTitle}>WO/PO #: {item.poNumber || 'N/A'}</Text>
-            {selectedStatus === 'Today' ? (
-              <TouchableOpacity onLongPress={drag} delayLongPress={120} style={styles.dragHandle}>
-                <Text style={styles.dragGlyph}>≡</Text>
-                <Text style={styles.dragHint}>Hold to drag</Text>
-              </TouchableOpacity>
-            ) : null}
-          </View>
+      <View style={styles.card}>
+        {/* Title row with optional drag handle in Today view */}
+        <View style={styles.cardHeaderRow}>
+          <Text style={styles.cardTitle}>WO/PO #: {item?.poNumber || 'N/A'}</Text>
+          {selectedStatus === 'Today' ? (
+            <TouchableOpacity onLongPress={drag} delayLongPress={120} style={styles.dragHandle}>
+              <Text style={styles.dragGlyph}>≡</Text>
+              <Text style={styles.dragHint}>Hold to drag</Text>
+            </TouchableOpacity>
+          ) : null}
+        </View>
 
-          <Text style={styles.cardText}>Customer: {item.customer}</Text>
+        <Text style={styles.cardText}>Customer: {item?.customer ?? 'N/A'}</Text>
 
-          <TouchableOpacity onPress={() => openInGoogleMaps(item.siteLocation)}>
-            <Text style={styles.linkText}>Site Location: {item.siteLocation}</Text>
+        <TouchableOpacity onPress={() => openInGoogleMaps(item?.siteLocation || '')}>
+          <Text style={styles.linkText}>Site Location: {item?.siteLocation ?? 'N/A'}</Text>
+        </TouchableOpacity>
+
+        <Text style={styles.cardText}>Problem: {item?.problemDescription ?? 'N/A'}</Text>
+        <Text style={styles.cardText}>
+          Scheduled:{' '}
+          {item?.scheduledDate
+            ? moment(item.scheduledDate).format('YYYY-MM-DD HH:mm')
+            : 'Not Scheduled'}
+        </Text>
+
+        <View style={styles.actionsRow}>
+          <TouchableOpacity
+            style={styles.viewButton}
+            onPress={() => router.push(`/screens/ViewWorkOrder?id=${item?.id}`)}
+          >
+            <Text style={styles.viewButtonText}>View Details</Text>
           </TouchableOpacity>
 
-          <Text style={styles.cardText}>Problem: {item.problemDescription}</Text>
-          <Text style={styles.cardText}>
-            Scheduled:{' '}
-            {item.scheduledDate
-              ? moment(item.scheduledDate).format('YYYY-MM-DD HH:mm')
-              : 'Not Scheduled'}
-          </Text>
+          {/* Right column: latest note (top) + status control (bottom) */}
+          <View style={styles.rightCol}>
+            {latest ? (
+              <View style={styles.latestNoteBox}>
+                <Text style={styles.latestNoteMeta} numberOfLines={1}>
+                  {latest.time}
+                  {latest.by}
+                </Text>
+                <Text style={styles.latestNoteText} numberOfLines={2}>
+                  {latest.text}
+                </Text>
+              </View>
+            ) : null}
 
-          <View style={styles.actionsRow}>
-            <TouchableOpacity
-              style={styles.viewButton}
-              onPress={() => router.push(`/screens/ViewWorkOrder?id=${item.id}`)}
-            >
-              <Text style={styles.viewButtonText}>View Details</Text>
-            </TouchableOpacity>
-
-            {/* Right column: latest note (top) + status control (bottom) */}
-            <View style={styles.rightCol}>
-              {latest ? (
-                <View style={styles.latestNoteBox}>
-                  <Text style={styles.latestNoteMeta} numberOfLines={1}>
-                    {latest.time}{latest.by}
-                  </Text>
-                  <Text style={styles.latestNoteText} numberOfLines={2}>
-                    {latest.text}
-                  </Text>
-                </View>
-              ) : null}
-
-              {isPickerOpen ? (
-                <Picker
-                  mode={Platform.OS === 'ios' ? 'dialog' : 'dropdown'}
-                  style={styles.picker}
-                  itemStyle={styles.pickerItem}
-                  selectedValue={item.status}
-                  onValueChange={(v) => {
-                    handleUpdateStatus(item.id, v);
-                    setOpenPickers(p => ({ ...p, [item.id]: false }));
-                  }}
-                >
-                  {STATUSES.map(s => (
-                    <Picker.Item key={s} label={s} value={s} />
-                  ))}
-                </Picker>
-              ) : (
-                <TouchableOpacity
-                  style={[styles.statusWrap, styles.pickerToggle]}
-                  onPress={() => setOpenPickers(p => ({ ...p, [item.id]: true }))}
-                >
-                  <Text style={styles.statusText}>{item.status}</Text>
-                  <Text style={styles.changeLink}>Change ▾</Text>
-                </TouchableOpacity>
-              )}
-            </View>
+            {isPickerOpen ? (
+              <Picker
+                // Only pass supported props for the platform:
+                {...(Platform.OS === 'android' ? { mode: 'dropdown' } : {})}
+                style={styles.picker}
+                {...(Platform.OS === 'ios' ? { itemStyle: styles.pickerItem } : {})}
+                selectedValue={item?.status}
+                onValueChange={(v) => {
+                  handleUpdateStatus(item.id, v);
+                  setOpenPickers((p) => ({ ...p, [item.id]: false }));
+                }}
+              >
+                {STATUSES.map((s) => (
+                  <Picker.Item key={s} label={s} value={s} />
+                ))}
+              </Picker>
+            ) : (
+              <TouchableOpacity
+                style={[styles.statusWrap, styles.pickerToggle]}
+                onPress={() => setOpenPickers((p) => ({ ...p, [item.id]: true }))}
+              >
+                <Text style={styles.statusText}>{item?.status ?? 'Set status'}</Text>
+                <Text style={styles.changeLink}>Change ▾</Text>
+              </TouchableOpacity>
+            )}
           </View>
         </View>
-      </ScaleDecorator>
+      </View>
     );
   };
 
   // ---------- renderers
   const renderItemRegular = ({ item }) => <Card item={item} />;
 
-  const renderItemDraggable = ({ item, drag, isActive }) => (
-    <Card item={item} drag={drag} isActive={isActive} />
-  );
+  const renderItemDraggable = ({ item, drag }) => <Card item={item} drag={drag} />;
 
   // ---------- list components
+  const keyExtractor = (it, index) => String(it?.id ?? it?.poNumber ?? index);
+
   const ListComponent =
     selectedStatus === 'Today' ? (
       <>
         <Text style={styles.dragBanner}>Long-press a card and drag to set today’s order.</Text>
         <DraggableFlatList
           data={orderedToday}
-          keyExtractor={(it) => String(it.id)}
+          keyExtractor={keyExtractor}
+          activationDistance={12}
           onDragEnd={({ data }) => {
-            const newIds = data.map(d => String(d.id));
+            const newIds = data.map((d) => String(d?.id ?? ''));
             saveTodayOrder(newIds);
           }}
           renderItem={renderItemDraggable}
-          containerStyle={styles.list}
-          refreshControl={
-            <RefreshControl refreshing={refreshing} onRefresh={onRefresh} />
-          }
+          contentContainerStyle={styles.list}
+          refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} />}
           ListEmptyComponent={
             !loadingFirst ? (
               <View style={styles.center}>
@@ -347,12 +364,10 @@ export default function WorkOrdersScreen() {
     ) : (
       <FlatList
         data={filteredOrders}
-        keyExtractor={item => String(item.id)}
+        keyExtractor={keyExtractor}
         renderItem={renderItemRegular}
         contentContainerStyle={styles.list}
-        refreshControl={
-          <RefreshControl refreshing={refreshing} onRefresh={onRefresh} />
-        }
+        refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} />}
         ListEmptyComponent={
           !loadingFirst ? (
             <View style={styles.center}>
@@ -418,7 +433,6 @@ const styles = StyleSheet.create({
     borderBottomColor: '#CBD5E1',
   },
 
-  // No 'gap' (causes issues on some iOS releases)
   chipsWrap: {
     flexDirection: 'row',
     flexWrap: 'wrap',
