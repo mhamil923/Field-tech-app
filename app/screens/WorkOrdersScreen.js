@@ -246,7 +246,7 @@ export default function WorkOrdersScreen() {
 
   // ---------- card UI (shared by regular & draggable lists)
   const Card = ({ item, drag }) => {
-    const isPickerOpen = !!openPickers[item.id];
+    const isPickerOpen = !!openPickers[item?.id];
     const latest = getLatestNote(item);
 
     return (
@@ -276,31 +276,32 @@ export default function WorkOrdersScreen() {
             : 'Not Scheduled'}
         </Text>
 
+        {/* New layout: note (left) + right column with View Details above status */}
         <View style={styles.actionsRow}>
-          <TouchableOpacity
-            style={styles.viewButton}
-            onPress={() => router.push(`/screens/ViewWorkOrder?id=${item?.id}`)}
-          >
-            <Text style={styles.viewButtonText}>View Details</Text>
-          </TouchableOpacity>
-
-          {/* Right column: latest note (top) + status control (bottom) */}
-          <View style={styles.rightCol}>
+          <View style={styles.leftCol}>
             {latest ? (
               <View style={styles.latestNoteBox}>
                 <Text style={styles.latestNoteMeta} numberOfLines={1}>
                   {latest.time}
                   {latest.by}
                 </Text>
-                <Text style={styles.latestNoteText} numberOfLines={2}>
+                <Text style={styles.latestNoteText} numberOfLines={3}>
                   {latest.text}
                 </Text>
               </View>
             ) : null}
+          </View>
+
+          <View style={styles.rightCol}>
+            <TouchableOpacity
+              style={[styles.viewButton, { marginBottom: 8 }]}
+              onPress={() => router.push(`/screens/ViewWorkOrder?id=${item?.id}`)}
+            >
+              <Text style={styles.viewButtonText}>View Details</Text>
+            </TouchableOpacity>
 
             {isPickerOpen ? (
               <Picker
-                // Only pass supported props for the platform:
                 {...(Platform.OS === 'android' ? { mode: 'dropdown' } : {})}
                 style={styles.picker}
                 {...(Platform.OS === 'ios' ? { itemStyle: styles.pickerItem } : {})}
@@ -433,6 +434,7 @@ const styles = StyleSheet.create({
     borderBottomColor: '#CBD5E1',
   },
 
+  // No 'gap' (causes issues on some iOS releases)
   chipsWrap: {
     flexDirection: 'row',
     flexWrap: 'wrap',
@@ -502,24 +504,32 @@ const styles = StyleSheet.create({
 
   actionsRow: {
     flexDirection: 'row',
-    alignItems: 'flex-end',
+    alignItems: 'flex-start',
     justifyContent: 'space-between',
     marginTop: 12,
   },
+
+  // NEW: left column holds the latest note
+  leftCol: {
+    flex: 1,
+    paddingRight: 10,
+  },
+
+  // Right column now holds the View Details button (top) + status control (bottom)
+  rightCol: {
+    flexShrink: 1,
+    alignItems: 'flex-end',
+    maxWidth: '60%',
+  },
+
   viewButton: {
     backgroundColor: '#17a2b8',
     borderRadius: 6,
     paddingVertical: 10,
     paddingHorizontal: 16,
-    alignSelf: 'flex-start',
+    alignSelf: 'flex-end',
   },
   viewButtonText: { color: '#FFFFFF', fontSize: 15, fontWeight: 'bold' },
-
-  rightCol: {
-    flexShrink: 1,
-    alignItems: 'flex-end',
-    maxWidth: '72%',
-  },
 
   latestNoteBox: {
     backgroundColor: '#F8FAFC',
@@ -528,7 +538,6 @@ const styles = StyleSheet.create({
     borderRadius: 8,
     paddingHorizontal: 10,
     paddingVertical: 8,
-    marginBottom: 8,
     maxWidth: '100%',
   },
   latestNoteMeta: { fontSize: 11, color: '#64748B', marginBottom: 4 },
@@ -538,12 +547,13 @@ const styles = StyleSheet.create({
   statusText: { fontSize: 14, color: '#2B2D42', marginRight: 6 },
   changeLink: { color: '#17a2b8' },
 
-  pickerToggle: { zIndex: 20, elevation: 20 },
+  pickerToggle: { zIndex: 20, elevation: 20, alignSelf: 'flex-end' },
   picker: {
     width: 260,
     backgroundColor: '#FFFFFF',
     zIndex: 20,
     elevation: 20,
+    alignSelf: 'flex-end',
   },
   pickerItem: { fontSize: 16 },
 
