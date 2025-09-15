@@ -10,9 +10,10 @@ import {
   Alert,
   Linking,
   RefreshControl,
+  Modal,
+  Pressable,
 } from 'react-native';
 import moment from 'moment';
-import { Picker } from '@react-native-picker/picker';
 import { useRouter } from 'expo-router';
 import { useFocusEffect } from '@react-navigation/native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
@@ -34,9 +35,14 @@ export default function WorkOrdersScreen() {
   const [me, setMe] = useState(null); // { id, username, role }
   const [workOrders, setWorkOrders] = useState([]);
   const [selectedStatus, setSelectedStatus] = useState('All');
-  const [openPickers, setOpenPickers] = useState({});
   const [refreshing, setRefreshing] = useState(false);
   const [loadingFirst, setLoadingFirst] = useState(true);
+
+  // Modal state for changing status
+  const [statusModal, setStatusModal] = useState({
+    id: null, // work order id whose status we're changing
+    value: null, // temp chosen status
+  });
 
   // ---------- Today drag-order persistence ----------
   const todayKey = `woOrder:${moment().format('YYYY-MM-DD')}`;
@@ -246,7 +252,6 @@ export default function WorkOrdersScreen() {
 
   // ---------- card UI (shared by regular & draggable lists)
   const Card = ({ item, drag }) => {
-    const isPickerOpen = !!openPickers[item?.id];
     const latest = getLatestNote(item);
 
     return (
@@ -276,7 +281,7 @@ export default function WorkOrdersScreen() {
             : 'Not Scheduled'}
         </Text>
 
-        {/* New layout: note (left) + right column with View Details above status */}
+        {/* New layout: latest note (left) + right column with Status (top) and View Details (bottom) */}
         <View style={styles.actionsRow}>
           <View style={styles.leftCol}>
             {latest ? (
@@ -294,36 +299,23 @@ export default function WorkOrdersScreen() {
 
           <View style={styles.rightCol}>
             <TouchableOpacity
-              style={[styles.viewButton, { marginBottom: 8 }]}
+              style={[styles.statusBtn, { marginBottom: 8 }]}
+              onPress={() =>
+                setStatusModal({
+                  id: item?.id,
+                  value: item?.status || STATUSES[0],
+                })
+              }
+            >
+              <Text style={styles.statusBtnText}>Status</Text>
+            </TouchableOpacity>
+
+            <TouchableOpacity
+              style={styles.viewButton}
               onPress={() => router.push(`/screens/ViewWorkOrder?id=${item?.id}`)}
             >
               <Text style={styles.viewButtonText}>View Details</Text>
             </TouchableOpacity>
-
-            {isPickerOpen ? (
-              <Picker
-                {...(Platform.OS === 'android' ? { mode: 'dropdown' } : {})}
-                style={styles.picker}
-                {...(Platform.OS === 'ios' ? { itemStyle: styles.pickerItem } : {})}
-                selectedValue={item?.status}
-                onValueChange={(v) => {
-                  handleUpdateStatus(item.id, v);
-                  setOpenPickers((p) => ({ ...p, [item.id]: false }));
-                }}
-              >
-                {STATUSES.map((s) => (
-                  <Picker.Item key={s} label={s} value={s} />
-                ))}
-              </Picker>
-            ) : (
-              <TouchableOpacity
-                style={[styles.statusWrap, styles.pickerToggle]}
-                onPress={() => setOpenPickers((p) => ({ ...p, [item.id]: true }))}
-              >
-                <Text style={styles.statusText}>{item?.status ?? 'Set status'}</Text>
-                <Text style={styles.changeLink}>Change ▾</Text>
-              </TouchableOpacity>
-            )}
           </View>
         </View>
       </View>
@@ -379,6 +371,15 @@ export default function WorkOrdersScreen() {
       />
     );
 
+  // ---------- modal actions
+  const closeStatusModal = () => setStatusModal({ id: null, value: null });
+  const applyStatusModal = () => {
+    if (statusModal.id != null && statusModal.value) {
+      handleUpdateStatus(statusModal.id, statusModal.value);
+    }
+    closeStatusModal();
+  };
+
   return (
     <View style={styles.container}>
       {/* Header row with Jeff-only Add button */}
@@ -399,6 +400,49 @@ export default function WorkOrdersScreen() {
 
       {/* The list (regular or draggable) */}
       {ListComponent}
+
+      {/* Status selection modal */}
+      <Modal
+        transparent
+        visible={statusModal.id != null}
+        animationType="fade"
+        onRequestClose={closeStatusModal}
+      >
+        <Pressable style={styles.modalOverlay} onPress={closeStatusModal}>
+          <Pressable style={styles.modalCard} onPress={() => {}}>
+            <Text style={styles.modalTitle}>Change Status</Text>
+
+            <View style={{ marginTop: 8 }}>
+              {STATUSES.map((s) => {
+                const active = statusModal.value === s;
+                return (
+                  <TouchableOpacity
+                    key={s}
+                    style={[styles.statusOption, active && styles.statusOptionActive]}
+                    onPress={() => setStatusModal((m) => ({ ...m, value: s }))}
+                  >
+                    <Text
+                      style={[styles.statusOptionText, active && styles.statusOptionTextActive]}
+                      numberOfLines={1}
+                    >
+                      {s}
+                    </Text>
+                  </TouchableOpacity>
+                );
+              })}
+            </View>
+
+            <View style={styles.modalButtonsRow}>
+              <TouchableOpacity style={styles.modalBtnCancel} onPress={closeStatusModal}>
+                <Text style={styles.modalBtnText}>Cancel</Text>
+              </TouchableOpacity>
+              <TouchableOpacity style={styles.modalBtnApply} onPress={applyStatusModal}>
+                <Text style={styles.modalBtnText}>Apply</Text>
+              </TouchableOpacity>
+            </View>
+          </Pressable>
+        </Pressable>
+      </Modal>
     </View>
   );
 }
@@ -509,18 +553,27 @@ const styles = StyleSheet.create({
     marginTop: 12,
   },
 
-  // NEW: left column holds the latest note
+  // left column holds the latest note
   leftCol: {
     flex: 1,
     paddingRight: 10,
   },
 
-  // Right column now holds the View Details button (top) + status control (bottom)
+  // Right column: Status (top) + View Details (bottom)
   rightCol: {
     flexShrink: 1,
     alignItems: 'flex-end',
     maxWidth: '60%',
   },
+
+  statusBtn: {
+    backgroundColor: '#0ea5a6',
+    borderRadius: 6,
+    paddingVertical: 10,
+    paddingHorizontal: 16,
+    alignSelf: 'flex-end',
+  },
+  statusBtnText: { color: '#FFFFFF', fontSize: 15, fontWeight: 'bold' },
 
   viewButton: {
     backgroundColor: '#17a2b8',
@@ -543,20 +596,6 @@ const styles = StyleSheet.create({
   latestNoteMeta: { fontSize: 11, color: '#64748B', marginBottom: 4 },
   latestNoteText: { fontSize: 13, color: '#0F172A' },
 
-  statusWrap: { flexDirection: 'row', alignItems: 'center' },
-  statusText: { fontSize: 14, color: '#2B2D42', marginRight: 6 },
-  changeLink: { color: '#17a2b8' },
-
-  pickerToggle: { zIndex: 20, elevation: 20, alignSelf: 'flex-end' },
-  picker: {
-    width: 260,
-    backgroundColor: '#FFFFFF',
-    zIndex: 20,
-    elevation: 20,
-    alignSelf: 'flex-end',
-  },
-  pickerItem: { fontSize: 16 },
-
   center: { alignItems: 'center', marginTop: 24 },
   noData: { fontStyle: 'italic', color: '#8D99AE' },
 
@@ -566,4 +605,65 @@ const styles = StyleSheet.create({
     marginTop: 8,
     marginBottom: 6,
   },
+
+  // Modal styles
+  modalOverlay: {
+    flex: 1,
+    backgroundColor: 'rgba(0,0,0,0.35)',
+    justifyContent: 'center',
+    alignItems: 'center',
+    padding: 20,
+  },
+  modalCard: {
+    width: '100%',
+    maxWidth: 520,
+    backgroundColor: '#fff',
+    borderRadius: 12,
+    padding: 16,
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: '#E2E8F0',
+  },
+  modalTitle: {
+    fontSize: 18,
+    fontWeight: '700',
+    color: '#0F172A',
+    textAlign: 'center',
+    marginBottom: 8,
+  },
+  statusOption: {
+    paddingVertical: 12,
+    paddingHorizontal: 12,
+    borderRadius: 8,
+    borderWidth: 1,
+    borderColor: '#E2E8F0',
+    marginBottom: 8,
+    backgroundColor: '#FFFFFF',
+  },
+  statusOptionActive: {
+    backgroundColor: '#17a2b8',
+    borderColor: '#17a2b8',
+  },
+  statusOptionText: { color: '#0F172A', fontWeight: '600' },
+  statusOptionTextActive: { color: '#FFFFFF', fontWeight: '700' },
+  modalButtonsRow: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    marginTop: 12,
+    gap: 12,
+  },
+  modalBtnCancel: {
+    flex: 1,
+    backgroundColor: '#EF4444',
+    paddingVertical: 10,
+    borderRadius: 8,
+    alignItems: 'center',
+  },
+  modalBtnApply: {
+    flex: 1,
+    backgroundColor: '#22C55E',
+    paddingVertical: 10,
+    borderRadius: 8,
+    alignItems: 'center',
+  },
+  modalBtnText: { color: '#fff', fontWeight: '700' },
 });
