@@ -6,7 +6,6 @@ import {
   StyleSheet,
   TouchableOpacity,
   FlatList,
-  Platform,
   Alert,
   Linking,
   RefreshControl,
@@ -40,13 +39,13 @@ export default function WorkOrdersScreen() {
 
   // Modal state for changing status
   const [statusModal, setStatusModal] = useState({
-    id: null, // work order id whose status we're changing
-    value: null, // temp chosen status
+    id: null,   // work order id whose status we're changing
+    value: null // temp chosen status
   });
 
   // ---------- Today drag-order persistence ----------
   const todayKey = `woOrder:${moment().format('YYYY-MM-DD')}`;
-  const [todayOrderIds, setTodayOrderIds] = useState([]); // array of string ids in desired order
+  const [todayOrderIds, setTodayOrderIds] = useState([]);
 
   const loadTodayOrder = useCallback(async () => {
     try {
@@ -58,17 +57,14 @@ export default function WorkOrdersScreen() {
     }
   }, [todayKey]);
 
-  const saveTodayOrder = useCallback(
-    async (ids) => {
-      try {
-        setTodayOrderIds(ids);
-        await AsyncStorage.setItem(todayKey, JSON.stringify(ids));
-      } catch {
-        // ignore
-      }
-    },
-    [todayKey]
-  );
+  const saveTodayOrder = useCallback(async (ids) => {
+    try {
+      setTodayOrderIds(ids);
+      await AsyncStorage.setItem(todayKey, JSON.stringify(ids));
+    } catch {
+      // ignore
+    }
+  }, [todayKey]);
 
   // ---------- load current user (for Jeff-only button)
   useEffect(() => {
@@ -125,11 +121,7 @@ export default function WorkOrdersScreen() {
       if (o?.status && map[o.status] !== undefined) map[o.status] += 1;
       if (o?.scheduledDate && moment(o.scheduledDate).isSame(moment(), 'day')) today += 1;
     }
-    return {
-      byStatus: map,
-      all: workOrders.length,
-      today,
-    };
+    return { byStatus: map, all: workOrders.length, today };
   }, [workOrders]);
 
   // ---------- helpers
@@ -151,11 +143,7 @@ export default function WorkOrdersScreen() {
       let arr = [];
       if (Array.isArray(item?.notes)) arr = item.notes;
       else if (typeof item?.notes === 'string') {
-        try {
-          arr = JSON.parse(item.notes);
-        } catch {
-          arr = [];
-        }
+        try { arr = JSON.parse(item.notes); } catch { arr = []; }
       }
       if (!arr.length) return null;
       const sorted = [...arr].sort((a, b) => {
@@ -196,7 +184,6 @@ export default function WorkOrdersScreen() {
         map.delete(id);
       }
     }
-    // any new items not in saved order appended to the end
     return [...ordered, ...Array.from(map.values())];
   }, [filteredOrders, selectedStatus, todayOrderIds]);
 
@@ -281,7 +268,12 @@ export default function WorkOrdersScreen() {
             : 'Not Scheduled'}
         </Text>
 
-        {/* New layout: latest note (left) + right column with Status (top) and View Details (bottom) */}
+        {/* ✨ New line: Status, shown between Schedule and latest note */}
+        <Text style={[styles.cardText, { marginBottom: 8 }]}>
+          Status: {item?.status || '—'}
+        </Text>
+
+        {/* Latest note + right-side actions */}
         <View style={styles.actionsRow}>
           <View style={styles.leftCol}>
             {latest ? (
@@ -324,10 +316,9 @@ export default function WorkOrdersScreen() {
 
   // ---------- renderers
   const renderItemRegular = ({ item }) => <Card item={item} />;
-
   const renderItemDraggable = ({ item, drag }) => <Card item={item} drag={drag} />;
 
-  // ---------- list components
+  // ---------- lists
   const keyExtractor = (it, index) => String(it?.id ?? it?.poNumber ?? index);
 
   const ListComponent =
@@ -478,7 +469,6 @@ const styles = StyleSheet.create({
     borderBottomColor: '#CBD5E1',
   },
 
-  // No 'gap' (causes issues on some iOS releases)
   chipsWrap: {
     flexDirection: 'row',
     flexWrap: 'wrap',
@@ -497,10 +487,7 @@ const styles = StyleSheet.create({
     marginRight: 8,
     marginBottom: 8,
   },
-  chipActive: {
-    backgroundColor: '#17a2b8',
-    borderColor: '#17a2b8',
-  },
+  chipActive: { backgroundColor: '#17a2b8', borderColor: '#17a2b8' },
   chipText: { color: '#17a2b8', fontWeight: '600' },
   chipTextActive: { color: '#fff' },
   badge: {
@@ -515,10 +502,7 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
     backgroundColor: '#fff',
   },
-  badgeActive: {
-    backgroundColor: '#0f6a79',
-    borderColor: '#0f6a79',
-  },
+  badgeActive: { backgroundColor: '#0f6a79', borderColor: '#0f6a79' },
   badgeText: { color: '#17a2b8', fontSize: 12, fontWeight: '700' },
   badgeTextActive: { color: '#fff' },
 
@@ -553,13 +537,8 @@ const styles = StyleSheet.create({
     marginTop: 12,
   },
 
-  // left column holds the latest note
-  leftCol: {
-    flex: 1,
-    paddingRight: 10,
-  },
+  leftCol: { flex: 1, paddingRight: 10 },
 
-  // Right column: Status (top) + View Details (bottom)
   rightCol: {
     flexShrink: 1,
     alignItems: 'flex-end',
@@ -639,10 +618,7 @@ const styles = StyleSheet.create({
     marginBottom: 8,
     backgroundColor: '#FFFFFF',
   },
-  statusOptionActive: {
-    backgroundColor: '#17a2b8',
-    borderColor: '#17a2b8',
-  },
+  statusOptionActive: { backgroundColor: '#17a2b8', borderColor: '#17a2b8' },
   statusOptionText: { color: '#0F172A', fontWeight: '600' },
   statusOptionTextActive: { color: '#FFFFFF', fontWeight: '700' },
   modalButtonsRow: {
