@@ -11,6 +11,8 @@ import {
   RefreshControl,
   Modal,
   Pressable,
+  TextInput,
+  ScrollView,
 } from 'react-native';
 import moment from 'moment';
 import { useRouter } from 'expo-router';
@@ -28,6 +30,38 @@ const STATUSES = [
   'Completed',
 ];
 
+const PARTS_WAITING = 'Waiting on Parts';
+const PARTS_IN = 'Parts In';
+
+// ---------- helpers (status/strings) ----------
+const norm = (v) => (v ?? '').toString().trim();
+const statusKey = (s) =>
+  norm(s).toLowerCase().replace(/[_-]+/g, ' ').replace(/\s+/g, ' ').trim();
+const normStatus = statusKey;
+
+const CANON = new Map(STATUSES.map((label) => [statusKey(label), label]));
+const STATUS_SYNONYMS = new Map([
+  ['part in', 'Parts In'],
+  ['parts in', 'Parts In'],
+  ['parts  in', 'Parts In'],
+  ['parts-in', 'Parts In'],
+  ['parts_in', 'Parts In'],
+  ['partsin', 'Parts In'],
+  ['part s in', 'Parts In'],
+
+  ['waiting on part', 'Waiting on Parts'],
+  ['waiting on parts', 'Waiting on Parts'],
+  ['waiting-on-parts', 'Waiting on Parts'],
+  ['waiting_on_parts', 'Waiting on Parts'],
+  ['waitingonparts', 'Waiting on Parts'],
+]);
+const toCanonicalStatus = (s) =>
+  CANON.get(statusKey(s)) || STATUS_SYNONYMS.get(statusKey(s)) || norm(s);
+
+// Hide legacy PO values that equal WO
+const isLegacyWoInPo = (wo, po) => !!norm(wo) && norm(wo) === norm(po);
+const displayPO = (wo, po) => (isLegacyWoInPo(wo, po) ? '' : norm(po));
+
 export default function WorkOrdersScreen() {
   const router = useRouter();
 
@@ -37,11 +71,14 @@ export default function WorkOrdersScreen() {
   const [refreshing, setRefreshing] = useState(false);
   const [loadingFirst, setLoadingFirst] = useState(true);
 
-  // Modal state for changing status
-  const [statusModal, setStatusModal] = useState({
-    id: null,   // work order id whose status we're changing
-    value: null // temp chosen status
-  });
+  // Modal state for changing status (single)
+  const [statusModal, setStatusModal] = useState({ id: null, value: null });
+
+  // ---------- Parts In modal state ----------
+  const [partsModalOpen, setPartsModalOpen] = useState(false);
+  const [poSearch, setPoSearch] = useState('');
+  const [selectedIds, setSelectedIds] = useState(new Set());
+  const [isUpdatingParts, setIsUpdatingParts] = useState(false);
 
   // ---------- Today drag-order persistence ----------
   const todayKey = `woOrder:${moment().format('YYYY-MM-DD')}`;
@@ -57,23 +94,26 @@ export default function WorkOrdersScreen() {
     }
   }, [todayKey]);
 
-  const saveTodayOrder = useCallback(async (ids) => {
-    try {
-      setTodayOrderIds(ids);
-      await AsyncStorage.setItem(todayKey, JSON.stringify(ids));
-    } catch {
-      // ignore
-    }
-  }, [todayKey]);
+  const saveTodayOrder = useCallback(
+    async (ids) => {
+      try {
+        setTodayOrderIds(ids);
+        await AsyncStorage.setItem(todayKey, JSON.stringify(ids));
+      } catch {
+        // ignore
+      }
+    },
+    [todayKey]
+  );
 
-  // ---------- load current user (for Jeff-only button)
+  // ---------- load current user (for Jeff-only add button)
   useEffect(() => {
     (async () => {
       try {
         const r = await api.get('/auth/me');
         setMe(r.data || null);
       } catch {
-        // not fatal if /auth/me fails
+        // not fatal
       }
     })();
   }, []);
@@ -82,7 +122,9 @@ export default function WorkOrdersScreen() {
     try {
       const res = await api.get('/work-orders');
       const data = Array.isArray(res.data) ? res.data : [];
-      setWorkOrders(data);
+      // Normalize status like web does
+      const canon = data.map((o) => ({ ...o, status: toCanonicalStatus(o.status) }));
+      setWorkOrders(canon);
     } catch (err) {
       console.error('Error fetching work orders:', err);
       if (err?.response?.status === 401) {
@@ -118,7 +160,8 @@ export default function WorkOrdersScreen() {
     const map = Object.fromEntries(STATUSES.map((s) => [s, 0]));
     let today = 0;
     for (const o of workOrders) {
-      if (o?.status && map[o.status] !== undefined) map[o.status] += 1;
+      const label = toCanonicalStatus(o?.status);
+      if (map[label] !== undefined) map[label] += 1;
       if (o?.scheduledDate && moment(o.scheduledDate).isSame(moment(), 'day')) today += 1;
     }
     return { byStatus: map, all: workOrders.length, today };
@@ -143,7 +186,11 @@ export default function WorkOrdersScreen() {
       let arr = [];
       if (Array.isArray(item?.notes)) arr = item.notes;
       else if (typeof item?.notes === 'string') {
-        try { arr = JSON.parse(item.notes); } catch { arr = []; }
+        try {
+          arr = JSON.parse(item.notes);
+        } catch {
+          arr = [];
+        }
       }
       if (!arr.length) return null;
       const sorted = [...arr].sort((a, b) => {
@@ -170,7 +217,7 @@ export default function WorkOrdersScreen() {
         (o) => o?.scheduledDate && moment(o.scheduledDate).format('YYYY-MM-DD') === todayStr
       );
     }
-    return workOrders.filter((o) => o?.status === selectedStatus);
+    return workOrders.filter((o) => normStatus(o?.status) === normStatus(selectedStatus));
   }, [workOrders, selectedStatus]);
 
   // Apply saved order for Today
@@ -203,6 +250,98 @@ export default function WorkOrdersScreen() {
       console.error('Error updating status:', err);
       setWorkOrders(prev);
       Alert.alert('Error', err?.response?.data?.error || 'Failed to update status.');
+    }
+  };
+
+  // ---------- “Mark Parts In” modal helpers ----------
+  const openPartsModal = () => {
+    if (normStatus(selectedStatus) !== normStatus(PARTS_WAITING)) {
+      setSelectedStatus(PARTS_WAITING);
+    }
+    const source = workOrders.filter(
+      (o) => normStatus(o.status) === normStatus(PARTS_WAITING)
+    );
+    setSelectedIds(new Set(source.map((o) => o.id)));
+    setPoSearch('');
+    setPartsModalOpen(true);
+  };
+
+  const closePartsModal = () => {
+    setPartsModalOpen(false);
+    setSelectedIds(new Set());
+    setPoSearch('');
+  };
+
+  const toggleId = (id) => {
+    const copy = new Set(selectedIds);
+    if (copy.has(id)) copy.delete(id);
+    else copy.add(id);
+    setSelectedIds(copy);
+  };
+
+  const setAll = (checked, visibleRows) => {
+    setSelectedIds(checked ? new Set(visibleRows.map((o) => o.id)) : new Set());
+  };
+
+  const visibleWaitingRows = useMemo(() => {
+    const base = filteredOrders.filter(
+      (o) => normStatus(o.status) === normStatus(PARTS_WAITING)
+    );
+    const q = poSearch.trim().toLowerCase();
+    if (!q) return base;
+    return base.filter((o) => {
+      const wo = norm(o.workOrderNumber).toLowerCase();
+      const po = displayPO(o.workOrderNumber, o.poNumber).toLowerCase();
+      const cust = norm(o.customer).toLowerCase();
+      const site = norm(o.siteLocation).toLowerCase();
+      return wo.includes(q) || po.includes(q) || cust.includes(q) || site.includes(q);
+    });
+  }, [filteredOrders, poSearch]);
+
+  const markSelectedAsPartsIn = async () => {
+    if (!selectedIds.size) return;
+    setIsUpdatingParts(true);
+
+    const ids = Array.from(selectedIds);
+    const prev = workOrders;
+
+    // Optimistic UI: flip to Parts In
+    const next = prev.map((o) => (ids.includes(o.id) ? { ...o, status: PARTS_IN } : o));
+    setWorkOrders(next);
+
+    try {
+      const res = await api.put('/work-orders/bulk-status', { ids, status: PARTS_IN });
+      // Optionally merge server-returned rows (if present)
+      const items = Array.isArray(res?.data?.items) ? res.data.items : [];
+      if (items.length) {
+        const byId = new Map(items.map((r) => [r.id, r]));
+        setWorkOrders((cur) =>
+          cur.map((o) =>
+            byId.has(o.id)
+              ? { ...o, ...byId.get(o.id), status: toCanonicalStatus(byId.get(o.id).status) }
+              : o
+          )
+        );
+      }
+
+      setSelectedStatus(PARTS_IN);
+      await fetchWorkOrders();
+      closePartsModal();
+      Alert.alert('Success', `Moved ${ids.length} work order(s) to “${PARTS_IN}”.`);
+    } catch (err) {
+      console.error('Bulk update failed:', err);
+      setWorkOrders(prev);
+      const status = err?.response?.status;
+      const msg =
+        err?.response?.data?.error ||
+        (status === 401
+          ? 'Missing or invalid token. Please sign in again.'
+          : status === 403
+          ? 'Forbidden: one or more selected items are not assigned to you.'
+          : 'Failed to mark selected as Parts In.');
+      Alert.alert('Error', msg);
+    } finally {
+      setIsUpdatingParts(false);
     }
   };
 
@@ -241,11 +380,14 @@ export default function WorkOrdersScreen() {
   const Card = ({ item, drag }) => {
     const latest = getLatestNote(item);
 
+    // Pull both WO and PO in the title for clarity
+    const titleWo = norm(item?.workOrderNumber) || '—';
+    const titlePo = displayPO(item?.workOrderNumber, item?.poNumber) || '—';
+
     return (
       <View style={styles.card}>
-        {/* Title row with optional drag handle in Today view */}
         <View style={styles.cardHeaderRow}>
-          <Text style={styles.cardTitle}>WO/PO #: {item?.poNumber || 'N/A'}</Text>
+          <Text style={styles.cardTitle}>WO: {titleWo}  •  PO: {titlePo}</Text>
           {selectedStatus === 'Today' ? (
             <TouchableOpacity onLongPress={drag} delayLongPress={120} style={styles.dragHandle}>
               <Text style={styles.dragGlyph}>≡</Text>
@@ -268,12 +410,10 @@ export default function WorkOrdersScreen() {
             : 'Not Scheduled'}
         </Text>
 
-        {/* ✨ New line: Status, shown between Schedule and latest note */}
         <Text style={[styles.cardText, { marginBottom: 8 }]}>
           Status: {item?.status || '—'}
         </Text>
 
-        {/* Latest note + right-side actions */}
         <View style={styles.actionsRow}>
           <View style={styles.leftCol}>
             {latest ? (
@@ -362,7 +502,7 @@ export default function WorkOrdersScreen() {
       />
     );
 
-  // ---------- modal actions
+  // ---------- modal actions (single status)
   const closeStatusModal = () => setStatusModal({ id: null, value: null });
   const applyStatusModal = () => {
     if (statusModal.id != null && statusModal.value) {
@@ -373,17 +513,28 @@ export default function WorkOrdersScreen() {
 
   return (
     <View style={styles.container}>
-      {/* Header row with Jeff-only Add button */}
+      {/* Header row with Jeff-only Add button and Parts In bulk button */}
       <View style={styles.headerRow}>
         <Text style={styles.header}>Work Orders</Text>
-        {me?.username === 'Jeff' && (
-          <TouchableOpacity
-            onPress={() => router.push('/screens/AddWorkOrder')}
-            style={styles.addBtn}
-          >
-            <Text style={styles.addBtnText}>+ Add Work Order</Text>
-          </TouchableOpacity>
-        )}
+
+        <View style={{ flexDirection: 'row', gap: 8 }}>
+          {/* Show 'Mark Parts In' only on Waiting on Parts tab with rows */}
+          {normStatus(selectedStatus) === normStatus(PARTS_WAITING) &&
+            filteredOrders.some((o) => normStatus(o.status) === normStatus(PARTS_WAITING)) && (
+              <TouchableOpacity onPress={openPartsModal} style={styles.partsBtn}>
+                <Text style={styles.partsBtnText}>Mark Parts In</Text>
+              </TouchableOpacity>
+            )}
+
+          {me?.username === 'Jeff' && (
+            <TouchableOpacity
+              onPress={() => router.push('/screens/AddWorkOrder')}
+              style={styles.addBtn}
+            >
+              <Text style={styles.addBtnText}>+ Add Work Order</Text>
+            </TouchableOpacity>
+          )}
+        </View>
       </View>
 
       {/* Fixed status bar */}
@@ -392,7 +543,7 @@ export default function WorkOrdersScreen() {
       {/* The list (regular or draggable) */}
       {ListComponent}
 
-      {/* Status selection modal */}
+      {/* Status selection modal (single) */}
       <Modal
         transparent
         visible={statusModal.id != null}
@@ -434,6 +585,106 @@ export default function WorkOrdersScreen() {
           </Pressable>
         </Pressable>
       </Modal>
+
+      {/* ---------- Parts In bulk modal ---------- */}
+      <Modal
+        transparent
+        visible={partsModalOpen}
+        animationType="fade"
+        onRequestClose={closePartsModal}
+      >
+        <Pressable style={styles.modalOverlay} onPress={closePartsModal}>
+          <Pressable style={styles.modalCard} onPress={() => {}}>
+            <Text style={styles.modalTitle}>Mark Parts as Received</Text>
+
+            {/* Controls */}
+            <View style={styles.modalControls}>
+              <TextInput
+                style={styles.modalInput}
+                placeholder="Search WO #, PO #, customer, or site…"
+                value={poSearch}
+                onChangeText={setPoSearch}
+                placeholderTextColor="#94A3B8"
+              />
+              <View style={styles.modalActionsInline}>
+                <TouchableOpacity
+                  style={styles.btnGhost}
+                  onPress={() => setAll(true, visibleWaitingRows)}
+                >
+                  <Text style={styles.btnGhostText}>Select All</Text>
+                </TouchableOpacity>
+                <TouchableOpacity
+                  style={styles.btnGhost}
+                  onPress={() => setAll(false, visibleWaitingRows)}
+                >
+                  <Text style={styles.btnGhostText}>Select None</Text>
+                </TouchableOpacity>
+              </View>
+            </View>
+
+            {/* List */}
+            <View style={{ maxHeight: 420 }}>
+              {visibleWaitingRows.length === 0 ? (
+                <View style={styles.center}>
+                  <Text style={styles.noData}>No POs in “Waiting on Parts”.</Text>
+                </View>
+              ) : (
+                <ScrollView>
+                  <View style={styles.miniHeaderRow}>
+                    <Text style={[styles.miniHeaderCell, { width: 42 }]} />
+                    <Text style={[styles.miniHeaderCell, { flex: 1 }]}>WO #</Text>
+                    <Text style={[styles.miniHeaderCell, { flex: 1 }]}>PO #</Text>
+                    <Text style={[styles.miniHeaderCell, { flex: 1.2 }]}>Customer</Text>
+                    <Text style={[styles.miniHeaderCell, { flex: 1.5 }]}>Site</Text>
+                  </View>
+                  {visibleWaitingRows.map((o) => {
+                    const checked = selectedIds.has(o.id);
+                    return (
+                      <Pressable
+                        key={o.id}
+                        onPress={() => toggleId(o.id)}
+                        style={styles.miniRow}
+                      >
+                        <View style={styles.checkBox}>
+                          {checked ? <Text style={styles.checkGlyph}>✓</Text> : null}
+                        </View>
+                        <Text style={[styles.miniCell, { flex: 1 }]} numberOfLines={1}>
+                          {norm(o.workOrderNumber) || '—'}
+                        </Text>
+                        <Text style={[styles.miniCell, { flex: 1 }]} numberOfLines={1}>
+                          {displayPO(o.workOrderNumber, o.poNumber) || '—'}
+                        </Text>
+                        <Text style={[styles.miniCell, { flex: 1.2 }]} numberOfLines={1}>
+                          {o.customer || '—'}
+                        </Text>
+                        <Text style={[styles.miniCell, { flex: 1.5 }]} numberOfLines={1}>
+                          {o.siteLocation || '—'}
+                        </Text>
+                      </Pressable>
+                    );
+                  })}
+                </ScrollView>
+              )}
+            </View>
+
+            {/* Footer */}
+            <View style={styles.modalButtonsRow}>
+              <TouchableOpacity
+                style={[styles.modalBtnApply, isUpdatingParts && { opacity: 0.6 }]}
+                disabled={isUpdatingParts || selectedIds.size === 0}
+                onPress={markSelectedAsPartsIn}
+              >
+                <Text style={styles.modalBtnText}>
+                  {isUpdatingParts ? 'Updating…' : `Mark Parts In (${selectedIds.size})`}
+                </Text>
+              </TouchableOpacity>
+              <TouchableOpacity style={styles.modalBtnCancel} onPress={closePartsModal}>
+                <Text style={styles.modalBtnText}>Cancel</Text>
+              </TouchableOpacity>
+            </View>
+          </Pressable>
+        </Pressable>
+      </Modal>
     </View>
   );
 }
@@ -459,6 +710,15 @@ const styles = StyleSheet.create({
     borderRadius: 6,
   },
   addBtnText: { color: '#fff', fontWeight: '700' },
+
+  partsBtn: {
+    backgroundColor: '#0ea5a6',
+    paddingHorizontal: 12,
+    paddingVertical: 8,
+    borderRadius: 6,
+    marginRight: 8,
+  },
+  partsBtnText: { color: '#fff', fontWeight: '700' },
 
   /* Fixed chip/filter bar */
   filterBar: {
@@ -585,7 +845,7 @@ const styles = StyleSheet.create({
     marginBottom: 6,
   },
 
-  // Modal styles
+  // Shared modal styles
   modalOverlay: {
     flex: 1,
     backgroundColor: 'rgba(0,0,0,0.35)',
@@ -642,4 +902,74 @@ const styles = StyleSheet.create({
     alignItems: 'center',
   },
   modalBtnText: { color: '#fff', fontWeight: '700' },
+
+  // Parts modal specific
+  modalControls: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    marginBottom: 10,
+  },
+  modalInput: {
+    flex: 1,
+    borderWidth: 1,
+    borderColor: '#E2E8F0',
+    borderRadius: 8,
+    paddingHorizontal: 10,
+    paddingVertical: 8,
+    color: '#0F172A',
+    backgroundColor: '#FFFFFF',
+  },
+  modalActionsInline: {
+    flexDirection: 'row',
+    gap: 8,
+  },
+  btnGhost: {
+    paddingHorizontal: 10,
+    paddingVertical: 8,
+    borderRadius: 8,
+    borderWidth: 1,
+    borderColor: '#E2E8F0',
+    backgroundColor: '#FFFFFF',
+  },
+  btnGhostText: { color: '#0F172A', fontWeight: '600' },
+
+  miniHeaderRow: {
+    flexDirection: 'row',
+    paddingVertical: 6,
+    borderBottomWidth: 1,
+    borderBottomColor: '#E2E8F0',
+    marginBottom: 4,
+  },
+  miniHeaderCell: {
+    fontWeight: '700',
+    color: '#0F172A',
+  },
+  miniRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingVertical: 10,
+    borderBottomWidth: StyleSheet.hairlineWidth,
+    borderBottomColor: '#E2E8F0',
+  },
+  checkBox: {
+    width: 22,
+    height: 22,
+    borderRadius: 4,
+    borderWidth: 1,
+    borderColor: '#CBD5E1',
+    marginRight: 8,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: '#FFFFFF',
+  },
+  checkGlyph: {
+    fontSize: 14,
+    color: '#0F172A',
+    fontWeight: '700',
+  },
+  miniCell: {
+    color: '#0F172A',
+    paddingRight: 8,
+  },
 });
