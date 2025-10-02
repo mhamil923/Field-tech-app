@@ -1,5 +1,5 @@
 // File: app/_layout.tsx
-import React from 'react';
+import React, { useRef } from 'react';
 import { Text, StyleSheet, TouchableOpacity, View } from 'react-native';
 import { Stack, useRouter, usePathname } from 'expo-router';
 import { SafeAreaView } from 'react-native-safe-area-context';
@@ -10,31 +10,40 @@ function Header() {
   const router = useRouter();
   const pathname = usePathname();
 
-  const go = (path: string) => async () => {
-    if (pathname !== path) {
-      // Use replace so we don't stack multiple copies of the same tab
-      router.replace(path);
+  // Prevent rapid double taps from queuing multiple replaces
+  const isNavigatingRef = useRef(false);
+  const withNavLock = (fn: () => void) => () => {
+    if (isNavigatingRef.current) return;
+    isNavigatingRef.current = true;
+    try { fn(); } finally {
+      // small delay to avoid immediate re-entry on very fast taps
+      setTimeout(() => { isNavigatingRef.current = false; }, 250);
     }
   };
 
-  const logout = async () => {
-    try {
-      await AsyncStorage.removeItem('jwt');
-    } catch {}
-    router.replace('/screens/LoginScreen');
-  };
+  const go = (path: string) =>
+    withNavLock(() => {
+      if (pathname !== path) {
+        router.replace(path);
+      }
+    });
 
-  const Tab = ({
-    label,
-    path,
-    onPress,
-  }: {
-    label: string;
-    path?: string;
-    onPress?: () => void;
-  }) => {
+  const logout = withNavLock(async () => {
+    try { await AsyncStorage.removeItem('jwt'); } catch {}
+    router.replace('/screens/LoginScreen');
+  });
+
+  const TABS: Array<{ label: string; path?: string; onPress?: () => void }> = [
+    { label: 'Home',        path: '/' },
+    { label: 'Work Orders', path: '/screens/WorkOrdersScreen' },
+    { label: 'History',     path: '/screens/HistoryScreen' },
+    { label: 'Calendar',    path: '/calendar' },
+    { label: 'Logout',      onPress: logout },
+  ];
+
+  const Tab = ({ label, path, onPress }: { label: string; path?: string; onPress?: () => void }) => {
     const active = path ? pathname === path : false;
-    const press = onPress || (path ? go(path) : undefined);
+    const press = onPress ?? (path ? go(path) : undefined);
 
     return (
       <TouchableOpacity
@@ -52,13 +61,10 @@ function Header() {
   return (
     <SafeAreaView edges={['top']} style={styles.headerSafe}>
       <View style={styles.header}>
-        {/* Evenly spaced tab row, no scroll */}
         <View style={styles.tabsRow}>
-          <Tab label="Home" path="/" />
-          <Tab label="Work Orders" path="/screens/WorkOrdersScreen" />
-          <Tab label="History" path="/screens/HistoryScreen" />
-          <Tab label="Calendar" path="/calendar" />
-          <Tab label="Logout" onPress={logout} />
+          {TABS.map((t) => (
+            <Tab key={t.label} {...t} />
+          ))}
         </View>
       </View>
     </SafeAreaView>
@@ -84,7 +90,6 @@ const styles = StyleSheet.create({
     flex: 1,
     backgroundColor: '#F1F5F9',
   },
-
   headerSafe: {
     backgroundColor: '#FFFFFF',
   },
@@ -99,8 +104,7 @@ const styles = StyleSheet.create({
     elevation: 2,
     width: '100%',
   },
-
-  // Fixed top bar with 5 evenly spaced tabs, no horizontal scroll
+  // Fixed top bar with evenly spaced tabs
   tabsRow: {
     flexDirection: 'row',
     alignItems: 'stretch',
@@ -108,9 +112,8 @@ const styles = StyleSheet.create({
     paddingHorizontal: 8,
     paddingVertical: 8,
   },
-
   tab: {
-    flex: 1,                 // each tab gets equal width
+    flex: 1,
     alignItems: 'center',
     justifyContent: 'center',
     paddingVertical: 10,
