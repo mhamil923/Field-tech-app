@@ -122,12 +122,15 @@ export default function HomeScreen() {
       .sort((a, b) => new Date(a.scheduledDate) - new Date(b.scheduledDate));
   }, [orders, endOfToday, endOf7Days]);
 
+  // Helper to show WO # cleanly
+  const woNumber = (o) => (o?.workOrderNumber ? String(o.workOrderNumber) : '—');
+
   const renderCard = (order) => {
     const latest = getLatestNote(order);
     return (
       <View key={order.id} style={styles.card}>
-        {/* Title */}
-        <Text style={styles.cardTitle}>WO/PO #: {order.poNumber ?? 'N/A'}</Text>
+        {/* Title: show WORK ORDER number */}
+        <Text style={styles.cardTitle}>WO #: {woNumber(order)}</Text>
 
         {/* Basic details */}
         <Text style={styles.cardText}>Customer: {order.customer ?? '—'}</Text>
