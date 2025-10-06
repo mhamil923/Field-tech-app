@@ -1,53 +1,87 @@
 // File: app/_layout.tsx
-import React, { useRef } from 'react';
-import { Text, StyleSheet, TouchableOpacity, View } from 'react-native';
+import React, { useRef, useMemo } from 'react';
+import { Text, StyleSheet, TouchableOpacity, View, Platform } from 'react-native';
 import { Stack, useRouter, usePathname } from 'expo-router';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { GestureHandlerRootView } from 'react-native-gesture-handler';
 import AsyncStorage from '@react-native-async-storage/async-storage';
+// import * as Linking from 'expo-linking'; // if you ever want external links
 
 function Header() {
   const router = useRouter();
-  const pathname = usePathname();
+  const pathname = (usePathname() || '').replace(/\/+$/, '') || '/';
 
-  // Prevent rapid double taps from queuing multiple replaces
+  // 1) Robust nav lock to stop double navigations
   const isNavigatingRef = useRef(false);
+  const lastNavTsRef = useRef(0);
+  const NAV_COOLDOWN_MS = 500;
+
   const withNavLock = (fn: () => void) => () => {
-    if (isNavigatingRef.current) return;
+    const now = Date.now();
+    if (isNavigatingRef.current || now - lastNavTsRef.current < NAV_COOLDOWN_MS) return;
     isNavigatingRef.current = true;
-    try { fn(); } finally {
-      // small delay to avoid immediate re-entry on very fast taps
-      setTimeout(() => { isNavigatingRef.current = false; }, 250);
+    lastNavTsRef.current = now;
+    try {
+      fn();
+    } finally {
+      setTimeout(() => {
+        isNavigatingRef.current = false;
+      }, NAV_COOLDOWN_MS);
     }
   };
 
+  // Helper: internal navigation only (prevents external/deeplink spawning)
   const go = (path: string) =>
     withNavLock(() => {
-      if (pathname !== path) {
-        router.replace(path);
-      }
+      const target = path.replace(/\/+$/, '') || '/';
+      // 2) Ignore if already on the same section
+      if (pathname === target || pathname.startsWith(target + '/')) return;
+      router.replace(target);
     });
 
   const logout = withNavLock(async () => {
-    try { await AsyncStorage.removeItem('jwt'); } catch {}
+    try {
+      await AsyncStorage.removeItem('jwt');
+    } catch {}
     router.replace('/screens/LoginScreen');
   });
 
+  // If you truly want to open an external web calendar instead of an in-app screen:
+  // const openExternal = withNavLock(() => {
+  //   const url = 'https://main.d2c3mwinxmekdi.amplifyapp.com/calendar';
+  //   Linking.openURL(url);
+  // });
+
+  // 3) Ensure these paths actually exist in your app folder structure
   const TABS: Array<{ label: string; path?: string; onPress?: () => void }> = [
-    { label: 'Home',        path: '/' },
+    { label: 'Home',        path: '/' }, // usually app/index.tsx
     { label: 'Work Orders', path: '/screens/WorkOrdersScreen' },
     { label: 'History',     path: '/screens/HistoryScreen' },
-    { label: 'Calendar',    path: '/calendar' },
+    // Use an in-app screen for Calendar to keep it seamless:
+    { label: 'Calendar',    path: '/screens/CalendarScreen' }, // <-- make sure this exists
+    // If you prefer the external web calendar, replace the above with:
+    // { label: 'Calendar',    onPress: openExternal },
     { label: 'Logout',      onPress: logout },
   ];
 
-  const Tab = ({ label, path, onPress }: { label: string; path?: string; onPress?: () => void }) => {
-    const active = path ? pathname === path : false;
+  const tabs = useMemo(() => TABS, []); // stable identity
+
+  const Tab = ({
+    label,
+    path,
+    onPress,
+  }: {
+    label: string;
+    path?: string;
+    onPress?: () => void;
+  }) => {
+    const active = path ? (pathname === path || pathname.startsWith(path + '/')) : false;
     const press = onPress ?? (path ? go(path) : undefined);
 
     return (
       <TouchableOpacity
-        onPress={press}
+        onPress={active ? undefined : press}
+        disabled={active}
         activeOpacity={0.8}
         style={[styles.tab, active && styles.tabActive]}
       >
@@ -62,7 +96,7 @@ function Header() {
     <SafeAreaView edges={['top']} style={styles.headerSafe}>
       <View style={styles.header}>
         <View style={styles.tabsRow}>
-          {TABS.map((t) => (
+          {tabs.map((t) => (
             <Tab key={t.label} {...t} />
           ))}
         </View>
@@ -79,6 +113,8 @@ export default function Layout() {
           header: () => <Header />,
           headerShown: true,
           contentStyle: { backgroundColor: '#F1F5F9' },
+          // On Android, this helps avoid visual flicker while replacing:
+          animation: Platform.OS === 'android' ? 'fade' : 'default',
         }}
       />
     </GestureHandlerRootView>
@@ -104,7 +140,6 @@ const styles = StyleSheet.create({
     elevation: 2,
     width: '100%',
   },
-  // Fixed top bar with evenly spaced tabs
   tabsRow: {
     flexDirection: 'row',
     alignItems: 'stretch',
@@ -117,7 +152,7 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
     paddingVertical: 10,
-    marginHorizontal: 4,     // small gutter between tabs
+    marginHorizontal: 4,
     borderRadius: 8,
     backgroundColor: '#F8FAFC',
     borderWidth: 1,
