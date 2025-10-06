@@ -21,7 +21,13 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 import DraggableFlatList from 'react-native-draggable-flatlist';
 import api from '../../constants/api';
 
+/** ───────────────────────────────────────────────────────────────────────────
+ *  STATUS SET — keep in sync with server/web
+ *  Added: "New" and "Needs to be Quoted"
+ *  ─────────────────────────────────────────────────────────────────────────── */
 const STATUSES = [
+  'New',
+  'Needs to be Quoted',
   'Needs to be Scheduled',
   'Scheduled',
   'Waiting for Approval',
@@ -41,6 +47,7 @@ const normStatus = statusKey;
 
 const CANON = new Map(STATUSES.map((label) => [statusKey(label), label]));
 const STATUS_SYNONYMS = new Map([
+  // Parts In
   ['part in', 'Parts In'],
   ['parts in', 'Parts In'],
   ['parts  in', 'Parts In'],
@@ -49,11 +56,19 @@ const STATUS_SYNONYMS = new Map([
   ['partsin', 'Parts In'],
   ['part s in', 'Parts In'],
 
+  // Waiting on Parts
   ['waiting on part', 'Waiting on Parts'],
   ['waiting on parts', 'Waiting on Parts'],
   ['waiting-on-parts', 'Waiting on Parts'],
   ['waiting_on_parts', 'Waiting on Parts'],
   ['waitingonparts', 'Waiting on Parts'],
+
+  // Needs to be Quoted (common variants)
+  ['needs quote', 'Needs to be Quoted'],
+  ['need quote', 'Needs to be Quoted'],
+  ['quote needed', 'Needs to be Quoted'],
+  ['to be quoted', 'Needs to be Quoted'],
+  ['needs quotation', 'Needs to be Quoted'],
 ]);
 const toCanonicalStatus = (s) =>
   CANON.get(statusKey(s)) || STATUS_SYNONYMS.get(statusKey(s)) || norm(s);
@@ -167,6 +182,12 @@ export default function WorkOrdersScreen() {
     return { byStatus: map, all: workOrders.length, today };
   }, [workOrders]);
 
+  // Do we have ANY “Waiting on Parts” items? (controls Parts button visibility globally)
+  const anyWaitingOnParts = useMemo(
+    () => workOrders.some((o) => normStatus(o.status) === normStatus(PARTS_WAITING)),
+    [workOrders]
+  );
+
   // ---------- helpers
   const openInGoogleMaps = async (query) => {
     const q = encodeURIComponent(query || '');
@@ -255,6 +276,7 @@ export default function WorkOrdersScreen() {
 
   // ---------- “Mark Parts In” modal helpers ----------
   const openPartsModal = () => {
+    // Ensure we’re looking at the Waiting tab for context
     if (normStatus(selectedStatus) !== normStatus(PARTS_WAITING)) {
       setSelectedStatus(PARTS_WAITING);
     }
@@ -284,7 +306,7 @@ export default function WorkOrdersScreen() {
   };
 
   const visibleWaitingRows = useMemo(() => {
-    const base = filteredOrders.filter(
+    const base = workOrders.filter(
       (o) => normStatus(o.status) === normStatus(PARTS_WAITING)
     );
     const q = poSearch.trim().toLowerCase();
@@ -296,7 +318,7 @@ export default function WorkOrdersScreen() {
       const site = norm(o.siteLocation).toLowerCase();
       return wo.includes(q) || po.includes(q) || cust.includes(q) || site.includes(q);
     });
-  }, [filteredOrders, poSearch]);
+  }, [workOrders, poSearch]);
 
   const markSelectedAsPartsIn = async () => {
     if (!selectedIds.size) return;
@@ -311,7 +333,6 @@ export default function WorkOrdersScreen() {
 
     try {
       const res = await api.put('/work-orders/bulk-status', { ids, status: PARTS_IN });
-      // Optionally merge server-returned rows (if present)
       const items = Array.isArray(res?.data?.items) ? res.data.items : [];
       if (items.length) {
         const byId = new Map(items.map((r) => [r.id, r]));
@@ -379,8 +400,6 @@ export default function WorkOrdersScreen() {
   // ---------- card UI (shared by regular & draggable lists)
   const Card = ({ item, drag }) => {
     const latest = getLatestNote(item);
-
-    // Pull both WO and PO in the title for clarity
     const titleWo = norm(item?.workOrderNumber) || '—';
     const titlePo = displayPO(item?.workOrderNumber, item?.poNumber) || '—';
 
@@ -518,13 +537,12 @@ export default function WorkOrdersScreen() {
         <Text style={styles.header}>Work Orders</Text>
 
         <View style={{ flexDirection: 'row', gap: 8 }}>
-          {/* Show 'Mark Parts In' only on Waiting on Parts tab with rows */}
-          {normStatus(selectedStatus) === normStatus(PARTS_WAITING) &&
-            filteredOrders.some((o) => normStatus(o.status) === normStatus(PARTS_WAITING)) && (
-              <TouchableOpacity onPress={openPartsModal} style={styles.partsBtn}>
-                <Text style={styles.partsBtnText}>Mark Parts In</Text>
-              </TouchableOpacity>
-            )}
+          {/* Show 'Mark Parts In' whenever there are any Waiting-on-Parts orders */}
+          {anyWaitingOnParts && (
+            <TouchableOpacity onPress={openPartsModal} style={styles.partsBtn}>
+              <Text style={styles.partsBtnText}>Mark Parts In</Text>
+            </TouchableOpacity>
+          )}
 
           {me?.username === 'Jeff' && (
             <TouchableOpacity
