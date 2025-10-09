@@ -1,5 +1,4 @@
-// File: app/index.js
-import React, { useEffect, useMemo, useState, useCallback } from 'react';
+import React, { useEffect, useMemo, useState, useCallback, useRef } from 'react';
 import {
   View,
   Text,
@@ -16,6 +15,21 @@ import API_BASE_URL from '../constants/API_BASE_URL';
 
 export default function HomeScreen() {
   const router = useRouter();
+
+  // nav-once guard to avoid stacking Login or Details
+  const navLockRef = useRef(false);
+  const navigateOnce = (fn) => {
+    if (navLockRef.current) return;
+    navLockRef.current = true;
+    try {
+      fn();
+    } finally {
+      setTimeout(() => {
+        navLockRef.current = false;
+      }, 400);
+    }
+  };
+
   const [orders, setOrders] = useState([]);
   const [todayOrderIds, setTodayOrderIds] = useState([]);
 
@@ -40,7 +54,8 @@ export default function HomeScreen() {
     } catch (error) {
       console.error('Error fetching work orders:', error);
       if (error.response?.status === 401) {
-        router.push('/screens/LoginScreen');
+        // Top-level route => replace (not push) and guard
+        navigateOnce(() => router.replace('/screens/LoginScreen'));
       }
     }
   }, [router]);
@@ -51,7 +66,7 @@ export default function HomeScreen() {
     loadTodayOrder();
   }, [fetchOrders, loadTodayOrder]);
 
-  // Refresh when returning to Home (picks up re-ordered Today list)
+  // Refresh when returning to Home
   useFocusEffect(
     useCallback(() => {
       fetchOrders();
@@ -122,17 +137,14 @@ export default function HomeScreen() {
       .sort((a, b) => new Date(a.scheduledDate) - new Date(b.scheduledDate));
   }, [orders, endOfToday, endOf7Days]);
 
-  // Helper to show WO # cleanly
   const woNumber = (o) => (o?.workOrderNumber ? String(o.workOrderNumber) : '—');
 
   const renderCard = (order) => {
     const latest = getLatestNote(order);
     return (
       <View key={order.id} style={styles.card}>
-        {/* Title: show WORK ORDER number */}
         <Text style={styles.cardTitle}>WO #: {woNumber(order)}</Text>
 
-        {/* Basic details */}
         <Text style={styles.cardText}>Customer: {order.customer ?? '—'}</Text>
         <Text style={styles.cardText}>Site: {order.siteLocation ?? '—'}</Text>
         <Text style={styles.cardText}>Problem: {order.problemDescription ?? '—'}</Text>
@@ -142,7 +154,6 @@ export default function HomeScreen() {
           </Text>
         )}
 
-        {/* Layout to mirror WorkOrdersScreen: note under info (left) + button on right */}
         <View style={styles.actionsRow}>
           <View style={styles.leftCol}>
             {latest ? (
@@ -160,7 +171,9 @@ export default function HomeScreen() {
           <View style={styles.rightCol}>
             <TouchableOpacity
               style={styles.viewButton}
-              onPress={() => router.push(`/screens/ViewWorkOrder?id=${order.id}`)}
+              onPress={() =>
+                navigateOnce(() => router.push(`/screens/ViewWorkOrder?id=${order.id}`))
+              }
             >
               <Text style={styles.viewButtonText}>View Details</Text>
             </TouchableOpacity>
@@ -174,7 +187,6 @@ export default function HomeScreen() {
     <ScrollView contentContainerStyle={styles.container}>
       <Text style={styles.header}>Welcome to the CRM Dashboard</Text>
 
-      {/* Agenda for Today (ordered like the Today tab) */}
       <View style={styles.section}>
         <Text style={styles.sectionTitle}>
           Agenda for Today ({startOfToday.format('YYYY-MM-DD')})
@@ -186,7 +198,6 @@ export default function HomeScreen() {
         )}
       </View>
 
-      {/* Upcoming Work Orders - only next 7 days */}
       <View style={styles.section}>
         <Text style={styles.sectionTitle}>Upcoming Work Orders (next 7 days)</Text>
         {upcomingOrders.length ? (
@@ -229,12 +240,10 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     borderColor: '#E2E8F0',
     marginBottom: 12,
-    // iOS shadow
     shadowColor: '#000',
     shadowOpacity: 0.05,
     shadowOffset: { width: 0, height: 2 },
     shadowRadius: 4,
-    // Android elevation
     elevation: 2,
   },
   cardTitle: {
@@ -249,22 +258,14 @@ const styles = StyleSheet.create({
     color: '#2B2D42',
   },
 
-  // layout to match WorkOrdersScreen
   actionsRow: {
     flexDirection: 'row',
     alignItems: 'flex-start',
     justifyContent: 'space-between',
     marginTop: 12,
   },
-  leftCol: {
-    flex: 1,
-    paddingRight: 10,
-  },
-  rightCol: {
-    flexShrink: 1,
-    alignItems: 'flex-end',
-    maxWidth: '60%',
-  },
+  leftCol: { flex: 1, paddingRight: 10 },
+  rightCol: { flexShrink: 1, alignItems: 'flex-end', maxWidth: '60%' },
 
   latestNoteBox: {
     backgroundColor: '#F8FAFC',
@@ -287,8 +288,5 @@ const styles = StyleSheet.create({
   },
   viewButtonText: { color: '#FFFFFF', fontSize: 15, fontWeight: 'bold' },
 
-  noData: {
-    fontStyle: 'italic',
-    color: '#8D99AE',
-  },
+  noData: { fontStyle: 'italic', color: '#8D99AE' },
 });

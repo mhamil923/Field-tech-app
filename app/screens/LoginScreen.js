@@ -1,6 +1,4 @@
-// File: app/screens/LoginScreen.js
-
-import React, { useState } from "react";
+import React, { useRef, useState } from "react";
 import {
   View,
   Text,
@@ -16,11 +14,28 @@ import { useRouter } from "expo-router";
 
 export default function LoginScreen() {
   const router = useRouter();
+
+  // nav-once guard to prevent stacking multiple screens
+  const navLockRef = useRef(false);
+  const navigateOnceReplace = (path) => {
+    if (navLockRef.current) return;
+    navLockRef.current = true;
+    try {
+      router.replace(path);
+    } finally {
+      setTimeout(() => {
+        navLockRef.current = false;
+      }, 400);
+    }
+  };
+
   const [username, setUsername] = useState("");
   const [password, setPassword] = useState("");
   const [loading, setLoading] = useState(false);
 
   const handleLogin = async () => {
+    if (loading) return; // guard: don't allow concurrent submits
+
     const u = username.trim();
     const p = password.trim();
     if (!u || !p) {
@@ -30,27 +45,27 @@ export default function LoginScreen() {
     setLoading(true);
     try {
       const { data } = await api.post("/auth/login", { username: u, password: p });
-      // data.token is the JWT from backend
       await AsyncStorage.setItem("jwt", data.token);
 
-      // (optional) keep a couple of convenience fields
-      // decode *lightly* without a library (safe enough for non-security UI decisions)
+      // Optional: store convenience fields (best-effort, fully wrapped)
       try {
-        const [, payload] = data.token.split(".");
-        const decoded = JSON.parse(
-          Buffer.from(payload.replace(/-/g, "+").replace(/_/g, "/"), "base64").toString("utf8")
-        );
-        if (decoded?.username) await AsyncStorage.setItem("username", String(decoded.username));
-        if (decoded?.role) await AsyncStorage.setItem("role", String(decoded.role));
-
-        // You can route differently by role if you want:
-        // if (decoded.role === "tech") router.replace("/screens/WorkOrdersScreen");
-        // else router.replace("/screens/WorkOrdersScreen");
+        const [, payload] = String(data.token).split(".");
+        const base64 = payload?.replace(/-/g, "+").replace(/_/g, "/");
+        if (base64) {
+          const jsonStr =
+            typeof atob === "function"
+              ? atob(base64)
+              : Buffer.from(base64, "base64").toString("utf8");
+          const decoded = JSON.parse(jsonStr);
+          if (decoded?.username) await AsyncStorage.setItem("username", String(decoded.username));
+          if (decoded?.role) await AsyncStorage.setItem("role", String(decoded.role));
+        }
       } catch {
-        // ignore decode issues; token still saved and interceptor will use it
+        // ignore decode issues; token is already saved
       }
 
-      router.replace("/screens/WorkOrdersScreen");
+      // Top-level route => replace (not push) and guarded
+      navigateOnceReplace("/screens/WorkOrdersScreen");
     } catch (err) {
       console.error("Login error", err);
       const msg =
@@ -78,6 +93,7 @@ export default function LoginScreen() {
         onChangeText={setUsername}
         editable={!loading}
         returnKeyType="next"
+        // no navigation here; just move focus via keyboard UI
       />
 
       <TextInput
@@ -90,7 +106,9 @@ export default function LoginScreen() {
         onChangeText={setPassword}
         editable={!loading}
         returnKeyType="go"
-        onSubmitEditing={() => (canSubmit ? handleLogin() : null)}
+        onSubmitEditing={() => {
+          if (canSubmit) handleLogin(); // submit once; nav guard prevents stacking
+        }}
       />
 
       {loading ? (
