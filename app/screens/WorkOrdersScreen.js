@@ -23,7 +23,8 @@ import api from '../../constants/api';
 
 /** ───────────────────────────────────────────────────────────────────────────
  *  STATUS SET — keep in sync with server/web
- *  Added: "New" and "Needs to be Quoted"
+ *  Added: "New", "Needs to be Quoted", and "Needs to be Invoiced"
+ *  Order matches web (chips & selectors): "Needs to be Invoiced" BEFORE "Completed"
  *  ─────────────────────────────────────────────────────────────────────────── */
 const STATUSES = [
   'New',
@@ -33,6 +34,7 @@ const STATUSES = [
   'Waiting for Approval',
   'Waiting on Parts',
   'Parts In',
+  'Needs to be Invoiced', // ← NEW & positioned before Completed
   'Completed',
 ];
 
@@ -69,7 +71,15 @@ const STATUS_SYNONYMS = new Map([
   ['quote needed', 'Needs to be Quoted'],
   ['to be quoted', 'Needs to be Quoted'],
   ['needs quotation', 'Needs to be Quoted'],
+
+  // Needs to be Invoiced (common variants)
+  ['needs to be invoiced', 'Needs to be Invoiced'],
+  ['need to be invoiced', 'Needs to be Invoiced'],
+  ['needs invoiced', 'Needs to be Invoiced'],
+  ['needs-invoiced', 'Needs to be Invoiced'],
+  ['needs_invoiced', 'Needs to be Invoiced'],
 ]);
+
 const toCanonicalStatus = (s) =>
   CANON.get(statusKey(s)) || STATUS_SYNONYMS.get(statusKey(s)) || norm(s);
 
