@@ -30,13 +30,18 @@ import api, { fileUrl } from '../../constants/api';
 
 const { width: screenWidth, height: screenHeight } = Dimensions.get('window');
 
-// Standard statuses
+/** ─────────────────────────────────────────────────────────────
+ * Statuses (keep in sync with web/server)
+ * ───────────────────────────────────────────────────────────── */
 const STATUS_OPTIONS = [
-  'Needs to be Scheduled',
+  'New',
   'Scheduled',
+  'Needs to be Quoted',
   'Waiting for Approval',
+  'Approved',
   'Waiting on Parts',
-  'Parts In',
+  'Needs to be Scheduled',
+  'Needs to be Invoiced',
   'Completed',
 ];
 
@@ -68,51 +73,33 @@ const PDF_VIEWER_HTML = `
       pdfjsLib.GlobalWorkerOptions.workerSrc =
         "https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js";
     }
-
-    function b64ToUint8(b64) {
-      const bin = atob(b64);
-      const bytes = new Uint8Array(bin.length);
-      for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
-      return bytes;
-    }
-
-    async function renderPDF() {
-      try {
+    function b64ToUint8(b64){const bin=atob(b64);const bytes=new Uint8Array(bin.length);for(let i=0;i<bin.length;i++)bytes[i]=bin.charCodeAt(i);return bytes;}
+    async function renderPDF(){
+      try{
         const b64 = window.PDF_BASE64 || '';
-        if (!b64) throw new Error('Missing PDF data.');
+        if(!b64) throw new Error('Missing PDF data.');
         const doc = await pdfjsLib.getDocument({ data: b64ToUint8(b64) }).promise;
-        const container = document.getElementById('pages');
-        container.innerHTML = '';
-
-        for (let i = 1; i <= doc.numPages; i++) {
+        const container = document.getElementById('pages'); container.innerHTML='';
+        for (let i=1; i<=doc.numPages; i++){
           const page = await doc.getPage(i);
           const vp = page.getViewport({ scale: 1 });
           const targetWidth = Math.min(1100, Math.max(600, vp.width));
           const scale = targetWidth / vp.width;
           const viewport = page.getViewport({ scale });
-
           const wrap = document.createElement('div'); wrap.className = 'pageWrap';
-          const pageCanvas = document.createElement('canvas'); pageCanvas.className = 'page';
-          pageCanvas.width = Math.floor(viewport.width); pageCanvas.height = Math.floor(viewport.height);
-          wrap.appendChild(pageCanvas);
-          container.appendChild(wrap);
-
-          const ctx = pageCanvas.getContext('2d');
-          await page.render({ canvasContext: ctx, viewport }).promise;
+          const c = document.createElement('canvas'); c.className='page';
+          c.width = Math.floor(viewport.width); c.height = Math.floor(viewport.height);
+          wrap.appendChild(c); container.appendChild(wrap);
+          await page.render({ canvasContext: c.getContext('2d'), viewport }).promise;
         }
-
-        setTimeout(() => {
-          const h = Math.max(
-            document.documentElement.scrollHeight,
-            document.body.scrollHeight
-          );
-          window.ReactNativeWebView?.postMessage('HEIGHT:' + h);
-        }, 50);
-      } catch (e) {
-        window.ReactNativeWebView?.postMessage('ERROR:' + (e?.message || String(e)));
+        setTimeout(()=>{
+          const h=Math.max(document.documentElement.scrollHeight,document.body.scrollHeight);
+          window.ReactNativeWebView?.postMessage('HEIGHT:'+h);
+        },50);
+      } catch(e){
+        window.ReactNativeWebView?.postMessage('ERROR:'+(e?.message||String(e)));
       }
     }
-
     window.addEventListener('DOMContentLoaded', renderPDF);
   </script>
 </body>
@@ -164,112 +151,61 @@ const ANNOTATOR_HTML = `
   <div id="cursor" class="cursor"></div>
 
   <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
-  <script>pdfjsLib.GlobalWorkerOptions.workerSrc = "https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js";</script>
+  <script>pdfjsLib.GlobalWorkerOptions.workerSrc="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js";</script>
   <script src="https://unpkg.com/pdf-lib@1.17.1/dist/pdf-lib.min.js"></script>
-
   <script>
     function b64ToUint8(b64){const bin=atob(b64);const bytes=new Uint8Array(bin.length);for(let i=0;i<bin.length;i++)bytes[i]=bin.charCodeAt(i);return bytes;}
     function dataURLFromCanvas(c){return c.toDataURL('image/png');}
 
-    const state = { tool: 'pen', drawEnabled: false, pages: [] };
-
-    function applyPointerMode() {
-      for (const p of state.pages) {
-        p.overlayCanvas.style.pointerEvents = state.drawEnabled ? 'auto' : 'none';
-        p.overlayCanvas.style.touchAction = state.drawEnabled ? 'none' : 'auto';
-        p.overlayCanvas.style.cursor = state.drawEnabled
-          ? (state.tool === 'erase' ? 'cell' : 'crosshair')
-          : 'default';
+    const state={tool:'pen',drawEnabled:false,pages:[]};
+    function applyPointerMode(){
+      for(const p of state.pages){
+        p.overlayCanvas.style.pointerEvents=state.drawEnabled?'auto':'none';
+        p.overlayCanvas.style.touchAction=state.drawEnabled?'none':'auto';
+        p.overlayCanvas.style.cursor=state.drawEnabled?(state.tool==='erase'?'cell':'crosshair'):'default';
       }
-      const c = document.getElementById('cursor');
-      if (!state.drawEnabled) { c.style.display = 'none'; return; }
-      c.style.display = 'block';
-      c.className = state.tool === 'erase' ? 'cursor' : 'cursor pen';
+      const c=document.getElementById('cursor');
+      if(!state.drawEnabled){c.style.display='none';return;}
+      c.style.display='block'; c.className=state.tool==='erase'?'cursor':'cursor pen';
     }
-    function setTool(t){ state.tool=t; applyPointerMode(); }
-    function setDrawEnabled(on){ state.drawEnabled=!!on; applyPointerMode(); }
-
-    function pushUndo(p){
-      try{
-        const snap=p.overlayCtx.getImageData(0,0,p.overlayCanvas.width,p.overlayCanvas.height);
-        p.strokes.push(snap); if(p.strokes.length>50) p.strokes.shift();
-      }catch(e){}
-    }
-    function undo(p){ if(p.strokes.length) p.overlayCtx.putImageData(p.strokes.pop(),0,0); }
-    function clearPage(p){ pushUndo(p); p.overlayCtx.clearRect(0,0,p.overlayCanvas.width,p.overlayCanvas.height); }
-
-    function updateCursor(ev){
-      const c = document.getElementById('cursor');
-      const x = (ev.touches?ev.touches[0].clientX:ev.clientX);
-      const y = (ev.touches?ev.touches[0].clientY:ev.clientY);
-      c.style.left = x + 'px'; c.style.top  = y + 'px';
-    }
+    function setTool(t){state.tool=t;applyPointerMode();}
+    function setDrawEnabled(on){state.drawEnabled=!!on;applyPointerMode();}
+    function pushUndo(p){try{const snap=p.overlayCtx.getImageData(0,0,p.overlayCanvas.width,p.overlayCanvas.height);p.strokes.push(snap);if(p.strokes.length>50)p.strokes.shift();}catch(e){}}
+    function undo(p){if(p.strokes.length)p.overlayCtx.putImageData(p.strokes.pop(),0,0);}
+    function clearPage(p){pushUndo(p);p.overlayCtx.clearRect(0,0,p.overlayCanvas.width,p.overlayCanvas.height);}
+    function updateCursor(ev){const c=document.getElementById('cursor');const x=(ev.touches?ev.touches[0].clientX:ev.clientX);const y=(ev.touches?ev.touches[0].clientY:ev.clientY);c.style.left=x+'px';c.style.top=y+'px';}
 
     async function renderPDF(){
       try{
         const b64=window.PDF_BASE64||''; if(!b64) throw new Error('Missing PDF data.');
         const doc=await pdfjsLib.getDocument({data:b64ToUint8(b64)}).promise;
         const container=document.getElementById('pages'); container.innerHTML='';
-
         for(let i=1;i<=doc.numPages;i++){
           const page=await doc.getPage(i);
           const vp=page.getViewport({scale:1});
           const targetWidth=Math.min(900,Math.max(600,vp.width));
           const scale=targetWidth/vp.width;
           const viewport=page.getViewport({scale});
-
           const wrap=document.createElement('div'); wrap.className='pageWrap';
           const pageCanvas=document.createElement('canvas'); pageCanvas.className='page';
           pageCanvas.width=Math.floor(viewport.width); pageCanvas.height=Math.floor(viewport.height);
           wrap.appendChild(pageCanvas);
-
           const overlay=document.createElement('canvas'); overlay.className='overlay';
           overlay.width=pageCanvas.width; overlay.height=pageCanvas.height;
           overlay.style.width = pageCanvas.style.width = '100%';
           overlay.style.height = pageCanvas.style.height = 'auto';
           wrap.appendChild(overlay);
-
           container.appendChild(wrap);
-
           const ctx=pageCanvas.getContext('2d');
           await page.render({canvasContext:ctx,viewport}).promise;
-
           const octx=overlay.getContext('2d');
-          octx.lineWidth=3; octx.lineCap='round'; octx.lineJoin='round'; octx.strokeStyle='#000'; octx.globalCompositeOperation='source-over';
-
-          const pState={pageCanvas,overlayCanvas:overlay,overlayCtx:octx,strokes:[]};
-          state.pages.push(pState);
-
+          octx.lineWidth=3;octx.lineCap='round';octx.lineJoin='round';octx.strokeStyle='#000';octx.globalCompositeOperation='source-over';
+          const pState={pageCanvas,overlayCanvas:overlay,overlayCtx:octx,strokes:[]}; state.pages.push(pState);
           let drawing=false,lastX=0,lastY=0;
-          function pos(ev){
-            const r=overlay.getBoundingClientRect();
-            const x=(ev.touches?ev.touches[0].clientX:ev.clientX)-r.left;
-            const y=(ev.touches?ev.touches[0].clientY:ev.clientY)-r.top;
-            const sx=overlay.width/r.width, sy=overlay.height/r.height;
-            return {x:x*sx,y:y*sy};
-          }
-          function start(ev){
-            if(!state.drawEnabled) return;
-            ev.preventDefault(); updateCursor(ev);
-            pushUndo(pState); drawing=true;
-            const {x,y}=pos(ev); lastX=x; lastY=y;
-          }
-          function move(ev){
-            updateCursor(ev);
-            if(!state.drawEnabled || !drawing) return;
-            ev.preventDefault();
-            const {x,y}=pos(ev);
-            if(state.tool==='erase'){
-              octx.save(); octx.globalCompositeOperation='source-over'; octx.strokeStyle='#FFFFFF'; octx.lineWidth=18;
-              octx.beginPath(); octx.moveTo(lastX,lastY); octx.lineTo(x,y); octx.stroke(); octx.restore();
-            } else {
-              octx.save(); octx.globalCompositeOperation='source-over'; octx.strokeStyle='#000000'; octx.lineWidth=3;
-              octx.beginPath(); octx.moveTo(lastX,lastY); octx.lineTo(x,y); octx.stroke(); octx.restore();
-            }
-            lastX=x; lastY=y;
-          }
-          function end(){ drawing=false; }
-
+          function pos(ev){const r=overlay.getBoundingClientRect();const x=(ev.touches?ev.touches[0].clientX:ev.clientX)-r.left;const y=(ev.touches?ev.touches[0].clientY:ev.clientY)-r.top;const sx=overlay.width/r.width,sy=overlay.height/r.height;return {x:x*sx,y:y*sy};}
+          function start(ev){if(!state.drawEnabled)return;ev.preventDefault();updateCursor(ev);pushUndo(pState);drawing=true;const {x,y}=pos(ev);lastX=x;lastY=y;}
+          function move(ev){updateCursor(ev);if(!state.drawEnabled||!drawing)return;ev.preventDefault();const {x,y}=pos(ev);if(state.tool==='erase'){octx.save();octx.globalCompositeOperation='source-over';octx.strokeStyle='#FFFFFF';octx.lineWidth=18;octx.beginPath();octx.moveTo(lastX,lastY);octx.lineTo(x,y);octx.stroke();octx.restore();}else{octx.save();octx.globalCompositeOperation='source-over';octx.strokeStyle='#000000';octx.lineWidth=3;octx.beginPath();octx.moveTo(lastX,lastY);octx.lineTo(x,y);octx.stroke();octx.restore();}lastX=x;lastY=y;}
+          function end(){drawing=false;}
           overlay.addEventListener('touchstart',start,{passive:false});
           overlay.addEventListener('touchmove', move ,{passive:false});
           overlay.addEventListener('touchend',  end  ,{passive:false});
@@ -278,9 +214,7 @@ const ANNOTATOR_HTML = `
           window.addEventListener('mouseup',end);
         }
         applyPointerMode();
-      }catch(e){
-        window.ReactNativeWebView?.postMessage('ERROR:'+(e?.message||String(e)));
-      }
+      }catch(e){window.ReactNativeWebView?.postMessage('ERROR:'+(e?.message||String(e))); }
     }
 
     async function saveAndUpload(){
@@ -289,25 +223,19 @@ const ANNOTATOR_HTML = `
         const pdfBytes=b64ToUint8(b64);
         const pdfDoc=await PDFLib.PDFDocument.load(pdfBytes);
         const pages=pdfDoc.getPages();
-
         for(let i=0;i<Math.min(pages.length,state.pages.length);i++){
           const p=pages[i], view=state.pages[i];
-          const dataUrl=dataURLFromCanvas(view.overlayCanvas);
+          const dataUrl=view.overlayCanvas.toDataURL('image/png');
           const pngBytes=await (await fetch(dataUrl)).arrayBuffer();
           const png=await pdfDoc.embedPng(pngBytes);
-
           const pageW=p.getWidth(), pageH=p.getHeight();
           const scaleX=pageW/view.overlayCanvas.width;
           const scaleY=pageH/view.overlayCanvas.height;
-
           p.drawImage(png,{x:0,y:0,width:view.overlayCanvas.width*scaleX,height:view.overlayCanvas.height*scaleY,opacity:1});
         }
-
         const outB64 = pdfDoc.saveAsBase64 ? await pdfDoc.saveAsBase64({dataUri:false}) : btoa(String.fromCharCode(...(await pdfDoc.save())));
         window.ReactNativeWebView?.postMessage('SIGNED:'+outB64);
-      }catch(e){
-        window.ReactNativeWebView?.postMessage('ERROR:'+(e?.message||String(e)));
-      }
+      }catch(e){window.ReactNativeWebView?.postMessage('ERROR:'+(e?.message||String(e))); }
     }
 
     window.addEventListener('DOMContentLoaded',()=>{
@@ -317,18 +245,12 @@ const ANNOTATOR_HTML = `
       document.getElementById('close').addEventListener('click',()=>window.ReactNativeWebView?.postMessage('CLOSE'));
       document.getElementById('undo').addEventListener('click',()=>{
         const winTop=window.scrollY; let target=state.pages[0];
-        for(const p of state.pages){
-          const top=p.overlayCanvas.getBoundingClientRect().top+window.scrollY;
-          if(top<=winTop+100) target=p;
-        }
+        for(const p of state.pages){const top=p.overlayCanvas.getBoundingClientRect().top+window.scrollY; if(top<=winTop+100) target=p;}
         undo(target);
       });
       document.getElementById('clear').addEventListener('click',()=>{
         const winTop=window.scrollY; let target=state.pages[0];
-        for(const p of state.pages){
-          const top=p.overlayCanvas.getBoundingClientRect().top+window.scrollY;
-          if(top<=winTop+100) target=p;
-        }
+        for(const p of state.pages){const top=p.overlayCanvas.getBoundingClientRect().top+window.scrollY; if(top<=winTop+100) target=p;}
         clearPage(target);
       });
       document.getElementById('drawToggle').addEventListener('change',e=>setDrawEnabled(e.target.checked));
@@ -385,122 +307,54 @@ const SKETCH_HTML = `
 
   <script>
     const state = { tool: 'pen', drawEnabled: false, page: null };
-
-    function applyPointerMode() {
+    function applyPointerMode(){
       const { overlayCanvas } = state.page || {};
       if (!overlayCanvas) return;
       overlayCanvas.style.pointerEvents = state.drawEnabled ? 'auto' : 'none';
       overlayCanvas.style.touchAction = state.drawEnabled ? 'none' : 'auto';
       const c = document.getElementById('cursor');
       if (!state.drawEnabled) { c.style.display = 'none'; return; }
-      c.style.display = 'block';
-      c.className = state.tool === 'erase' ? 'cursor' : 'cursor pen';
+      c.style.display = 'block'; c.className = state.tool === 'erase' ? 'cursor' : 'cursor pen';
     }
     function setTool(t){ state.tool=t; applyPointerMode(); }
     function setDrawEnabled(on){ state.drawEnabled=!!on; applyPointerMode(); }
-
-    function pushUndo(){
-      try{
-        const { overlayCtx, overlayCanvas } = state.page;
-        const snap = overlayCtx.getImageData(0,0,overlayCanvas.width,overlayCanvas.height);
-        state.page.strokes.push(snap); if(state.page.strokes.length>50) state.page.strokes.shift();
-      }catch(e){}
-    }
+    function pushUndo(){ try { const { overlayCtx, overlayCanvas } = state.page; const snap = overlayCtx.getImageData(0,0,overlayCanvas.width,overlayCanvas.height); state.page.strokes.push(snap); if(state.page.strokes.length>50) state.page.strokes.shift(); } catch(e){} }
     function undo(){ if(state.page?.strokes?.length){ state.page.overlayCtx.putImageData(state.page.strokes.pop(),0,0); } }
     function clearPage(){ pushUndo(); const { overlayCtx, overlayCanvas } = state.page; overlayCtx.clearRect(0,0,overlayCanvas.width,overlayCanvas.height); }
-
-    function updateCursor(ev){
-      const c = document.getElementById('cursor');
-      const x = (ev.touches?ev.touches[0].clientX:ev.clientX);
-      const y = (ev.touches?ev.touches[0].clientY:ev.clientY);
-      c.style.left = x + 'px'; c.style.top  = y + 'px';
-    }
-
-    function setup() {
-      const container = document.getElementById('pages');
-      const wrap = document.createElement('div'); wrap.className = 'pageWrap';
-
-      const targetWidth = Math.min(900, Math.max(600, window.innerWidth-24));
-      const ratio = 792/612; // letter h/w
-      const pageW = Math.floor(targetWidth);
-      const pageH = Math.floor(targetWidth * ratio);
-
-      const pageCanvas = document.createElement('canvas'); pageCanvas.className='page';
-      pageCanvas.width = pageW; pageCanvas.height = pageH;
-      wrap.appendChild(pageCanvas);
-
-      const overlay = document.createElement('canvas'); overlay.className='overlay';
-      overlay.width=pageW; overlay.height=pageH;
-      overlay.style.width = pageCanvas.style.width = '100%';
-      overlay.style.height = pageCanvas.style.height = 'auto';
+    function updateCursor(ev){ const c=document.getElementById('cursor'); const x=(ev.touches?ev.touches[0].clientX:ev.clientX); const y=(ev.touches?ev.touches[0].clientY:ev.clientY); c.style.left=x+'px'; c.style.top=y+'px'; }
+    function setup(){
+      const container=document.getElementById('pages');
+      const wrap=document.createElement('div'); wrap.className='pageWrap';
+      const targetWidth=Math.min(900,Math.max(600,window.innerWidth-24));
+      const ratio=792/612;
+      const pageW=Math.floor(targetWidth);
+      const pageH=Math.floor(targetWidth*ratio);
+      const pageCanvas=document.createElement('canvas'); pageCanvas.className='page';
+      pageCanvas.width=pageW; pageCanvas.height=pageH; wrap.appendChild(pageCanvas);
+      const overlay=document.createElement('canvas'); overlay.className='overlay';
+      overlay.width=pageW; overlay.height=pageH; overlay.style.width=pageCanvas.style.width='100%'; overlay.style.height=pageCanvas.style.height='auto';
       wrap.appendChild(overlay);
-
       container.appendChild(wrap);
-
-      const bctx = pageCanvas.getContext('2d');
-      bctx.fillStyle = '#FFFFFF';
-      bctx.fillRect(0,0,pageW,pageH);
-
-      const octx=overlay.getContext('2d');
-      octx.lineWidth=3; octx.lineCap='round'; octx.lineJoin='round'; octx.strokeStyle='#000'; octx.globalCompositeOperation='source-over';
-
-      state.page = { pageCanvas, overlayCanvas: overlay, overlayCtx: octx, strokes: [] };
-      applyPointerMode();
-
+      const bctx=pageCanvas.getContext('2d'); bctx.fillStyle='#FFFFFF'; bctx.fillRect(0,0,pageW,pageH);
+      const octx=overlay.getContext('2d'); octx.lineWidth=3;octx.lineCap='round';octx.lineJoin='round';octx.strokeStyle='#000';octx.globalCompositeOperation='source-over';
+      state.page={pageCanvas,overlayCanvas:overlay,overlayCtx:octx,strokes:[]}; applyPointerMode();
       let drawing=false,lastX=0,lastY=0;
-      function pos(ev){
-        const r=overlay.getBoundingClientRect();
-        const x=(ev.touches?ev.touches[0].clientX:ev.clientX)-r.left;
-        const y=(ev.touches?ev.touches[0].clientY:ev.clientY)-r.top;
-        const sx=overlay.width/r.width, sy=overlay.height/r.height;
-        return {x:x*sx,y:y*sy};
-      }
-      function start(ev){
-        if(!state.drawEnabled) return;
-        ev.preventDefault(); updateCursor(ev);
-        pushUndo(); drawing=true;
-        const {x,y}=pos(ev); lastX=x; lastY=y;
-      }
-      function move(ev){
-        updateCursor(ev);
-        if(!state.drawEnabled || !drawing) return;
-        ev.preventDefault();
-        const {x,y}=pos(ev);
-        if(state.tool==='erase'){
-          octx.save(); octx.globalCompositeOperation='source-over'; octx.strokeStyle='#FFFFFF'; octx.lineWidth=18;
-          octx.beginPath(); octx.moveTo(lastX,lastY); octx.lineTo(x,y); octx.stroke(); octx.restore();
-        } else {
-          octx.save(); octx.globalCompositeOperation='source-over'; octx.strokeStyle='#000000'; octx.lineWidth=3;
-          octx.beginPath(); octx.moveTo(lastX,lastY); octx.lineTo(x,y); octx.stroke(); octx.restore();
-        }
-        lastX=x; lastY=y;
-      }
-      function end(){ drawing=false; }
-
-      overlay.addEventListener('touchstart',start,{passive:false});
-      overlay.addEventListener('touchmove', move ,{passive:false});
-      overlay.addEventListener('touchend',  end  ,{passive:false});
-      overlay.addEventListener('mousedown',start);
-      overlay.addEventListener('mousemove',move);
-      window.addEventListener('mouseup',end);
+      function pos(ev){const r=overlay.getBoundingClientRect();const x=(ev.touches?ev.touches[0].clientX:ev.clientX)-r.left;const y=(ev.touches?ev.touches[0].clientY:ev.clientY)-r.top;const sx=overlay.width/r.width,sy=overlay.height/r.height;return {x:x*sx,y:y*sy};}
+      function start(ev){if(!state.drawEnabled)return;ev.preventDefault();updateCursor(ev);pushUndo();drawing=true;const {x,y}=pos(ev);lastX=x;lastY=y;}
+      function move(ev){updateCursor(ev);if(!state.drawEnabled||!drawing)return;ev.preventDefault();const {x,y}=pos(ev);if(state.tool==='erase'){octx.save();octx.globalCompositeOperation='source-over';octx.strokeStyle='#FFFFFF';octx.lineWidth=18;octx.beginPath();octx.moveTo(lastX,lastY);octx.lineTo(x,y);octx.stroke();octx.restore();}else{octx.save();octx.globalCompositeOperation='source-over';octx.strokeStyle='#000000';octx.lineWidth=3;octx.beginPath();octx.moveTo(lastX,lastY);octx.lineTo(x,y);octx.stroke();octx.restore();}lastX=x;lastY=y;}
+      function end(){drawing=false;}
+      overlay.addEventListener('touchstart',start,{passive:false}); overlay.addEventListener('touchmove',move,{passive:false}); overlay.addEventListener('touchend',end,{passive:false});
+      overlay.addEventListener('mousedown',start); overlay.addEventListener('mousemove',move); window.addEventListener('mouseup',end);
     }
-
     function saveAsJPEG(){
       try{
         const { pageCanvas, overlayCanvas } = state.page;
-        const merged = document.createElement('canvas');
-        merged.width = pageCanvas.width; merged.height = pageCanvas.height;
-        const mctx = merged.getContext('2d');
-        mctx.drawImage(pageCanvas, 0, 0);
-        mctx.drawImage(overlayCanvas, 0, 0);
-        const dataUrl = merged.toDataURL('image/jpeg', 0.9);
-        const b64 = dataUrl.split(',')[1];
+        const merged=document.createElement('canvas'); merged.width=pageCanvas.width; merged.height=pageCanvas.height;
+        const mctx=merged.getContext('2d'); mctx.drawImage(pageCanvas,0,0); mctx.drawImage(overlayCanvas,0,0);
+        const dataUrl=merged.toDataURL('image/jpeg',0.9); const b64=dataUrl.split(',')[1];
         window.ReactNativeWebView?.postMessage('IMAGE:'+b64);
-      }catch(e){
-        window.ReactNativeWebView?.postMessage('ERROR:'+(e?.message||String(e)));
-      }
+      }catch(e){window.ReactNativeWebView?.postMessage('ERROR:'+(e?.message||String(e)));}
     }
-
     window.addEventListener('DOMContentLoaded',()=>{
       document.getElementById('pen').addEventListener('click',()=>setTool('pen'));
       document.getElementById('erase').addEventListener('click',()=>setTool('erase'));
@@ -534,15 +388,20 @@ export default function ViewWorkOrder() {
   // Draw Notes (web sketch -> JPEG)
   const [sketchVisible, setSketchVisible] = useState(false);
 
-  // Annotate & Sign existing PDF
+  // Annotate & Sign existing WO PDF
   const [annotateVisible, setAnnotateVisible] = useState(false);
   const [pdfBase64, setPdfBase64] = useState(null);
   const annotatorRef = useRef(null);
 
-  // Inline viewer (read-only preview)
+  // Inline viewer (read-only preview) — Work Order PDF
   const [pdfInlineB64, setPdfInlineB64] = useState(null);
   const [pdfPreviewError, setPdfPreviewError] = useState(null);
   const [pdfInlineHeight, setPdfInlineHeight] = useState(Math.max(600, screenHeight * 0.8));
+
+  // Inline viewer (read-only preview) — PO Order PDF
+  const [poPdfInlineB64, setPoPdfInlineB64] = useState(null);
+  const [poPdfPreviewError, setPoPdfPreviewError] = useState(null);
+  const [poPdfInlineHeight, setPoPdfInlineHeight] = useState(Math.max(600, screenHeight * 0.8));
 
   // Status modal
   const [showStatusModal, setShowStatusModal] = useState(false);
@@ -602,8 +461,13 @@ export default function ViewWorkOrder() {
         .filter(Boolean);
       setPhotos(photoKeys.map(k => fileUrl(k)));
 
+      // Reset previews
       setPdfInlineB64(null);
       setPdfPreviewError(null);
+      setPoPdfInlineB64(null);
+      setPoPdfPreviewError(null);
+
+      // Work Order PDF
       if (data.pdfPath) {
         try {
           const url = fileUrl(data.pdfPath);
@@ -613,6 +477,19 @@ export default function ViewWorkOrder() {
           setPdfInlineB64(b64);
         } catch (e) {
           setPdfPreviewError(e?.message || 'Failed to load PDF.');
+        }
+      }
+
+      // PO Order PDF (uses server field `poPdfPath`)
+      if (data.poPdfPath) {
+        try {
+          const url = fileUrl(data.poPdfPath);
+          const target = FileSystem.cacheDirectory + `po_preview_${workOrderId}.pdf`;
+          await FileSystem.downloadAsync(url, target);
+          const b64 = await FileSystem.readAsStringAsync(target, { encoding: FileSystem.EncodingType.Base64 });
+          setPoPdfInlineB64(b64);
+        } catch (e) {
+          setPoPdfPreviewError(e?.message || 'Failed to load PO PDF.');
         }
       }
     } catch {
@@ -820,9 +697,22 @@ export default function ViewWorkOrder() {
   };
 
   // ------- derived fields for display (with fallbacks) -------
+  // Show both Site Location (name) and Site Address (address)
+  const siteName =
+    workOrder?.siteName ||
+    workOrder?.siteLocationName || // in case server uses this
+    '';
+
+  const siteAddress =
+    workOrder?.siteLocation || // address field used on web
+    workOrder?.serviceAddress ||
+    workOrder?.address ||
+    '';
+
   const poNumber = workOrder?.poNumber || '—';
+  const workOrderNumber = workOrder?.workOrderNumber || '—';
+
   const customer = workOrder?.customer || workOrder?.customerName || '—';
-  const siteLocation = workOrder?.siteLocation || workOrder?.serviceAddress || workOrder?.address || '—';
   const problem = workOrder?.problemDescription || workOrder?.problem || '—';
   const status = workOrder?.status || '—';
   const scheduled = workOrder?.scheduledDate
@@ -873,7 +763,12 @@ export default function ViewWorkOrder() {
 
         <View style={styles.card}>
           <View style={styles.row}>
-            <Text style={styles.label}>WO/PO #:</Text>
+            <Text style={styles.label}>Work Order #:</Text>
+            <Text style={styles.value}>{workOrderNumber}</Text>
+          </View>
+
+          <View style={styles.row}>
+            <Text style={styles.label}>PO #:</Text>
             <Text style={styles.value}>{poNumber}</Text>
           </View>
 
@@ -906,9 +801,14 @@ export default function ViewWorkOrder() {
 
           <View style={styles.row}>
             <Text style={styles.label}>Site Location:</Text>
-            {siteLocation && siteLocation !== '—' ? (
-              <TouchableOpacity onPress={() => openMap(siteLocation)}>
-                <Text style={[styles.value, styles.linkText]}>{siteLocation}</Text>
+            <Text style={styles.value}>{siteName || '—'}</Text>
+          </View>
+
+          <View style={styles.row}>
+            <Text style={styles.label}>Site Address:</Text>
+            {siteAddress ? (
+              <TouchableOpacity onPress={() => openMap(siteAddress)}>
+                <Text style={[styles.value, styles.linkText]}>{siteAddress}</Text>
               </TouchableOpacity>
             ) : (
               <Text style={styles.value}>—</Text>
@@ -985,6 +885,7 @@ export default function ViewWorkOrder() {
           </>
         )}
 
+        {/* Work Order PDF viewer */}
         {workOrder?.pdfPath && (
           <View style={styles.card}>
             <Text style={styles.sectionHeader}>Work Order PDF</Text>
@@ -1033,6 +934,63 @@ export default function ViewWorkOrder() {
                   }}
                   injectedJavaScriptBeforeContentLoaded={
                     `window.PDF_BASE64 = ${JSON.stringify(pdfInlineB64)}; true;`
+                  }
+                  style={{ flex: 1 }}
+                />
+              </View>
+            )}
+          </View>
+        )}
+
+        {/* PO Order PDF viewer */}
+        {workOrder?.poPdfPath && (
+          <View style={styles.card}>
+            <Text style={styles.sectionHeader}>PO Order PDF</Text>
+
+            {!poPdfInlineB64 && !poPdfPreviewError && (
+              <View style={[styles.pdfInline, { height: poPdfInlineHeight, alignItems:'center', justifyContent:'center' }]}>
+                <Text style={{ color:'#2B2D42' }}>Loading PO preview…</Text>
+              </View>
+            )}
+
+            {!!poPdfPreviewError && (
+              <View style={[styles.pdfInline, { padding: 12 }]}>
+                <Text style={{ marginBottom: 8, color: '#b00020' }}>
+                  Couldn’t load PO PDF preview: {poPdfPreviewError}
+                </Text>
+                <TouchableOpacity
+                  onPress={() => Linking.openURL(fileUrl(workOrder.poPdfPath))}
+                  style={{ backgroundColor:'#343a40', padding:10, borderRadius:6, alignSelf:'flex-start' }}
+                >
+                  <Text style={{ color:'#fff', fontWeight:'600' }}>Open PO PDF</Text>
+                </TouchableOpacity>
+              </View>
+            )}
+
+            {!!poPdfInlineB64 && (
+              <View style={[styles.pdfInline, { height: poPdfInlineHeight }]}>
+                <WebView
+                  originWhitelist={['*']}
+                  source={{ html: PDF_VIEWER_HTML }}
+                  javaScriptEnabled
+                  domStorageEnabled={false}
+                  onMessage={(e) => {
+                    const msg = e?.nativeEvent?.data || '';
+                    if (msg.startsWith('ERROR:')) {
+                      setPoPdfPreviewError(msg.slice(6));
+                      return;
+                    }
+                    if (msg.startsWith('HEIGHT:')) {
+                      const h = parseInt(msg.slice(7), 10);
+                      if (Number.isFinite(h)) {
+                        const minH = Math.max(600, screenHeight * 0.8);
+                        const maxH = Math.max(minH, screenHeight * 2.5);
+                        setPoPdfInlineHeight(Math.max(minH, Math.min(h, maxH)));
+                      }
+                    }
+                  }}
+                  injectedJavaScriptBeforeContentLoaded={
+                    `window.PDF_BASE64 = ${JSON.stringify(poPdfInlineB64)}; true;`
                   }
                   style={{ flex: 1 }}
                 />
@@ -1109,7 +1067,7 @@ export default function ViewWorkOrder() {
         </View>
       </Modal>
 
-      {/* Add Note Modal — FIX: overFullScreen + keyboard-safe */}
+      {/* Add Note Modal — keyboard-safe */}
       <Modal
         visible={showAddNoteModal}
         animationType="fade"
