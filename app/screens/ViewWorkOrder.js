@@ -1,5 +1,4 @@
 // File: app/screens/ViewWorkOrder.js
-
 import React, { useRef, useState, useEffect, useCallback } from 'react';
 import {
   View,
@@ -480,7 +479,7 @@ export default function ViewWorkOrder() {
         }
       }
 
-      // PO Order PDF (uses server field `poPdfPath`)
+      // PO Order PDF (optional: if your API exposes a single poPdfPath)
       if (data.poPdfPath) {
         try {
           const url = fileUrl(data.poPdfPath);
@@ -697,14 +696,15 @@ export default function ViewWorkOrder() {
   };
 
   // ------- derived fields for display (with fallbacks) -------
-  // Show both Site Location (name) and Site Address (address)
+  // ✅ Correct mappings:
   const siteName =
+    workOrder?.siteLocation ||     // location name from server
     workOrder?.siteName ||
-    workOrder?.siteLocationName || // in case server uses this
+    workOrder?.siteLocationName ||
     '';
 
   const siteAddress =
-    workOrder?.siteLocation || // address field used on web
+    workOrder?.siteAddress ||      // street address from server
     workOrder?.serviceAddress ||
     workOrder?.address ||
     '';
@@ -942,7 +942,7 @@ export default function ViewWorkOrder() {
           </View>
         )}
 
-        {/* PO Order PDF viewer */}
+        {/* PO Order PDF viewer (optional) */}
         {workOrder?.poPdfPath && (
           <View style={styles.card}>
             <Text style={styles.sectionHeader}>PO Order PDF</Text>
