@@ -23,23 +23,24 @@ import api from '../../constants/api';
 
 /** ───────────────────────────────────────────────────────────────────────────
  *  STATUS SET — keep in sync with server/web
- *  Added: "New", "Needs to be Quoted", and "Needs to be Invoiced"
- *  Order matches web (chips & selectors): "Needs to be Invoiced" BEFORE "Completed"
+ *  (Parts In removed; Approved added between Waiting for Approval & Waiting on Parts)
+ *  Chip order matches web.
  *  ─────────────────────────────────────────────────────────────────────────── */
 const STATUSES = [
   'New',
-  'Needs to be Quoted',
-  'Needs to be Scheduled',
   'Scheduled',
+  'Needs to be Quoted',
   'Waiting for Approval',
+  'Approved',
   'Waiting on Parts',
-  'Parts In',
-  'Needs to be Invoiced', // ← NEW & positioned before Completed
+  'Needs to be Scheduled',
+  'Needs to be Invoiced',
   'Completed',
 ];
 
 const PARTS_WAITING = 'Waiting on Parts';
-const PARTS_IN = 'Parts In';
+// Bulk “Mark Parts In” now routes these to Needs to be Scheduled
+const PARTS_NEXT = 'Needs to be Scheduled';
 
 // ---------- helpers (status/strings) ----------
 const norm = (v) => (v ?? '').toString().trim();
@@ -49,14 +50,14 @@ const normStatus = statusKey;
 
 const CANON = new Map(STATUSES.map((label) => [statusKey(label), label]));
 const STATUS_SYNONYMS = new Map([
-  // Parts In
-  ['part in', 'Parts In'],
-  ['parts in', 'Parts In'],
-  ['parts  in', 'Parts In'],
-  ['parts-in', 'Parts In'],
-  ['parts_in', 'Parts In'],
-  ['partsin', 'Parts In'],
-  ['part s in', 'Parts In'],
+  // Legacy “Parts In” & variants → Needs to be Scheduled
+  ['part in', PARTS_NEXT],
+  ['parts in', PARTS_NEXT],
+  ['parts  in', PARTS_NEXT],
+  ['parts-in', PARTS_NEXT],
+  ['parts_in', PARTS_NEXT],
+  ['partsin', PARTS_NEXT],
+  ['part s in', PARTS_NEXT],
 
   // Waiting on Parts
   ['waiting on part', 'Waiting on Parts'],
@@ -65,12 +66,20 @@ const STATUS_SYNONYMS = new Map([
   ['waiting_on_parts', 'Waiting on Parts'],
   ['waitingonparts', 'Waiting on Parts'],
 
+  // Waiting for Approval → Waiting for Approval (canonical), keep variants safe
+  ['waiting-on-approval', 'Waiting for Approval'],
+  ['waiting_on_approval', 'Waiting for Approval'],
+
   // Needs to be Quoted (common variants)
   ['needs quote', 'Needs to be Quoted'],
   ['need quote', 'Needs to be Quoted'],
   ['quote needed', 'Needs to be Quoted'],
   ['to be quoted', 'Needs to be Quoted'],
   ['needs quotation', 'Needs to be Quoted'],
+
+  // Needs to be Scheduled variants
+  ['needs to be schedule', 'Needs to be Scheduled'],
+  ['need to be scheduled', 'Needs to be Scheduled'],
 
   // Needs to be Invoiced (common variants)
   ['needs to be invoiced', 'Needs to be Invoiced'],
@@ -99,7 +108,7 @@ export default function WorkOrdersScreen() {
   // Modal state for changing status (single)
   const [statusModal, setStatusModal] = useState({ id: null, value: null });
 
-  // ---------- Parts In modal state ----------
+  // ---------- Parts modal state (repurposed to move to Needs to be Scheduled) ----------
   const [partsModalOpen, setPartsModalOpen] = useState(false);
   const [poSearch, setPoSearch] = useState('');
   const [selectedIds, setSelectedIds] = useState(new Set());
@@ -284,7 +293,7 @@ export default function WorkOrdersScreen() {
     }
   };
 
-  // ---------- “Mark Parts In” modal helpers ----------
+  // ---------- “Mark Parts In” modal helpers (moves to Needs to be Scheduled) ----------
   const openPartsModal = () => {
     // Ensure we’re looking at the Waiting tab for context
     if (normStatus(selectedStatus) !== normStatus(PARTS_WAITING)) {
@@ -337,12 +346,12 @@ export default function WorkOrdersScreen() {
     const ids = Array.from(selectedIds);
     const prev = workOrders;
 
-    // Optimistic UI: flip to Parts In
-    const next = prev.map((o) => (ids.includes(o.id) ? { ...o, status: PARTS_IN } : o));
+    // Optimistic UI: flip to Needs to be Scheduled
+    const next = prev.map((o) => (ids.includes(o.id) ? { ...o, status: PARTS_NEXT } : o));
     setWorkOrders(next);
 
     try {
-      const res = await api.put('/work-orders/bulk-status', { ids, status: PARTS_IN });
+      const res = await api.put('/work-orders/bulk-status', { ids, status: PARTS_NEXT });
       const items = Array.isArray(res?.data?.items) ? res.data.items : [];
       if (items.length) {
         const byId = new Map(items.map((r) => [r.id, r]));
@@ -355,10 +364,10 @@ export default function WorkOrdersScreen() {
         );
       }
 
-      setSelectedStatus(PARTS_IN);
+      setSelectedStatus(PARTS_NEXT);
       await fetchWorkOrders();
       closePartsModal();
-      Alert.alert('Success', `Moved ${ids.length} work order(s) to “${PARTS_IN}”.`);
+      Alert.alert('Success', `Moved ${ids.length} work order(s) to “${PARTS_NEXT}”.`);
     } catch (err) {
       console.error('Bulk update failed:', err);
       setWorkOrders(prev);
@@ -369,7 +378,7 @@ export default function WorkOrdersScreen() {
           ? 'Missing or invalid token. Please sign in again.'
           : status === 403
           ? 'Forbidden: one or more selected items are not assigned to you.'
-          : 'Failed to mark selected as Parts In.');
+          : `Failed to move selected to “${PARTS_NEXT}”.`);
       Alert.alert('Error', msg);
     } finally {
       setIsUpdatingParts(false);
@@ -428,7 +437,7 @@ export default function WorkOrdersScreen() {
         <Text style={styles.cardText}>Customer: {item?.customer ?? 'N/A'}</Text>
 
         <TouchableOpacity onPress={() => openInGoogleMaps(item?.siteLocation || '')}>
-          <Text style={styles.linkText}>Site Location: {item?.siteLocation ?? 'N/A'}</Text>
+          <Text style={styles.linkText}>Site Address: {item?.siteLocation ?? 'N/A'}</Text>
         </TouchableOpacity>
 
         <Text style={styles.cardText}>Problem: {item?.problemDescription ?? 'N/A'}</Text>
@@ -542,12 +551,12 @@ export default function WorkOrdersScreen() {
 
   return (
     <View style={styles.container}>
-      {/* Header row with Jeff-only Add button and Parts In bulk button */}
+      {/* Header row with Jeff-only Add button and Parts bulk button */}
       <View style={styles.headerRow}>
         <Text style={styles.header}>Work Orders</Text>
 
         <View style={{ flexDirection: 'row', gap: 8 }}>
-          {/* Show 'Mark Parts In' whenever there are any Waiting-on-Parts orders */}
+          {/* Show 'Mark Parts In' (moves to Needs to be Scheduled) when any Waiting-on-Parts exist */}
           {anyWaitingOnParts && (
             <TouchableOpacity onPress={openPartsModal} style={styles.partsBtn}>
               <Text style={styles.partsBtnText}>Mark Parts In</Text>
@@ -614,7 +623,7 @@ export default function WorkOrdersScreen() {
         </Pressable>
       </Modal>
 
-      {/* ---------- Parts In bulk modal ---------- */}
+      {/* ---------- Parts bulk modal (moves to Needs to be Scheduled) ---------- */}
       <Modal
         transparent
         visible={partsModalOpen}
