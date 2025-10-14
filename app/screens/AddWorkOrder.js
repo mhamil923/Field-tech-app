@@ -9,18 +9,30 @@ import {
   Alert,
   ScrollView,
   ActivityIndicator,
+  Modal,
+  FlatList,
 } from 'react-native';
 import { useRouter } from 'expo-router';
 import * as ImagePicker from 'expo-image-picker';
 import * as ImageManipulator from 'expo-image-manipulator';
 import * as DocumentPicker from 'expo-document-picker';
 
-import api from '../../constants/api';
-import { getMe } from '../../constants/api';
+import api, { getMe } from '../../constants/api';
 
-/**
- * Google Places API key (as requested)
- */
+/** Keep in sync with web/server */
+const STATUS_OPTIONS = [
+  'New',
+  'Scheduled',
+  'Needs to be Quoted',
+  'Waiting for Approval',
+  'Approved',
+  'Waiting on Parts',
+  'Needs to be Scheduled',
+  'Needs to be Invoiced',
+  'Completed',
+];
+
+/** Google Places API key */
 const GOOGLE_PLACES_KEY = 'AIzaSyCVEFeBpSVhhhct5ILlOXAvEZip0B9tC4M';
 
 export default function AddWorkOrder() {
@@ -28,14 +40,22 @@ export default function AddWorkOrder() {
   const [me, setMe] = useState(null);
   const [busy, setBusy] = useState(false);
 
-  // ── form fields ────────────────────────────────────────────────────────────
+  // ── form fields ────────────────────────────────────────────
   const [customer, setCustomer] = useState('');
   const [customerPhone, setCustomerPhone] = useState('');
   const [customerEmail, setCustomerEmail] = useState('');
   const [poNumber, setPoNumber] = useState('');
-  const [siteLocation, setSiteLocation] = useState('');
+
+  // NEW: split location name vs address
+  const [siteLocation, setSiteLocation] = useState(''); // location name (e.g., "Panda Express")
+  const [siteAddress, setSiteAddress] = useState('');   // street address
+
   const [billingAddress, setBillingAddress] = useState('');
   const [problemDescription, setProblemDescription] = useState('');
+
+  // NEW: pick status from full list
+  const [status, setStatus] = useState('Needs to be Scheduled');
+  const [showStatusPicker, setShowStatusPicker] = useState(false);
 
   // attachments
   const [photoUri, setPhotoUri] = useState(null);
@@ -52,7 +72,7 @@ export default function AddWorkOrder() {
     })();
   }, []);
 
-  // ── helpers ────────────────────────────────────────────────────────────────
+  // ── helpers ────────────────────────────────────────────────
   const processImageForUpload = async (uri) => {
     try {
       const out = await ImageManipulator.manipulateAsync(
@@ -93,6 +113,12 @@ export default function AddWorkOrder() {
     if (!customer.trim() || !billingAddress.trim() || !problemDescription.trim()) {
       return Alert.alert('Missing info', 'Customer, Billing Address, and Problem Description are required.');
     }
+    if (!siteLocation.trim()) {
+      return Alert.alert('Missing info', 'Site Location (name) is required.');
+    }
+    if (!siteAddress.trim()) {
+      return Alert.alert('Missing info', 'Site Address is required.');
+    }
 
     setBusy(true);
     try {
@@ -101,12 +127,12 @@ export default function AddWorkOrder() {
       form.append('customerPhone', customerPhone.trim());
       form.append('customerEmail', customerEmail.trim());
 
-      // Assign to current user if present; default status
       if (me?.id != null) form.append('assignedTo', String(me.id));
-      form.append('status', 'Needs to be Scheduled');
+      form.append('status', status); // use picked status
 
       form.append('poNumber', poNumber.trim());
-      form.append('siteLocation', siteLocation.trim());
+      form.append('siteLocation', siteLocation.trim()); // name
+      form.append('siteAddress', siteAddress.trim());   // address
       form.append('billingAddress', billingAddress);
       form.append('problemDescription', problemDescription);
 
@@ -159,23 +185,68 @@ export default function AddWorkOrder() {
         autoCapitalize="none"
       />
 
-      {/* Order details */}
+      {/* PO */}
       <LabeledInput label="PO Number" value={poNumber} onChangeText={setPoNumber} placeholder="Optional" />
 
-      {/* Site Location with Google Places autocomplete */}
-      <PlacesAutocompleteInput
-        label="Site Location"
+      {/* NEW: Site Location Name */}
+      <LabeledInput
+        required
+        label="Site Location (name)"
         value={siteLocation}
-        onChangeValue={setSiteLocation}
+        onChangeText={setSiteLocation}
+        placeholder="e.g., Panda Express"
+      />
+
+      {/* NEW: Site Address with Google Places autocomplete */}
+      <PlacesAutocompleteInput
+        label="Site Address"
+        value={siteAddress}
+        onChangeValue={setSiteAddress}
         googleKey={GOOGLE_PLACES_KEY}
         required
       />
 
+      {/* Billing & Problem */}
       <LabeledInput required label="Billing Address" value={billingAddress} onChangeText={setBillingAddress} multiline />
       <LabeledInput required label="Problem Description" value={problemDescription} onChangeText={setProblemDescription} multiline />
 
+      {/* NEW: Status picker */}
+      <Text style={styles.label}>Status</Text>
+      <TouchableOpacity
+        onPress={() => setShowStatusPicker(true)}
+        style={[styles.input, { justifyContent: 'center', minHeight: 48 }]}
+      >
+        <Text style={{ color: '#111827' }}>{status}</Text>
+      </TouchableOpacity>
+
+      <Modal visible={showStatusPicker} transparent animationType="fade" onRequestClose={() => setShowStatusPicker(false)}>
+        <View style={styles.modalOverlay}>
+          <View style={styles.modalCard}>
+            <Text style={styles.modalTitle}>Choose Status</Text>
+            <FlatList
+              data={STATUS_OPTIONS}
+              keyExtractor={(s) => s}
+              renderItem={({ item }) => (
+                <TouchableOpacity
+                  style={[styles.statusOption, item === status && styles.statusActive]}
+                  onPress={() => {
+                    setStatus(item);
+                    setShowStatusPicker(false);
+                  }}
+                >
+                  <Text style={[styles.statusText, item === status && styles.statusTextActive]}>{item}</Text>
+                </TouchableOpacity>
+              )}
+            />
+            <TouchableOpacity style={styles.modalClose} onPress={() => setShowStatusPicker(false)}>
+              <Text style={{ color: '#fff', fontWeight: '700' }}>Close</Text>
+            </TouchableOpacity>
+          </View>
+        </View>
+      </Modal>
+
       {/* Attachments */}
-      <Text style={styles.label}>Upload PDF</Text>
+      <Text style={[styles.label, { marginTop: 8 }]}>Upload PDF</Text>
       <TouchableOpacity onPress={pickPdf} style={[styles.btn, styles.pdfBtn]}>
         <Text style={styles.btnText}>{pdfUri ? 'Change PDF' : 'Choose PDF'}</Text>
       </TouchableOpacity>
@@ -192,9 +263,7 @@ export default function AddWorkOrder() {
   );
 }
 
-/**
- * Simple labeled input
- */
+/** Simple labeled input */
 function LabeledInput({ label, required, multiline, style, ...props }) {
   return (
     <View style={{ marginBottom: 14 }}>
@@ -213,9 +282,7 @@ function LabeledInput({ label, required, multiline, style, ...props }) {
 
 /**
  * Google Places Autocomplete Input
- * - First tries the **v1** Places API (`places:autocomplete`) with field masks.
- * - Falls back to the legacy `/place/autocomplete/json` if v1 isn't enabled.
- * - Details also use v1 first, then legacy `/place/details/json`.
+ * - v1 API first, legacy API as fallback
  */
 function PlacesAutocompleteInput({ label, value, onChangeValue, googleKey, required }) {
   const [query, setQuery] = useState(value || '');
@@ -236,7 +303,6 @@ function PlacesAutocompleteInput({ label, value, onChangeValue, googleKey, requi
       headers: {
         'Content-Type': 'application/json',
         'X-Goog-Api-Key': googleKey,
-        // Only request what we need
         'X-Goog-FieldMask': 'suggestions.placePrediction.placeId,suggestions.placePrediction.text',
       },
       body: JSON.stringify({
@@ -244,7 +310,6 @@ function PlacesAutocompleteInput({ label, value, onChangeValue, googleKey, requi
         sessionToken,
         languageCode: 'en',
         includedPrimaryTypes: ['address'],
-        // Increase US relevance; comment out if you want global
         regionCode: 'US',
       }),
     });
@@ -254,7 +319,7 @@ function PlacesAutocompleteInput({ label, value, onChangeValue, googleKey, requi
       .map((s) => s?.placePrediction)
       .filter(Boolean)
       .map((p) => ({
-        place_id: p.placeId, // e.g. "places/ChIJ....."
+        place_id: p.placeId,
         description: p?.text?.text || '',
       }))
       .filter((x) => x.description);
@@ -292,7 +357,6 @@ function PlacesAutocompleteInput({ label, value, onChangeValue, googleKey, requi
       if (!preds.length) preds = await runAutocompleteLegacy(text);
       setPredictions(preds);
     } catch {
-      // final fallback: nothing
       setPredictions([]);
     } finally {
       setLoading(false);
@@ -308,12 +372,9 @@ function PlacesAutocompleteInput({ label, value, onChangeValue, googleKey, requi
 
   // --- v1 Details
   const fetchDetailsV1 = async (placeId) => {
-    // placeId may already include "places/" prefix from v1
     const rid = placeId.startsWith('places/') ? placeId : `places/${placeId}`;
     const url = `https://places.googleapis.com/v1/${encodeURIComponent(rid)}?fields=formattedAddress`;
-    const resp = await fetch(url, {
-      headers: { 'X-Goog-Api-Key': googleKey },
-    });
+    const resp = await fetch(url, { headers: { 'X-Goog-Api-Key': googleKey } });
     const json = await resp.json();
     return json?.formattedAddress || '';
   };
@@ -458,5 +519,38 @@ const styles = StyleSheet.create({
     position: 'absolute',
     right: 10,
     top: 12,
+  },
+
+  // Status picker modal
+  modalOverlay: {
+    flex: 1,
+    backgroundColor: 'rgba(0,0,0,0.45)',
+    justifyContent: 'center',
+    padding: 16,
+  },
+  modalCard: {
+    backgroundColor: '#fff',
+    borderRadius: 10,
+    padding: 14,
+    maxHeight: '70%',
+  },
+  modalTitle: { fontSize: 18, fontWeight: '700', marginBottom: 8, color: '#2B2D42' },
+  statusOption: {
+    paddingVertical: 10,
+    paddingHorizontal: 12,
+    borderRadius: 6,
+    borderWidth: 1,
+    borderColor: '#e5e7eb',
+    marginBottom: 8,
+  },
+  statusActive: { backgroundColor: '#0ea5e9', borderColor: '#0ea5e9' },
+  statusText: { color: '#111827', fontWeight: '600' },
+  statusTextActive: { color: '#fff' },
+  modalClose: {
+    marginTop: 6,
+    backgroundColor: '#111827',
+    padding: 10,
+    borderRadius: 8,
+    alignItems: 'center',
   },
 });
