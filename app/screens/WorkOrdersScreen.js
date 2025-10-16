@@ -131,11 +131,6 @@ export default function WorkOrdersScreen() {
     return { byStatus: map, today };
   }, [workOrders]);
 
-  const anyWaitingOnParts = useMemo(
-    () => workOrders.some((o) => normStatus(o.status) === normStatus('Waiting on Parts')),
-    [workOrders]
-  );
-
   const openInGoogleMaps = async (query) => {
     const q = encodeURIComponent(query || '');
     const gm = `comgooglemaps://?q=${q}`;
@@ -194,23 +189,11 @@ export default function WorkOrdersScreen() {
         onPress={() => setSelectedStatus('Today')}
         style={[styles.chip, selectedStatus === 'Today' && styles.chipActive]}
       >
-        <Text
-          style={[
-            styles.chipText,
-            selectedStatus === 'Today' && styles.chipTextActive,
-          ]}
-        >
+        <Text style={[styles.chipText, selectedStatus === 'Today' && styles.chipTextActive]}>
           Today
         </Text>
-        <View
-          style={[styles.badge, selectedStatus === 'Today' && styles.badgeActive]}
-        >
-          <Text
-            style={[
-              styles.badgeText,
-              selectedStatus === 'Today' && styles.badgeTextActive,
-            ]}
-          >
+        <View style={[styles.badge, selectedStatus === 'Today' && styles.badgeActive]}>
+          <Text style={[styles.badgeText, selectedStatus === 'Today' && styles.badgeTextActive]}>
             {counts.today}
           </Text>
         </View>
@@ -222,23 +205,11 @@ export default function WorkOrdersScreen() {
           onPress={() => setSelectedStatus(s)}
           style={[styles.chip, selectedStatus === s && styles.chipActive]}
         >
-          <Text
-            style={[
-              styles.chipText,
-              selectedStatus === s && styles.chipTextActive,
-            ]}
-          >
+          <Text style={[styles.chipText, selectedStatus === s && styles.chipTextActive]}>
             {s}
           </Text>
-          <View
-            style={[styles.badge, selectedStatus === s && styles.badgeActive]}
-          >
-            <Text
-              style={[
-                styles.badgeText,
-                selectedStatus === s && styles.badgeTextActive,
-              ]}
-            >
+          <View style={[styles.badge, selectedStatus === s && styles.badgeActive]}>
+            <Text style={[styles.badgeText, selectedStatus === s && styles.badgeTextActive]}>
               {counts.byStatus[s]}
             </Text>
           </View>
@@ -248,11 +219,26 @@ export default function WorkOrdersScreen() {
   );
 
   const Card = ({ item, drag }) => {
-    // Robust fallbacks so older records still render
-    const siteLocationName =
-      item.siteName || item.siteLocationName || item.siteLocation || '—';
-    const siteAddress =
-      item.siteAddress || item.serviceAddress || item.address || '';
+    // ----- Legacy-safe Site Location / Address handling (mirrors web) -----
+    const rawLoc = norm(item.siteLocation);                 // may be name OR a full address (legacy)
+    const explicitName = norm(item.siteName) || norm(item.siteLocationName);
+
+    // Prefer explicit name for Site Location
+    let siteLocationName = explicitName;
+
+    // Build Site Address from dedicated address fields first
+    let siteAddress = norm(item.siteAddress) || norm(item.serviceAddress) || norm(item.address);
+
+    if (!siteAddress && rawLoc) {
+      // Older records: siteLocation stored the full address
+      siteAddress = rawLoc;
+      // Leave siteLocationName blank so it doesn't duplicate the address
+    } else if (!siteLocationName && rawLoc) {
+      // Newer records: siteLocation is a location NAME
+      siteLocationName = rawLoc;
+    }
+
+    const hasAddress = !!siteAddress;
 
     return (
       <View style={styles.card}>
@@ -269,33 +255,29 @@ export default function WorkOrdersScreen() {
 
         <Text style={styles.cardText}>Customer: {item.customer || 'N/A'}</Text>
 
-        {/* Replaced old billing line with Site Location (name) */}
-        <Text style={styles.cardText}>Site Location: {siteLocationName}</Text>
+        {/* Site Location (name only) */}
+        <Text style={styles.cardText}>Site Location: {siteLocationName || '—'}</Text>
 
-        {/* Where “Site Location” was, now show Site Address (taps to Maps) */}
-        <TouchableOpacity onPress={() => openInGoogleMaps(siteAddress || siteLocationName)}>
-          <Text style={styles.linkText}>
-            Site Address: {siteAddress || 'N/A'}
-          </Text>
-        </TouchableOpacity>
+        {/* Site Address (tap to open Maps) */}
+        {hasAddress ? (
+          <TouchableOpacity onPress={() => openInGoogleMaps(siteAddress || siteLocationName)}>
+            <Text style={styles.linkText}>Site Address: {siteAddress}</Text>
+          </TouchableOpacity>
+        ) : (
+          <Text style={styles.cardText}>Site Address: N/A</Text>
+        )}
 
-        <Text style={styles.cardText}>
-          Problem: {item.problemDescription || 'N/A'}
-        </Text>
+        <Text style={styles.cardText}>Problem: {item.problemDescription || 'N/A'}</Text>
         <Text style={styles.cardText}>
           Scheduled:{' '}
-          {item.scheduledDate
-            ? moment(item.scheduledDate).format('YYYY-MM-DD HH:mm')
-            : 'Not Scheduled'}
+          {item.scheduledDate ? moment(item.scheduledDate).format('YYYY-MM-DD HH:mm') : 'Not Scheduled'}
         </Text>
         <Text style={styles.cardText}>Status: {item.status}</Text>
 
         <View style={styles.actionsRow}>
           <TouchableOpacity
             style={[styles.statusBtn, { marginBottom: 8 }]}
-            onPress={() =>
-              setStatusModal({ id: item.id, value: item.status || STATUSES[0] })
-            }
+            onPress={() => setStatusModal({ id: item.id, value: item.status || STATUSES[0] })}
           >
             <Text style={styles.statusBtnText}>Status</Text>
           </TouchableOpacity>
@@ -381,10 +363,7 @@ export default function WorkOrdersScreen() {
             {STATUSES.map((s) => (
               <TouchableOpacity
                 key={s}
-                style={[
-                  styles.statusOption,
-                  statusModal.value === s && styles.statusOptionActive,
-                ]}
+                style={[styles.statusOption, statusModal.value === s && styles.statusOptionActive]}
                 onPress={() => setStatusModal({ ...statusModal, value: s })}
               >
                 <Text
