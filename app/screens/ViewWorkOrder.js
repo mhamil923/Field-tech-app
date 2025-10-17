@@ -198,13 +198,85 @@ const ANNOTATOR_HTML = `
           const ctx=pageCanvas.getContext('2d');
           await page.render({canvasContext:ctx,viewport}).promise;
           const octx=overlay.getContext('2d');
-          octx.lineWidth=3;octx.lineCap='round';octx.lineJoin='round';octx.strokeStyle='#000';octx.globalCompositeOperation='source-over';
+          octx.lineCap='round';octx.lineJoin='round';octx.strokeStyle='#000';
           const pState={pageCanvas,overlayCanvas:overlay,overlayCtx:octx,strokes:[]}; state.pages.push(pState);
-          let drawing=false,lastX=0,lastY=0;
-          function pos(ev){const r=overlay.getBoundingClientRect();const x=(ev.touches?ev.touches[0].clientX:ev.clientX)-r.left;const y=(ev.touches?ev.touches[0].clientY:ev.clientY)-r.top;const sx=overlay.width/r.width,sy=overlay.height/r.height;return {x:x*sx,y:y*sy};}
-          function start(ev){if(!state.drawEnabled)return;ev.preventDefault();updateCursor(ev);pushUndo(pState);drawing=true;const {x,y}=pos(ev);lastX=x;lastY=y;}
-          function move(ev){updateCursor(ev);if(!state.drawEnabled||!drawing)return;ev.preventDefault();const {x,y}=pos(ev);if(state.tool==='erase'){octx.save();octx.globalCompositeOperation='source-over';octx.strokeStyle='#FFFFFF';octx.lineWidth=18;octx.beginPath();octx.moveTo(lastX,lastY);octx.lineTo(x,y);octx.stroke();octx.restore();}else{octx.save();octx.globalCompositeOperation='source-over';octx.strokeStyle='#000000';octx.lineWidth=3;octx.beginPath();octx.moveTo(lastX,lastY);octx.lineTo(x,y);octx.stroke();octx.restore();}lastX=x;lastY=y;}
-          function end(){drawing=false;}
+          let drawing=false,last=null,points=[];
+          function getPos(ev){
+            const t=(ev.touches?ev.touches[0]:ev);
+            const r=overlay.getBoundingClientRect();
+            const x=(t.clientX-r.left)*(overlay.width/r.width);
+            const y=(t.clientY-r.top)*(overlay.height/r.height);
+            const p = (t.force && !isNaN(t.force)) ? t.force : 0.5;
+            const tt = t.touchType || (t.pointerType === 'pen' ? 'stylus' : 'direct');
+            return {x,y,p,ts:Date.now(),tt};
+          }
+          function widthFor(a,b){
+            const dt = Math.max(1, (b.ts - a.ts));
+            const dx=b.x-a.x, dy=b.y-a.y;
+            const dist=Math.hypot(dx,dy);
+            const vel = dist/dt; // px per ms
+            // target widths
+            const minW=0.8, maxW=2.6; // nice thin ink
+            const speedFactor = Math.max(0, 1 - Math.min(vel*2.0, 1)); // faster => thinner
+            const pressureFactor = 0.5 + 0.5 * ((a.p + b.p)/2);
+            return Math.max(minW, maxW * speedFactor * pressureFactor);
+          }
+          function drawSegment(a,b,erase=false){
+            const w = widthFor(a,b);
+            octx.save();
+            octx.globalCompositeOperation = erase ? 'destination-out' : 'source-over';
+            octx.lineWidth = erase ? Math.max(10, w*10) : w;
+            octx.beginPath();
+            // quadratic smoothing
+            const cx=(a.x+b.x)/2, cy=(a.y+b.y)/2;
+            octx.moveTo(a.x,a.y);
+            octx.quadraticCurveTo(a.x,a.y,cx,cy);
+            octx.stroke();
+            octx.restore();
+          }
+          function start(ev){
+            if(!state.drawEnabled) return;
+            ev.preventDefault();
+            updateCursor(ev);
+            pushUndo(pState);
+            drawing=true; points=[]; last=null;
+            const pt=getPos(ev);
+            points.push(pt); last=pt;
+          }
+          function move(ev){
+            updateCursor(ev);
+            if(!state.drawEnabled||!drawing) return;
+            ev.preventDefault();
+            const pt=getPos(ev);
+            // Pencil-only mode? If enabled, ignore non-stylus touches.
+            if (window.__PENCIL_ONLY__ && pt.tt !== 'stylus') return;
+            const erase = (state.tool==='erase');
+            // suppress jitter/dots: only draw once movement exceeds small epsilon
+            const prev = points[points.length-1] || last;
+            const dx=pt.x-(prev?.x??pt.x), dy=pt.y-(prev?.y??pt.y);
+            const moved = (dx*dx+dy*dy)>0.6; // ~0.77px
+            points.push(pt);
+            if (last && moved) {
+              drawSegment(last, pt, erase);
+              last=pt;
+            }
+          }
+          function end(ev){
+            if(!drawing){ return; }
+            drawing=false;
+            // tiny tap? draw a small dot (very small)
+            if(points.length<2){
+              const a=points[0];
+              octx.save();
+              octx.globalCompositeOperation = (state.tool==='erase')?'destination-out':'source-over';
+              octx.beginPath();
+              octx.arc(a.x,a.y,1.1,0,Math.PI*2);
+              octx.fillStyle=(state.tool==='erase')?'#000':'#000';
+              octx.fill();
+              octx.restore();
+            }
+            points=[]; last=null;
+          }
           overlay.addEventListener('touchstart',start,{passive:false});
           overlay.addEventListener('touchmove', move ,{passive:false});
           overlay.addEventListener('touchend',  end  ,{passive:false});
@@ -253,6 +325,7 @@ const ANNOTATOR_HTML = `
         clearPage(target);
       });
       document.getElementById('drawToggle').addEventListener('change',e=>setDrawEnabled(e.target.checked));
+      // Pencil-only toggle support via injected flag from RN (optional)
       renderPDF();
     });
   </script>
@@ -261,7 +334,7 @@ const ANNOTATOR_HTML = `
 `;
 
 /**
- * SKETCH HTML (used for "Draw Note")
+ * SKETCH HTML (used for "Draw Note") — Upgraded ink engine with pressure+velocity
  */
 const SKETCH_HTML = `
 <!doctype html>
@@ -283,17 +356,18 @@ const SKETCH_HTML = `
   canvas.page { width:100%; height:auto; display:block; background:#ffffff; }
   canvas.overlay { position:absolute; left:0; top:0; touch-action:none; }
   .hint { text-align:center; font-size:12px; color:#6b7280; margin:8px 0 12px; }
-  .cursor { position: fixed; pointer-events:none; z-index: 2000; width: 24px; height: 24px; border-radius: 999px; border: 2px solid rgba(0,0,0,0.6); background: rgba(255,255,255,0.9); display:none; transform: translate(-50%, -50%); }
-  .cursor.pen { width: 10px; height: 10px; background: #111827; border-color: #111827; }
+  .cursor { position: fixed; pointer-events:none; z-index: 2000; width: 22px; height: 22px; border-radius: 999px; border: 2px solid rgba(0,0,0,0.6); background: rgba(255,255,255,0.9); display:none; transform: translate(-50%, -50%); }
+  .cursor.pen { width: 8px; height: 8px; background: #111827; border-color: #111827; }
 </style>
 </head>
 <body>
   <div id="toolbar">
     <label><input type="checkbox" id="drawToggle" /> Draw Mode</label>
+    <label><input type="checkbox" id="pencilOnly" /> Pencil Only</label>
     <button id="pen">Pen</button>
     <button id="erase">Erase</button>
     <button id="undo">Undo</button>
-    <button id="clear">Clear Page</button>
+    <button id="clear">Clear</button>
     <div class="sep"></div>
     <div style="display:flex; gap:8px;">
       <button id="close">Close</button>
@@ -301,11 +375,11 @@ const SKETCH_HTML = `
     </div>
   </div>
   <div id="pages"></div>
-  <div class="hint">Turn OFF “Draw Mode” to scroll. Turn it ON to sketch.</div>
+  <div class="hint">Turn OFF “Draw Mode” to scroll. Turn it ON to sketch. “Pencil Only” ignores finger.</div>
   <div id="cursor" class="cursor"></div>
 
   <script>
-    const state = { tool: 'pen', drawEnabled: false, page: null };
+    const state = { tool: 'pen', drawEnabled: false, pencilOnly: false, page: null };
     function applyPointerMode(){
       const { overlayCanvas } = state.page || {};
       if (!overlayCanvas) return;
@@ -317,10 +391,12 @@ const SKETCH_HTML = `
     }
     function setTool(t){ state.tool=t; applyPointerMode(); }
     function setDrawEnabled(on){ state.drawEnabled=!!on; applyPointerMode(); }
-    function pushUndo(){ try { const { overlayCtx, overlayCanvas } = state.page; const snap = overlayCtx.getImageData(0,0,overlayCanvas.width,overlayCanvas.height); state.page.strokes.push(snap); if(state.page.strokes.length>50) state.page.strokes.shift(); } catch(e){} }
+    function setPencilOnly(on){ state.pencilOnly=!!on; }
+    function pushUndo(){ try { const { overlayCtx, overlayCanvas } = state.page; const snap = overlayCtx.getImageData(0,0,overlayCanvas.width,overlayCanvas.height); state.page.strokes.push(snap); if(state.page.strokes.length>80) state.page.strokes.shift(); } catch(e){} }
     function undo(){ if(state.page?.strokes?.length){ state.page.overlayCtx.putImageData(state.page.strokes.pop(),0,0); } }
     function clearPage(){ pushUndo(); const { overlayCtx, overlayCanvas } = state.page; overlayCtx.clearRect(0,0,overlayCanvas.width,overlayCanvas.height); }
-    function updateCursor(ev){ const c=document.getElementById('cursor'); const x=(ev.touches?ev.touches[0].clientX:ev.clientX); const y=(ev.touches?ev.touches[0].clientY:ev.clientY); c.style.left=x+'px'; c.style.top=y+'px'; }
+    function updateCursor(ev){ const c=document.getElementById('cursor'); const t=(ev.touches?ev.touches[0]:ev); const x=t.clientX; const y=t.clientY; c.style.left=x+'px'; c.style.top=y+'px'; }
+
     function setup(){
       const container=document.getElementById('pages');
       const wrap=document.createElement('div'); wrap.className='pageWrap';
@@ -334,26 +410,105 @@ const SKETCH_HTML = `
       overlay.width=pageW; overlay.height=pageH; overlay.style.width=pageCanvas.style.width='100%'; overlay.style.height=pageCanvas.style.height='auto';
       wrap.appendChild(overlay);
       container.appendChild(wrap);
+
       const bctx=pageCanvas.getContext('2d'); bctx.fillStyle='#FFFFFF'; bctx.fillRect(0,0,pageW,pageH);
-      const octx=overlay.getContext('2d'); octx.lineWidth=3;octx.lineCap='round';octx.lineJoin='round';octx.strokeStyle='#000';octx.globalCompositeOperation='source-over';
+      const octx=overlay.getContext('2d'); octx.lineCap='round'; octx.lineJoin='round'; octx.strokeStyle='#000'; octx.globalCompositeOperation='source-over';
       state.page={pageCanvas,overlayCanvas:overlay,overlayCtx:octx,strokes:[]}; applyPointerMode();
-      let drawing=false,lastX=0,lastY=0;
-      function pos(ev){const r=overlay.getBoundingClientRect();const x=(ev.touches?ev.touches[0].clientX:ev.clientX)-r.left;const y=(ev.touches?ev.touches[0].clientY:ev.clientY)-r.top;const sx=overlay.width/r.width,sy=overlay.height/r.height;return {x:x*sx,y:y*sy};}
-      function start(ev){if(!state.drawEnabled)return;ev.preventDefault();updateCursor(ev);pushUndo();drawing=true;const {x,y}=pos(ev);lastX=x;lastY=y;}
-      function move(ev){updateCursor(ev);if(!state.drawEnabled||!drawing)return;ev.preventDefault();const {x,y}=pos(ev);if(state.tool==='erase'){octx.save();octx.globalCompositeOperation='source-over';octx.strokeStyle='#FFFFFF';octx.lineWidth=18;octx.beginPath();octx.moveTo(lastX,lastY);octx.lineTo(x,y);octx.stroke();octx.restore();}else{octx.save();octx.globalCompositeOperation='source-over';octx.strokeStyle='#000000';octx.lineWidth=3;octx.beginPath();octx.moveTo(lastX,lastY);octx.lineTo(x,y);octx.stroke();octx.restore();}lastX=x;lastY=y;}
-      function end(){drawing=false;}
-      overlay.addEventListener('touchstart',start,{passive:false}); overlay.addEventListener('touchmove',move,{passive:false}); overlay.addEventListener('touchend',end,{passive:false});
-      overlay.addEventListener('mousedown',start); overlay.addEventListener('mousemove',move); window.addEventListener('mouseup',end);
+
+      let drawing=false,last=null,points=[];
+      function getPos(ev){
+        const t=(ev.touches?ev.touches[0]:ev);
+        const r=overlay.getBoundingClientRect();
+        const x=(t.clientX-r.left)*(overlay.width/r.width);
+        const y=(t.clientY-r.top)*(overlay.height/r.height);
+        const p = (t.force && !isNaN(t.force)) ? t.force : 0.5;
+        const tt = t.touchType || (t.pointerType === 'pen' ? 'stylus' : 'direct');
+        return {x,y,p,ts:Date.now(),tt};
+      }
+      function widthFor(a,b){
+        const dt=Math.max(1,(b.ts-a.ts));
+        const dx=b.x-a.x, dy=b.y-a.y;
+        const dist=Math.hypot(dx,dy);
+        const vel=dist/dt; // px per ms
+        // Pencil-like: velocity thinner, pressure thicker
+        const minW=0.7, maxW=2.4;
+        const speedFactor = Math.max(0.1, 1 - Math.min(vel*2.2, 0.9)); // 0.1..0.9
+        const pressureFactor = 0.5 + 0.5*((a.p+b.p)/2); // 0.5..1
+        const w = maxW * speedFactor * pressureFactor;
+        return Math.max(minW, Math.min(maxW, w));
+      }
+      function drawSegment(a,b,erase=false){
+        const w = widthFor(a,b);
+        octx.save();
+        octx.globalCompositeOperation = erase ? 'destination-out' : 'source-over';
+        octx.lineWidth = erase ? Math.max(10, w*12) : w;
+        octx.beginPath();
+        // Quadratic smoothing between points
+        const cx=(a.x+b.x)/2, cy=(a.y+b.y)/2;
+        octx.moveTo(a.x,a.y);
+        octx.quadraticCurveTo(a.x,a.y,cx,cy);
+        octx.stroke();
+        octx.restore();
+      }
+      function start(ev){
+        if(!state.drawEnabled) return;
+        ev.preventDefault();
+        updateCursor(ev);
+        pushUndo();
+        drawing=true; points=[]; last=null;
+        const pt=getPos(ev);
+        if(state.pencilOnly && pt.tt!=='stylus') return; // ignore finger
+        points.push(pt); last=pt;
+      }
+      function move(ev){
+        updateCursor(ev);
+        if(!state.drawEnabled||!drawing) return;
+        ev.preventDefault();
+        const pt=getPos(ev);
+        if(state.pencilOnly && pt.tt!=='stylus') return;
+        const prev = points[points.length-1] || last;
+        const dx=pt.x-(prev?.x??pt.x), dy=pt.y-(prev?.y??pt.y);
+        const moved = (dx*dx+dy*dy)>0.6; // suppress micro-jitter and pen-up dots
+        points.push(pt);
+        if (last && moved) {
+          drawSegment(last, pt, state.tool==='erase');
+          last=pt;
+        }
+      }
+      function end(){
+        if(!drawing) return;
+        drawing=false;
+        // If it was a tap, draw a very small dot
+        if(points.length<2){
+          const a=points[0];
+          octx.save();
+          octx.globalCompositeOperation = (state.tool==='erase')?'destination-out':'source-over';
+          octx.beginPath();
+          octx.arc(a.x,a.y,1.0,0,Math.PI*2);
+          octx.fillStyle=(state.tool==='erase')?'#000':'#000';
+          octx.fill();
+          octx.restore();
+        }
+        points=[]; last=null;
+      }
+      overlay.addEventListener('touchstart',start,{passive:false});
+      overlay.addEventListener('touchmove', move ,{passive:false});
+      overlay.addEventListener('touchend',  end  ,{passive:false});
+      overlay.addEventListener('mousedown',start);
+      overlay.addEventListener('mousemove',move);
+      window.addEventListener('mouseup',end);
     }
+
     function saveAsJPEG(){
       try{
         const { pageCanvas, overlayCanvas } = state.page;
         const merged=document.createElement('canvas'); merged.width=pageCanvas.width; merged.height=pageCanvas.height;
         const mctx=merged.getContext('2d'); mctx.drawImage(pageCanvas,0,0); mctx.drawImage(overlayCanvas,0,0);
-        const dataUrl=merged.toDataURL('image/jpeg',0.9); const b64=dataUrl.split(',')[1];
+        const dataUrl=merged.toDataURL('image/jpeg',0.92); const b64=dataUrl.split(',')[1];
         window.ReactNativeWebView?.postMessage('IMAGE:'+b64);
       }catch(e){window.ReactNativeWebView?.postMessage('ERROR:'+(e?.message||String(e)));}
     }
+
     window.addEventListener('DOMContentLoaded',()=>{
       document.getElementById('pen').addEventListener('click',()=>setTool('pen'));
       document.getElementById('erase').addEventListener('click',()=>setTool('erase'));
@@ -362,6 +517,7 @@ const SKETCH_HTML = `
       document.getElementById('undo').addEventListener('click',undo);
       document.getElementById('clear').addEventListener('click',clearPage);
       document.getElementById('drawToggle').addEventListener('change',e=>setDrawEnabled(e.target.checked));
+      document.getElementById('pencilOnly').addEventListener('change',e=>setPencilOnly(e.target.checked));
       setup();
     });
   </script>
@@ -479,7 +635,7 @@ export default function ViewWorkOrder() {
         }
       }
 
-      // PO Order PDF (optional: if your API exposes a single poPdfPath)
+      // PO Order PDF (optional)
       if (data.poPdfPath) {
         try {
           const url = fileUrl(data.poPdfPath);
@@ -624,7 +780,7 @@ export default function ViewWorkOrder() {
     }
   };
 
-  // Use web sketch for “Draw Note” (exports JPEG)
+  // Use upgraded web sketch for “Draw Note” (exports JPEG)
   const openSketch = () => setSketchVisible(true);
 
   // WebView message handlers
@@ -696,15 +852,14 @@ export default function ViewWorkOrder() {
   };
 
   // ------- derived fields for display (with fallbacks) -------
-  // ✅ Correct mappings:
   const siteName =
-    workOrder?.siteLocation ||     // location name from server
+    workOrder?.siteLocation ||
     workOrder?.siteName ||
     workOrder?.siteLocationName ||
     '';
 
   const siteAddress =
-    workOrder?.siteAddress ||      // street address from server
+    workOrder?.siteAddress ||
     workOrder?.serviceAddress ||
     workOrder?.address ||
     '';
