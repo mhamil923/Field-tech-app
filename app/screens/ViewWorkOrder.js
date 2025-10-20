@@ -214,10 +214,9 @@ const ANNOTATOR_HTML = `
             const dt = Math.max(1, (b.ts - a.ts));
             const dx=b.x-a.x, dy=b.y-a.y;
             const dist=Math.hypot(dx,dy);
-            const vel = dist/dt; // px per ms
-            // target widths
-            const minW=0.8, maxW=2.6; // nice thin ink
-            const speedFactor = Math.max(0, 1 - Math.min(vel*2.0, 1)); // faster => thinner
+            const vel = dist/dt;
+            const minW=0.8, maxW=2.6;
+            const speedFactor = Math.max(0, 1 - Math.min(vel*2.0, 1));
             const pressureFactor = 0.5 + 0.5 * ((a.p + b.p)/2);
             return Math.max(minW, maxW * speedFactor * pressureFactor);
           }
@@ -227,7 +226,6 @@ const ANNOTATOR_HTML = `
             octx.globalCompositeOperation = erase ? 'destination-out' : 'source-over';
             octx.lineWidth = erase ? Math.max(10, w*10) : w;
             octx.beginPath();
-            // quadratic smoothing
             const cx=(a.x+b.x)/2, cy=(a.y+b.y)/2;
             octx.moveTo(a.x,a.y);
             octx.quadraticCurveTo(a.x,a.y,cx,cy);
@@ -248,13 +246,11 @@ const ANNOTATOR_HTML = `
             if(!state.drawEnabled||!drawing) return;
             ev.preventDefault();
             const pt=getPos(ev);
-            // Pencil-only mode? If enabled, ignore non-stylus touches.
             if (window.__PENCIL_ONLY__ && pt.tt !== 'stylus') return;
             const erase = (state.tool==='erase');
-            // suppress jitter/dots: only draw once movement exceeds small epsilon
             const prev = points[points.length-1] || last;
-            const dx=pt.x-(prev?.x??pt.x), dy=pt.y-(prev?.y??pt.y);
-            const moved = (dx*dx+dy*dy)>0.6; // ~0.77px
+            const dx=pt.x-(prev?.x??pt.x), dy=pt.y-(prev?.y??prev?.y);
+            const moved = (dx*dx+dy*dy)>0.6;
             points.push(pt);
             if (last && moved) {
               drawSegment(last, pt, erase);
@@ -264,7 +260,6 @@ const ANNOTATOR_HTML = `
           function end(ev){
             if(!drawing){ return; }
             drawing=false;
-            // tiny tap? draw a small dot (very small)
             if(points.length<2){
               const a=points[0];
               octx.save();
@@ -325,7 +320,6 @@ const ANNOTATOR_HTML = `
         clearPage(target);
       });
       document.getElementById('drawToggle').addEventListener('change',e=>setDrawEnabled(e.target.checked));
-      // Pencil-only toggle support via injected flag from RN (optional)
       renderPDF();
     });
   </script>
@@ -429,11 +423,10 @@ const SKETCH_HTML = `
         const dt=Math.max(1,(b.ts-a.ts));
         const dx=b.x-a.x, dy=b.y-a.y;
         const dist=Math.hypot(dx,dy);
-        const vel=dist/dt; // px per ms
-        // Pencil-like: velocity thinner, pressure thicker
+        const vel=dist/dt;
         const minW=0.7, maxW=2.4;
-        const speedFactor = Math.max(0.1, 1 - Math.min(vel*2.2, 0.9)); // 0.1..0.9
-        const pressureFactor = 0.5 + 0.5*((a.p+b.p)/2); // 0.5..1
+        const speedFactor = Math.max(0.1, 1 - Math.min(vel*2.2, 0.9));
+        const pressureFactor = 0.5 + 0.5*((a.p+b.p)/2);
         const w = maxW * speedFactor * pressureFactor;
         return Math.max(minW, Math.min(maxW, w));
       }
@@ -443,7 +436,6 @@ const SKETCH_HTML = `
         octx.globalCompositeOperation = erase ? 'destination-out' : 'source-over';
         octx.lineWidth = erase ? Math.max(10, w*12) : w;
         octx.beginPath();
-        // Quadratic smoothing between points
         const cx=(a.x+b.x)/2, cy=(a.y+b.y)/2;
         octx.moveTo(a.x,a.y);
         octx.quadraticCurveTo(a.x,a.y,cx,cy);
@@ -457,7 +449,7 @@ const SKETCH_HTML = `
         pushUndo();
         drawing=true; points=[]; last=null;
         const pt=getPos(ev);
-        if(state.pencilOnly && pt.tt!=='stylus') return; // ignore finger
+        if(state.pencilOnly && pt.tt!=='stylus') return;
         points.push(pt); last=pt;
       }
       function move(ev){
@@ -468,7 +460,7 @@ const SKETCH_HTML = `
         if(state.pencilOnly && pt.tt!=='stylus') return;
         const prev = points[points.length-1] || last;
         const dx=pt.x-(prev?.x??pt.x), dy=pt.y-(prev?.y??pt.y);
-        const moved = (dx*dx+dy*dy)>0.6; // suppress micro-jitter and pen-up dots
+        const moved = (dx*dx+dy*dy)>0.6;
         points.push(pt);
         if (last && moved) {
           drawSegment(last, pt, state.tool==='erase');
@@ -478,7 +470,6 @@ const SKETCH_HTML = `
       function end(){
         if(!drawing) return;
         drawing=false;
-        // If it was a tap, draw a very small dot
         if(points.length<2){
           const a=points[0];
           octx.save();
@@ -858,10 +849,12 @@ export default function ViewWorkOrder() {
     workOrder?.siteLocationName ||
     '';
 
+  // ✅ Prefer site address for navigation; if it's missing, fall back to site location string.
   const siteAddress =
     workOrder?.siteAddress ||
     workOrder?.serviceAddress ||
     workOrder?.address ||
+    workOrder?.siteLocation ||
     '';
 
   const poNumber = workOrder?.poNumber || '—';
@@ -972,13 +965,8 @@ export default function ViewWorkOrder() {
 
           <View style={styles.row}>
             <Text style={styles.label}>Billing Address:</Text>
-            {billingAddress ? (
-              <TouchableOpacity onPress={() => openMap(billingAddress)}>
-                <Text style={[styles.value, styles.linkText]}>{billingAddress}</Text>
-              </TouchableOpacity>
-            ) : (
-              <Text style={styles.value}>—</Text>
-            )}
+            {/* 🔒 Display-only to prevent wrong navigation target */}
+            <Text style={styles.value}>{billingAddress || '—'}</Text>
           </View>
 
           <View style={styles.row}>
