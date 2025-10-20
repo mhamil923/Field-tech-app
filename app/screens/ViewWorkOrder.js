@@ -754,7 +754,7 @@ export default function ViewWorkOrder() {
     if (idx < 0 || idx >= keys.length) return;
 
     Alert.alert('Delete Photo?', 'This will permanently remove it.', [
-      { text: 'Cancel', style: 'cancel' },
+      { text: 'Cancel, keep it', style: 'cancel' },
       {
         text: 'Delete',
         style: 'destructive',
@@ -1101,7 +1101,7 @@ export default function ViewWorkOrder() {
                     }
                   }}
                   injectedJavaScriptBeforeContentLoaded={
-                    \`window.PDF_BASE64 = \${JSON.stringify(pdfInlineB64)}; true;\`
+                    `window.PDF_BASE64 = ${JSON.stringify(pdfInlineB64)}; true;`
                   }
                   style={{ flex: 1 }}
                 />
@@ -1158,7 +1158,7 @@ export default function ViewWorkOrder() {
                     }
                   }}
                   injectedJavaScriptBeforeContentLoaded={
-                    \`window.PDF_BASE64 = \${JSON.stringify(poPdfInlineB64)}; true;\`
+                    `window.PDF_BASE64 = ${JSON.stringify(poPdfInlineB64)}; true;`
                   }
                   style={{ flex: 1 }}
                 />
@@ -1339,7 +1339,7 @@ export default function ViewWorkOrder() {
               domStorageEnabled
               onMessage={onAnnotatorMessage}
               injectedJavaScriptBeforeContentLoaded={
-                \`window.PDF_BASE64 = \${JSON.stringify(pdfBase64)}; true;\`
+                `window.PDF_BASE64 = ${JSON.stringify(pdfBase64)}; true;`
               }
               style={{ flex: 1 }}
             />
