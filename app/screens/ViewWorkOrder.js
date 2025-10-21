@@ -47,6 +47,8 @@ const STATUS_OPTIONS = [
 
 /**
  * Read-only multi-page PDF viewer using pdf.js
+ * - Adds atob/btoa polyfill
+ * - Waits until window.PDF_BASE64 is set before rendering (prevents race)
  */
 const PDF_VIEWER_HTML = `
 <!doctype html>
@@ -61,11 +63,23 @@ const PDF_VIEWER_HTML = `
   .pageWrap { margin: 0 auto 12px; max-width: 1100px; }
   canvas.page { width:100%; height:auto; display:block; background:#fafafa; box-shadow: 0 1px 2px rgba(0,0,0,.05); }
   .hint { text-align:center; font-size:12px; color:#6b7280; margin:8px 0 12px; }
+  .msg { text-align:center; color:#6b7280; margin:12px 0; }
 </style>
 </head>
 <body>
+  <div class="msg" id="msg">Preparing preview…</div>
   <div id="pages"></div>
   <div class="hint">Scroll to view all pages.</div>
+
+  <script>
+    // Safe atob/btoa polyfill in case a platform disables them
+    (function(){
+      if (typeof atob === 'function' && typeof btoa === 'function') return;
+      const chars = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/=';
+      window.atob = function(input=''){ let str=String(input).replace(/=+$/,''); let output=''; if(str.length%4==1) throw new Error('atob bad length'); for(let bc=0,bs=0,buffer,idx=0; buffer=str.charAt(idx++); ~buffer && (bs=bc%4? bs*64+buffer:buffer, bc++%4)? output+=String.fromCharCode(255 & bs >> (-2*bc & 6)) : 0){ buffer=chars.indexOf(buffer);} return output; };
+      window.btoa = function(input=''){ let output=''; for(let block, charCode, idx=0, map=chars; input.charAt(idx|=0) || (map='=', idx%1); output+=map.charAt(63 & block >> 8 - idx%1*8)){ charCode=input.charCodeAt(idx+=3/4); if (charCode>0xFF) throw new Error('btoa bad char'); block = block<<8 | charCode; } return output; };
+    })();
+  </script>
 
   <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
   <script>
@@ -73,12 +87,18 @@ const PDF_VIEWER_HTML = `
       pdfjsLib.GlobalWorkerOptions.workerSrc =
         "https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js";
     }
-    function b64ToUint8(b64){const bin=atob(b64);const bytes=new Uint8Array(bin.length);for(let i=0;i<bin.length;i++)bytes[i]=bin.charCodeAt(i);return bytes;}
+    function b64ToUint8(b64){
+      const bin=atob(b64);
+      const bytes=new Uint8Array(bin.length);
+      for(let i=0;i<bin.length;i++)bytes[i]=bin.charCodeAt(i);
+      return bytes;
+    }
     async function renderPDF(){
       try{
         const b64 = window.PDF_BASE64 || '';
         if(!b64) throw new Error('Missing PDF data.');
         const doc = await pdfjsLib.getDocument({ data: b64ToUint8(b64) }).promise;
+        document.getElementById('msg').textContent = '';
         const container = document.getElementById('pages'); container.innerHTML='';
         for (let i=1; i<=doc.numPages; i++){
           const page = await doc.getPage(i);
@@ -100,7 +120,11 @@ const PDF_VIEWER_HTML = `
         window.ReactNativeWebView?.postMessage('ERROR:'+(e?.message||String(e)));
       }
     }
-    window.addEventListener('DOMContentLoaded', renderPDF);
+    // Wait for PDF_BASE64 to be injected, then render once
+    (function waitForData(){
+      if (window.PDF_BASE64) { renderPDF(); return; }
+      setTimeout(waitForData, 30);
+    })();
   </script>
 </body>
 </html>
@@ -313,6 +337,18 @@ const ANNOTATOR_HTML = `
       }catch(e){window.ReactNativeWebView?.postMessage('ERROR:'+(e?.message||String(e))); }
     }
 
+    function applyPointerMode(){
+      for(const p of state.pages){
+        p.overlayCanvas.style.pointerEvents=state.drawEnabled?'auto':'none';
+        p.overlayCanvas.style.touchAction=state.drawEnabled?'none':'auto';
+        p.overlayCanvas.style.cursor=state.drawEnabled?(state.tool==='erase'?'cell':'crosshair'):'default';
+      }
+      const c=document.getElementById('cursor');
+      if(!state.drawEnabled){c.style.display='none';return;}
+      c.style.display='block'; c.className=state.tool==='erase'?'cursor':'cursor pen';
+    }
+    function setTool(t){state.tool=t;applyPointerMode();}
+
     window.addEventListener('DOMContentLoaded',()=>{
       document.getElementById('pen').addEventListener('click',()=>setTool('pen'));
       document.getElementById('erase').addEventListener('click',()=>setTool('erase'));
@@ -328,8 +364,9 @@ const ANNOTATOR_HTML = `
         for(const p of state.pages){const top=p.overlayCanvas.getBoundingClientRect().top+window.scrollY; if(top<=winTop+100) target=p;}
         clearPage(target);
       });
-      document.getElementById('drawToggle').addEventListener('change',e=>setDrawEnabled(e.target.checked));
-      renderPDF();
+      document.getElementById('drawToggle').addEventListener('change',e=>{state.drawEnabled=e.target.checked;applyPointerMode();});
+      // Wait for data injection
+      (function waitForData(){ if (window.PDF_BASE64){ renderPDF(); } else { setTimeout(waitForData, 30);} })();
     });
   </script>
 </body>
@@ -1160,7 +1197,10 @@ export default function ViewWorkOrder() {
                   originWhitelist={['*']}
                   source={{ html: PDF_VIEWER_HTML }}
                   javaScriptEnabled
-                  domStorageEnabled={false}
+                  domStorageEnabled
+                  setSupportMultipleWindows={false}
+                  onError={() => setPdfPreviewError('WebView failed to load.')}
+                  onHttpError={() => setPdfPreviewError('WebView HTTP error.')}
                   onMessage={(e) => {
                     const msg = e?.nativeEvent?.data || '';
                     if (typeof msg !== 'string') return;
@@ -1218,7 +1258,10 @@ export default function ViewWorkOrder() {
                   originWhitelist={['*']}
                   source={{ html: PDF_VIEWER_HTML }}
                   javaScriptEnabled
-                  domStorageEnabled={false}
+                  domStorageEnabled
+                  setSupportMultipleWindows={false}
+                  onError={() => setPoPdfPreviewError('WebView failed to load.')}
+                  onHttpError={() => setPoPdfPreviewError('WebView HTTP error.')}
                   onMessage={(e) => {
                     const msg = e?.nativeEvent?.data || '';
                     if (typeof msg !== 'string') return;
@@ -1432,6 +1475,9 @@ export default function ViewWorkOrder() {
             source={{ html: SKETCH_HTML }}
             javaScriptEnabled
             domStorageEnabled
+            setSupportMultipleWindows={false}
+            onError={() => Alert.alert('Error', 'Sketch view failed to load.')}
+            onHttpError={() => Alert.alert('Error', 'Sketch view HTTP error.')}
             onMessage={onSketchMessage}
             style={{ flex: 1 }}
           />
@@ -1448,6 +1494,9 @@ export default function ViewWorkOrder() {
               source={{ html: ANNOTATOR_HTML }}
               javaScriptEnabled
               domStorageEnabled
+              setSupportMultipleWindows={false}
+              onError={() => Alert.alert('Error', 'Annotator failed to load.')}
+              onHttpError={() => Alert.alert('Error', 'Annotator HTTP error.')}
               onMessage={onAnnotatorMessage}
               injectedJavaScriptBeforeContentLoaded={
                 `window.PDF_BASE64 = ${JSON.stringify(pdfBase64)}; true;`
