@@ -22,7 +22,6 @@ import { WebView } from 'react-native-webview';
 import * as FileSystem from 'expo-file-system';
 import * as ImagePicker from 'expo-image-picker';
 import * as ImageManipulator from 'expo-image-manipulator';
-import { Camera, CameraType } from 'expo-camera';
 import moment from 'moment';
 import { useLocalSearchParams, useRouter } from 'expo-router';
 
@@ -47,8 +46,6 @@ const STATUS_OPTIONS = [
 
 /**
  * Read-only multi-page PDF viewer using pdf.js
- * - Adds atob/btoa polyfill
- * - Waits until window.PDF_BASE64 is set before rendering (prevents race)
  */
 const PDF_VIEWER_HTML = `
 <!doctype html>
@@ -63,23 +60,11 @@ const PDF_VIEWER_HTML = `
   .pageWrap { margin: 0 auto 12px; max-width: 1100px; }
   canvas.page { width:100%; height:auto; display:block; background:#fafafa; box-shadow: 0 1px 2px rgba(0,0,0,.05); }
   .hint { text-align:center; font-size:12px; color:#6b7280; margin:8px 0 12px; }
-  .msg { text-align:center; color:#6b7280; margin:12px 0; }
 </style>
 </head>
 <body>
-  <div class="msg" id="msg">Preparing preview…</div>
   <div id="pages"></div>
   <div class="hint">Scroll to view all pages.</div>
-
-  <script>
-    // Safe atob/btoa polyfill in case a platform disables them
-    (function(){
-      if (typeof atob === 'function' && typeof btoa === 'function') return;
-      const chars = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/=';
-      window.atob = function(input=''){ let str=String(input).replace(/=+$/,''); let output=''; if(str.length%4==1) throw new Error('atob bad length'); for(let bc=0,bs=0,buffer,idx=0; buffer=str.charAt(idx++); ~buffer && (bs=bc%4? bs*64+buffer:buffer, bc++%4)? output+=String.fromCharCode(255 & bs >> (-2*bc & 6)) : 0){ buffer=chars.indexOf(buffer);} return output; };
-      window.btoa = function(input=''){ let output=''; for(let block, charCode, idx=0, map=chars; input.charAt(idx|=0) || (map='=', idx%1); output+=map.charAt(63 & block >> 8 - idx%1*8)){ charCode=input.charCodeAt(idx+=3/4); if (charCode>0xFF) throw new Error('btoa bad char'); block = block<<8 | charCode; } return output; };
-    })();
-  </script>
 
   <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
   <script>
@@ -87,18 +72,12 @@ const PDF_VIEWER_HTML = `
       pdfjsLib.GlobalWorkerOptions.workerSrc =
         "https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js";
     }
-    function b64ToUint8(b64){
-      const bin=atob(b64);
-      const bytes=new Uint8Array(bin.length);
-      for(let i=0;i<bin.length;i++)bytes[i]=bin.charCodeAt(i);
-      return bytes;
-    }
+    function b64ToUint8(b64){const bin=atob(b64);const bytes=new Uint8Array(bin.length);for(let i=0;i<bin.length;i++)bytes[i]=bin.charCodeAt(i);return bytes;}
     async function renderPDF(){
       try{
         const b64 = window.PDF_BASE64 || '';
         if(!b64) throw new Error('Missing PDF data.');
         const doc = await pdfjsLib.getDocument({ data: b64ToUint8(b64) }).promise;
-        document.getElementById('msg').textContent = '';
         const container = document.getElementById('pages'); container.innerHTML='';
         for (let i=1; i<=doc.numPages; i++){
           const page = await doc.getPage(i);
@@ -120,11 +99,7 @@ const PDF_VIEWER_HTML = `
         window.ReactNativeWebView?.postMessage('ERROR:'+(e?.message||String(e)));
       }
     }
-    // Wait for PDF_BASE64 to be injected, then render once
-    (function waitForData(){
-      if (window.PDF_BASE64) { renderPDF(); return; }
-      setTimeout(waitForData, 30);
-    })();
+    window.addEventListener('DOMContentLoaded', renderPDF);
   </script>
 </body>
 </html>
@@ -337,18 +312,6 @@ const ANNOTATOR_HTML = `
       }catch(e){window.ReactNativeWebView?.postMessage('ERROR:'+(e?.message||String(e))); }
     }
 
-    function applyPointerMode(){
-      for(const p of state.pages){
-        p.overlayCanvas.style.pointerEvents=state.drawEnabled?'auto':'none';
-        p.overlayCanvas.style.touchAction=state.drawEnabled?'none':'auto';
-        p.overlayCanvas.style.cursor=state.drawEnabled?(state.tool==='erase'?'cell':'crosshair'):'default';
-      }
-      const c=document.getElementById('cursor');
-      if(!state.drawEnabled){c.style.display='none';return;}
-      c.style.display='block'; c.className=state.tool==='erase'?'cursor':'cursor pen';
-    }
-    function setTool(t){state.tool=t;applyPointerMode();}
-
     window.addEventListener('DOMContentLoaded',()=>{
       document.getElementById('pen').addEventListener('click',()=>setTool('pen'));
       document.getElementById('erase').addEventListener('click',()=>setTool('erase'));
@@ -364,9 +327,8 @@ const ANNOTATOR_HTML = `
         for(const p of state.pages){const top=p.overlayCanvas.getBoundingClientRect().top+window.scrollY; if(top<=winTop+100) target=p;}
         clearPage(target);
       });
-      document.getElementById('drawToggle').addEventListener('change',e=>{state.drawEnabled=e.target.checked;applyPointerMode();});
-      // Wait for data injection
-      (function waitForData(){ if (window.PDF_BASE64){ renderPDF(); } else { setTimeout(waitForData, 30);} })();
+      document.getElementById('drawToggle').addEventListener('change',e=>setDrawEnabled(e.target.checked));
+      renderPDF();
     });
   </script>
 </body>
@@ -375,6 +337,7 @@ const ANNOTATOR_HTML = `
 
 /**
  * SKETCH HTML (used for "Draw Note")
+ * — same solid stroke engine applied here
  */
 const SKETCH_HTML = `
 <!doctype html>
@@ -442,7 +405,7 @@ const SKETCH_HTML = `
       const dt=Math.max(1,(b.ts-a.ts));
       const dx=b.x-a.x, dy=b.y-a.y;
       const dist=Math.hypot(dx,dy);
-      const vel=dist/dt;
+      const vel=dist/dt; // px/ms
       const minW=1.25, maxW=2.8;
       const speedFactor = Math.max(0.25, 1 - Math.min(vel*2.0, 0.85));
       const pressureFactor = (('p' in a) && ('p' in b)) ? (0.6 + 0.4 * ((a.p + b.p)/2)) : 1.0;
@@ -575,12 +538,6 @@ export default function ViewWorkOrder() {
   const workOrderId = params?.id ? (Array.isArray(params.id) ? params.id[0] : params.id) : null;
   const router = useRouter();
 
-  const mountedRef = useRef(true);
-  useEffect(() => {
-    mountedRef.current = true;
-    return () => { mountedRef.current = false; };
-  }, []);
-
   const [workOrder, setWorkOrder] = useState(null);
   const [photos, setPhotos] = useState([]);
   const [notes, setNotes] = useState([]);
@@ -588,11 +545,8 @@ export default function ViewWorkOrder() {
   const [showAddNoteModal, setShowAddNoteModal] = useState(false);
   const [newNoteText, setNewNoteText] = useState('');
 
-  // Attachments flow
+  // Attachments modal
   const [viewAttachmentsVisible, setViewAttachmentsVisible] = useState(false);
-  const [photoViewerVisible, setPhotoViewerVisible] = useState(false);
-  const [viewerIndex, setViewerIndex] = useState(0);
-  const [cameFromAttachments, setCameFromAttachments] = useState(false); // ensures we return to attachments
 
   // Draw Notes (web sketch -> JPEG)
   const [sketchVisible, setSketchVisible] = useState(false);
@@ -615,14 +569,6 @@ export default function ViewWorkOrder() {
   // Status modal
   const [showStatusModal, setShowStatusModal] = useState(false);
   const [pendingStatus, setPendingStatus] = useState('');
-
-  // Multi-photo Camera modal
-  const [cameraVisible, setCameraVisible] = useState(false);
-  const [cameraType, setCameraType] = useState(CameraType.back);
-  const cameraRef = useRef(null);
-  const [captures, setCaptures] = useState([]); // array of { uri }
-  const [hasCameraPermission, setHasCameraPermission] = useState(false);
-  const [isUploading, setIsUploading] = useState(false);
 
   // -------- helpers for contact actions & address --------
   const normPhone = (p) => String(p || '').replace(/[^\d+]/g, '');
@@ -663,8 +609,6 @@ export default function ViewWorkOrder() {
     if (!workOrderId) return;
     try {
       const { data } = await api.get(`/work-orders/${workOrderId}`);
-      if (!mountedRef.current) return;
-
       setWorkOrder(data);
 
       const parsedNotes = Array.isArray(data.notes)
@@ -693,9 +637,9 @@ export default function ViewWorkOrder() {
           const target = FileSystem.cacheDirectory + `wo_preview_${workOrderId}.pdf`;
           await FileSystem.downloadAsync(url, target);
           const b64 = await FileSystem.readAsStringAsync(target, { encoding: FileSystem.EncodingType.Base64 });
-          if (mountedRef.current) setPdfInlineB64(b64);
+          setPdfInlineB64(b64);
         } catch (e) {
-          if (mountedRef.current) setPdfPreviewError(e?.message || 'Failed to load PDF.');
+          setPdfPreviewError(e?.message || 'Failed to load PDF.');
         }
       }
 
@@ -706,13 +650,13 @@ export default function ViewWorkOrder() {
           const target = FileSystem.cacheDirectory + `po_preview_${workOrderId}.pdf`;
           await FileSystem.downloadAsync(url, target);
           const b64 = await FileSystem.readAsStringAsync(target, { encoding: FileSystem.EncodingType.Base64 });
-          if (mountedRef.current) setPoPdfInlineB64(b64);
+          setPoPdfInlineB64(b64);
         } catch (e) {
-          if (mountedRef.current) setPoPdfPreviewError(e?.message || 'Failed to load PO PDF.');
+          setPoPdfPreviewError(e?.message || 'Failed to load PO PDF.');
         }
       }
     } catch {
-      if (mountedRef.current) Alert.alert('Error', 'Failed to load work order.');
+      Alert.alert('Error', 'Failed to load work order.');
     }
   }, [workOrderId]);
 
@@ -724,7 +668,6 @@ export default function ViewWorkOrder() {
     if (!newNoteText.trim()) return;
     try {
       const { data } = await api.post(`/work-orders/${workOrderId}/notes`, { text: newNoteText.trim() });
-      if (!mountedRef.current) return;
       setNewNoteText('');
       setShowAddNoteModal(false);
       setNotes(sortNotesDesc(data.notes || []));
@@ -747,104 +690,54 @@ export default function ViewWorkOrder() {
     }
   };
 
-  // Multi-photo camera flow
-  const openCameraModal = async () => {
-    try {
-      const cam = await Camera.requestCameraPermissionsAsync();
-      if (cam.status !== 'granted') {
-        Alert.alert('Permission required', 'Need camera access.');
-        return;
-      }
-      setHasCameraPermission(true);
-      setCaptures([]);
-      setCameraType(CameraType.back);
-      setCameraVisible(true);
-    } catch {
-      Alert.alert('Error', 'Unable to open camera.');
-    }
-  };
-
-  const capturePhoto = async () => {
-    if (!cameraRef.current) return;
-    try {
-      const photo = await cameraRef.current.takePictureAsync({
-        quality: 1,
-        skipProcessing: true,
-        exif: false,
-      });
-      if (photo?.uri) setCaptures((arr) => [...arr, { uri: photo.uri }]);
-    } catch {
-      Alert.alert('Error', 'Failed to capture photo.');
-    }
-  };
-
-  const clearCaptures = () => setCaptures([]);
-
-  const uploadAllCaptures = async () => {
-    if (!captures.length) {
-      Alert.alert('No photos', 'Take a photo first.');
-      return;
-    }
-    try {
-      setIsUploading(true);
-      const form = new FormData();
-      for (let i = 0; i < captures.length; i++) {
-        const processedUri = await processImageForUpload(captures[i].uri);
-        form.append('photoFile', {
-          uri: processedUri,
-          name: `photo-${Date.now()}-${i}.jpg`,
-          type: 'image/jpeg',
-        });
-      }
-      await api.put(`/work-orders/${workOrderId}/edit`, form, {
-        headers: { 'Content-Type': 'multipart/form-data' },
-      });
-      if (!mountedRef.current) return;
-      setCameraVisible(false);
-      setCaptures([]);
-      fetchWorkOrder();
-      Alert.alert('Uploaded', 'Photos uploaded!');
-    } catch (err) {
-      Alert.alert('Upload Error', err?.response?.data?.error || err.message);
-    } finally {
-      if (mountedRef.current) setIsUploading(false);
-    }
-  };
-
-  // Keep “Upload Photo(s)” from library with multi-select (hardened for Android)
-  const uploadPhotos = async () => {
-    const { status } = await ImagePicker.requestMediaLibraryPermissionsAsync();
-    if (status !== 'granted') return Alert.alert('Permission required', 'Need photo library access.');
-
-    const pickerOptions = Platform.select({
-      ios: { mediaTypes: ImagePicker.MediaTypeOptions.Images, allowsMultipleSelection: true, quality: 1 },
-      android: { mediaTypes: ImagePicker.MediaTypeOptions.Images, quality: 1 },
-      default: { mediaTypes: ImagePicker.MediaTypeOptions.Images, quality: 1 },
+  // Simple camera capture via ImagePicker (single photo)
+  const takePhoto = async () => {
+    const { status } = await ImagePicker.requestCameraPermissionsAsync();
+    if (status !== 'granted') return Alert.alert('Permission required', 'Need camera access.');
+    const result = await ImagePicker.launchCameraAsync({
+      mediaTypes: ImagePicker.MediaTypeOptions.Images,
+      quality: 1,
     });
-
-    const result = await ImagePicker.launchImageLibraryAsync(pickerOptions);
-
     if (result.canceled) return;
 
-    const assets = Array.isArray(result.assets) ? result.assets : (result.assets ? [result.assets] : []);
-    if (!assets.length) {
-      Alert.alert('No selection', 'No images selected.');
-      return;
-    }
-
     const form = new FormData();
-    for (let i = 0; i < assets.length; i++) {
-      const processedUri = await processImageForUpload(assets[i].uri);
+    for (let i = 0; i < result.assets.length; i++) {
+      const processedUri = await processImageForUpload(result.assets[i].uri);
       const name = `photo-${Date.now()}-${i}.jpg`;
       form.append('photoFile', { uri: processedUri, name, type: 'image/jpeg' });
     }
 
     try {
       await api.put(`/work-orders/${workOrderId}/edit`, form, { headers: { 'Content-Type': 'multipart/form-data' } });
-      if (mountedRef.current) {
-        fetchWorkOrder();
-        Alert.alert('Success', 'Photos uploaded!');
-      }
+      fetchWorkOrder();
+      Alert.alert('Success', 'Photo taken!');
+    } catch (err) {
+      Alert.alert('Upload Error', err?.response?.data?.error || err.message);
+    }
+  };
+
+  // Library multi-select
+  const uploadPhotos = async () => {
+    const { status } = await ImagePicker.requestMediaLibraryPermissionsAsync();
+    if (status !== 'granted') return Alert.alert('Permission required', 'Need photo library access.');
+    const result = await ImagePicker.launchImageLibraryAsync({
+      mediaTypes: ImagePicker.MediaTypeOptions.Images,
+      allowsMultipleSelection: true,
+      quality: 1,
+    });
+    if (result.canceled) return;
+
+    const form = new FormData();
+    for (let i = 0; i < result.assets.length; i++) {
+      const processedUri = await processImageForUpload(result.assets[i].uri);
+      const name = `photo-${Date.now()}-${i}.jpg`;
+      form.append('photoFile', { uri: processedUri, name, type: 'image/jpeg' });
+    }
+
+    try {
+      await api.put(`/work-orders/${workOrderId}/edit`, form, { headers: { 'Content-Type': 'multipart/form-data' } });
+      fetchWorkOrder();
+      Alert.alert('Success', 'Photos uploaded!');
     } catch (err) {
       Alert.alert('Upload Error', err?.response?.data?.error || err.message);
     }
@@ -862,10 +755,8 @@ export default function ViewWorkOrder() {
         onPress: async () => {
           try {
             await api.delete(`/work-orders/${workOrderId}/attachment`, { data: { photoPath: keys[idx] } });
-            if (mountedRef.current) {
-              fetchWorkOrder();
-              Alert.alert('Deleted');
-            }
+            fetchWorkOrder();
+            Alert.alert('Deleted');
           } catch (err) {
             Alert.alert('Error', err?.response?.data?.error || err.message);
           }
@@ -874,10 +765,13 @@ export default function ViewWorkOrder() {
     ]);
   };
 
-  const [viewerShareIndex] = useState(0); // placeholder to match earlier pattern
+  const [photoViewerVisible, setPhotoViewerVisible] = useState(false);
+  const [viewerIndex, setViewerIndex] = useState(0);
+
   const handleShare = async () => {
     if (!photos.length) return;
-    const url = photos[Math.min(Math.max(0, viewerIndex), Math.max(0, photos.length - 1))];
+    const safeIndex = Math.min(Math.max(0, viewerIndex), Math.max(0, photos.length - 1));
+    const url = photos[safeIndex];
     try { await Share.share({ url, message: url }); } catch {}
   };
 
@@ -890,14 +784,14 @@ export default function ViewWorkOrder() {
       const tmp = FileSystem.cacheDirectory + `wo_${workOrderId}.pdf`;
       await FileSystem.downloadAsync(pdfURL, tmp);
       const b64 = await FileSystem.readAsStringAsync(tmp, { encoding: FileSystem.EncodingType.Base64 });
-      if (mountedRef.current) setPdfBase64(b64);
+      setPdfBase64(b64);
     } catch {
-      if (mountedRef.current) setAnnotateVisible(false);
+      setAnnotateVisible(false);
       Alert.alert('Error', 'Failed to load PDF for annotation.');
     }
   };
 
-  // Use upgraded web sketch for “Draw Note” (exports JPEG)
+  // “Draw Note”
   const openSketch = () => setSketchVisible(true);
 
   // WebView message handlers
@@ -909,7 +803,7 @@ export default function ViewWorkOrder() {
       return;
     }
     if (msg === 'CLOSE') {
-      if (mountedRef.current) setAnnotateVisible(false);
+      setAnnotateVisible(false);
       return;
     }
     if (msg.startsWith('SIGNED:')) {
@@ -924,11 +818,9 @@ export default function ViewWorkOrder() {
 
         await api.put(`/work-orders/${workOrderId}/edit`, form, { headers: { 'Content-Type': 'multipart/form-data' } });
 
-        if (mountedRef.current) {
-          setAnnotateVisible(false);
-          fetchWorkOrder();
-          Alert.alert('Success', 'Signed PDF uploaded.');
-        }
+        setAnnotateVisible(false);
+        fetchWorkOrder();
+        Alert.alert('Success', 'Signed PDF uploaded.');
       } catch (e) {
         Alert.alert('Upload Error', e?.message || 'Failed to upload signed PDF.');
       }
@@ -943,7 +835,7 @@ export default function ViewWorkOrder() {
       return;
     }
     if (msg === 'CLOSE') {
-      if (mountedRef.current) setSketchVisible(false);
+      setSketchVisible(false);
       return;
     }
     if (msg.startsWith('IMAGE:')) {
@@ -963,11 +855,9 @@ export default function ViewWorkOrder() {
 
         await api.put(`/work-orders/${workOrderId}/edit`, form, { headers: { 'Content-Type': 'multipart/form-data' } });
 
-        if (mountedRef.current) {
-          setSketchVisible(false);
-          fetchWorkOrder();
-          Alert.alert('Uploaded', 'Drawing note uploaded as photo.');
-        }
+        setSketchVisible(false);
+        fetchWorkOrder();
+        Alert.alert('Uploaded', 'Drawing note uploaded as photo.');
       } catch (e) {
         Alert.alert('Upload Error', e?.message || 'Failed to upload drawing note.');
       }
@@ -1028,7 +918,6 @@ export default function ViewWorkOrder() {
       const form = new FormData();
       form.append('status', pendingStatus || STATUS_OPTIONS[0]);
       await api.put(`/work-orders/${workOrderId}/edit`, form);
-      if (!mountedRef.current) return;
       setShowStatusModal(false);
       fetchWorkOrder();
     } catch (e) {
@@ -1098,6 +987,7 @@ export default function ViewWorkOrder() {
 
           <View style={styles.row}>
             <Text style={styles.label}>Billing Address:</Text>
+            {/* Display-only to prevent wrong navigation target */}
             <Text style={styles.value}>{billingAddress || '—'}</Text>
           </View>
 
@@ -1129,24 +1019,18 @@ export default function ViewWorkOrder() {
           <Text style={styles.attachText}>Annotate & Sign PDF</Text>
         </TouchableOpacity>
 
-        {/* Multi-photo camera */}
-        <TouchableOpacity style={[styles.buttonBase, styles.photoBtn]} onPress={openCameraModal}>
-          <Text style={styles.photoText}>Take Photo(s)</Text>
+        <TouchableOpacity style={[styles.buttonBase, styles.photoBtn]} onPress={takePhoto}>
+          <Text style={styles.photoText}>Take Photo</Text>
         </TouchableOpacity>
-
-        {/* Library multi-select */}
         <TouchableOpacity style={[styles.buttonBase, styles.photoBtn]} onPress={uploadPhotos}>
           <Text style={styles.photoText}>Upload Photo(s)</Text>
         </TouchableOpacity>
-
         <TouchableOpacity style={[styles.buttonBase, styles.attachBtn]} onPress={() => setViewAttachmentsVisible(true)}>
           <Text style={styles.attachText}>View Attachments</Text>
         </TouchableOpacity>
-
         <TouchableOpacity style={[styles.buttonBase, styles.noteBtn]} onPress={() => setShowAddNoteModal(true)}>
           <Text style={styles.noteText}>Add Note</Text>
         </TouchableOpacity>
-
         <TouchableOpacity style={[styles.buttonBase, styles.drawBtn]} onPress={() => setSketchVisible(true)}>
           <Text style={styles.drawText}>Draw Note</Text>
         </TouchableOpacity>
@@ -1197,10 +1081,7 @@ export default function ViewWorkOrder() {
                   originWhitelist={['*']}
                   source={{ html: PDF_VIEWER_HTML }}
                   javaScriptEnabled
-                  domStorageEnabled
-                  setSupportMultipleWindows={false}
-                  onError={() => setPdfPreviewError('WebView failed to load.')}
-                  onHttpError={() => setPdfPreviewError('WebView HTTP error.')}
+                  domStorageEnabled={false}
                   onMessage={(e) => {
                     const msg = e?.nativeEvent?.data || '';
                     if (typeof msg !== 'string') return;
@@ -1217,9 +1098,8 @@ export default function ViewWorkOrder() {
                       }
                     }
                   }}
-                  injectedJavaScriptBeforeContentLoaded={
-                    `window.PDF_BASE64 = ${JSON.stringify(pdfInlineB64)}; true;`
-                  }
+                  // IMPORTANT: pass code as a STRING, with a safely-escaped value
+                  injectedJavaScriptBeforeContentLoaded={`window.PDF_BASE64 = ${JSON.stringify(pdfInlineB64)}; true;`}
                   style={{ flex: 1 }}
                 />
               </View>
@@ -1258,10 +1138,7 @@ export default function ViewWorkOrder() {
                   originWhitelist={['*']}
                   source={{ html: PDF_VIEWER_HTML }}
                   javaScriptEnabled
-                  domStorageEnabled
-                  setSupportMultipleWindows={false}
-                  onError={() => setPoPdfPreviewError('WebView failed to load.')}
-                  onHttpError={() => setPoPdfPreviewError('WebView HTTP error.')}
+                  domStorageEnabled={false}
                   onMessage={(e) => {
                     const msg = e?.nativeEvent?.data || '';
                     if (typeof msg !== 'string') return;
@@ -1278,9 +1155,8 @@ export default function ViewWorkOrder() {
                       }
                     }
                   }}
-                  injectedJavaScriptBeforeContentLoaded={
-                    `window.PDF_BASE64 = ${JSON.stringify(poPdfInlineB64)}; true;`
-                  }
+                  // IMPORTANT: pass code as a STRING, with a safely-escaped value
+                  injectedJavaScriptBeforeContentLoaded={`window.PDF_BASE64 = ${JSON.stringify(poPdfInlineB64)}; true;`}
                   style={{ flex: 1 }}
                 />
               </View>
@@ -1290,55 +1166,27 @@ export default function ViewWorkOrder() {
       </ScrollView>
 
       {/* Photo Viewer */}
-      <Modal
-        visible={photoViewerVisible}
-        animationType="fade"
-        onRequestClose={() => {
-          setPhotoViewerVisible(false);
-          if (cameFromAttachments) {
-            setViewAttachmentsVisible(true);
-            setCameFromAttachments(false);
-          }
-        }}
-      >
+      <Modal visible={photoViewerVisible} animationType="fade" onRequestClose={() => setPhotoViewerVisible(false)}>
         <View style={styles.viewerContainer}>
-          {photos.length > 0 ? (
-            <FlatList
-              data={photos}
-              keyExtractor={(_, i) => i.toString()}
-              horizontal
-              pagingEnabled
-              initialScrollIndex={Math.min(
-                Math.max(0, viewerIndex),
-                Math.max(0, photos.length - 1)
-              )}
-              getItemLayout={(_, idx) => ({ length: screenWidth, offset: screenWidth * idx, index: idx })}
-              onMomentumScrollEnd={ev => {
-                const x = ev?.nativeEvent?.contentOffset?.x ?? 0;
-                const idx = Math.round(x / screenWidth);
-                setViewerIndex(Number.isFinite(idx) ? idx : 0);
-              }}
-              renderItem={({ item }) => <Image source={{ uri: item }} style={styles.fullScreenImage} />}
-            />
-          ) : (
-            <View style={[styles.viewerContainer, styles.center]}>
-              <Text style={{ color: '#fff' }}>No photos.</Text>
-            </View>
-          )}
+          <FlatList
+            data={photos}
+            keyExtractor={(_, i) => i.toString()}
+            horizontal
+            pagingEnabled
+            initialScrollIndex={viewerIndex}
+            getItemLayout={(_, idx) => ({ length: screenWidth, offset: screenWidth * idx, index: idx })}
+            onMomentumScrollEnd={ev => {
+              const x = ev?.nativeEvent?.contentOffset?.x ?? 0;
+              const idx = Math.round(x / screenWidth);
+              setViewerIndex(Number.isFinite(idx) ? idx : 0);
+            }}
+            renderItem={({ item }) => <Image source={{ uri: item }} style={styles.fullScreenImage} />}
+          />
           <View style={styles.viewerButtons}>
             <TouchableOpacity style={[styles.viewerButton, styles.shareBtn]} onPress={handleShare}>
               <Text style={styles.shareText}>Share</Text>
             </TouchableOpacity>
-            <TouchableOpacity
-              style={[styles.viewerButton, styles.exitBtn]}
-              onPress={() => {
-                setPhotoViewerVisible(false);
-                if (cameFromAttachments) {
-                  setViewAttachmentsVisible(true);
-                  setCameFromAttachments(false);
-                }
-              }}
-            >
+            <TouchableOpacity style={[styles.viewerButton, styles.exitBtn]} onPress={() => setPhotoViewerVisible(false)}>
               <Text style={styles.exitText}>Exit</Text>
             </TouchableOpacity>
           </View>
@@ -1370,7 +1218,6 @@ export default function ViewWorkOrder() {
                     onPress={() => {
                       setViewAttachmentsVisible(false);
                       setViewerIndex(index);
-                      setCameFromAttachments(true);
                       setPhotoViewerVisible(true);
                     }}
                   >
@@ -1475,9 +1322,6 @@ export default function ViewWorkOrder() {
             source={{ html: SKETCH_HTML }}
             javaScriptEnabled
             domStorageEnabled
-            setSupportMultipleWindows={false}
-            onError={() => Alert.alert('Error', 'Sketch view failed to load.')}
-            onHttpError={() => Alert.alert('Error', 'Sketch view HTTP error.')}
             onMessage={onSketchMessage}
             style={{ flex: 1 }}
           />
@@ -1494,84 +1338,16 @@ export default function ViewWorkOrder() {
               source={{ html: ANNOTATOR_HTML }}
               javaScriptEnabled
               domStorageEnabled
-              setSupportMultipleWindows={false}
-              onError={() => Alert.alert('Error', 'Annotator failed to load.')}
-              onHttpError={() => Alert.alert('Error', 'Annotator HTTP error.')}
               onMessage={onAnnotatorMessage}
-              injectedJavaScriptBeforeContentLoaded={
-                `window.PDF_BASE64 = ${JSON.stringify(pdfBase64)}; true;`
-              }
+              // IMPORTANT: pass code as a STRING, with a safely-escaped value
+              injectedJavaScriptBeforeContentLoaded={`window.PDF_BASE64 = ${JSON.stringify(pdfBase64)}; true;`}
               style={{ flex: 1 }}
             />
           ) : (
-            <View style={[styles.center, { flex: 1 }]}>
+            <View style={styles.center}>
               <Text style={styles.loadingText}>Loading PDF…</Text>
             </View>
           )}
-        </SafeAreaView>
-      </Modal>
-
-      {/* Multi-Photo Camera Modal */}
-      <Modal
-        visible={cameraVisible}
-        animationType="slide"
-        onRequestClose={() => setCameraVisible(false)}
-      >
-        <SafeAreaView style={styles.camSafeArea}>
-          <View style={styles.cameraWrap}>
-            {hasCameraPermission ? (
-              // IMPORTANT: ratio prop removed to avoid Android crashes.
-              <Camera ref={cameraRef} style={styles.camera} type={cameraType} />
-            ) : (
-              <View style={[styles.camera, styles.center]}>
-                <Text style={{ color: '#fff' }}>Waiting for camera permission…</Text>
-              </View>
-            )}
-            <View style={styles.camControls}>
-              <TouchableOpacity
-                style={[styles.camBtn, styles.camSmall]}
-                onPress={() => setCameraType(prev => (prev === CameraType.back ? CameraType.front : CameraType.back))}
-              >
-                <Text style={styles.camBtnText}>Flip</Text>
-              </TouchableOpacity>
-              <TouchableOpacity style={[styles.camBtn, styles.camShutter]} onPress={capturePhoto}>
-                <Text style={styles.camShutterText}>●</Text>
-              </TouchableOpacity>
-              <TouchableOpacity style={[styles.camBtn, styles.camSmall]} onPress={clearCaptures}>
-                <Text style={styles.camBtnText}>Clear</Text>
-              </TouchableOpacity>
-            </View>
-          </View>
-
-          {captures.length > 0 && (
-            <FlatList
-              data={captures}
-              keyExtractor={(_, i) => i.toString()}
-              horizontal
-              showsHorizontalScrollIndicator={false}
-              contentContainerStyle={styles.thumbBar}
-              renderItem={({ item }) => (
-                <Image source={{ uri: item.uri }} style={styles.camThumb} />
-              )}
-            />
-          )}
-
-          <View style={styles.camFooter}>
-            <TouchableOpacity
-              disabled={isUploading}
-              style={[styles.footerBtn, styles.footerCancel]}
-              onPress={() => { setCameraVisible(false); setCaptures([]); }}
-            >
-              <Text style={styles.footerBtnText}>Close</Text>
-            </TouchableOpacity>
-            <TouchableOpacity
-              disabled={!captures.length || isUploading}
-              style={[styles.footerBtn, !captures.length ? styles.footerDisabled : styles.footerUpload]}
-              onPress={uploadAllCaptures}
-            >
-              <Text style={styles.footerBtnText}>{isUploading ? 'Uploading…' : 'Upload All'}</Text>
-            </TouchableOpacity>
-          </View>
         </SafeAreaView>
       </Modal>
     </View>
@@ -1581,7 +1357,7 @@ export default function ViewWorkOrder() {
 const styles = StyleSheet.create({
   screen: { flex: 1, backgroundColor: '#F1F5F9' },
   details: { padding: 16, paddingBottom: 0 },
-  center: { justifyContent: 'center', alignItems: 'center' },
+  center: { flex: 1, justifyContent: 'center', alignItems: 'center' },
   loadingText: { fontSize: 18, color: '#3D5A80' },
   title: { fontSize: 24, fontWeight: '700', color: '#2B2D42', textAlign: 'center', marginBottom: 12 },
   card: { backgroundColor: '#FFF', borderRadius: 8, padding: 16, marginBottom: 16, elevation: 3 },
@@ -1653,32 +1429,4 @@ const styles = StyleSheet.create({
   statusOptionActive: { backgroundColor: '#0ea5e9' },
   statusText: { color: '#2B2D42', fontWeight: '600' },
   statusTextActive: { color: '#fff' },
-
-  // Camera modal
-  camSafeArea: { flex: 1, backgroundColor: '#000' },
-  cameraWrap: { flex: 1 },
-  camera: { flex: 1 },
-  camControls: {
-    position: 'absolute',
-    bottom: 24,
-    left: 0,
-    right: 0,
-    flexDirection: 'row',
-    justifyContent: 'space-evenly',
-    alignItems: 'center',
-  },
-  camBtn: { paddingVertical: 10, paddingHorizontal: 16, borderRadius: 999, backgroundColor: 'rgba(0,0,0,0.5)' },
-  camSmall: {},
-  camBtnText: { color: '#fff', fontWeight: '700' },
-  camShutter: { width: 74, height: 74, borderRadius: 37, backgroundColor: 'rgba(255,255,255,0.15)', alignItems: 'center', justifyContent: 'center', borderWidth: 2, borderColor: '#fff' },
-  camShutterText: { color: '#fff', fontSize: 36, marginTop: -6 },
-  thumbBar: { paddingVertical: 8, paddingHorizontal: 10, backgroundColor: '#111827' },
-  camThumb: { width: 72, height: 72, borderRadius: 6, marginRight: 8 },
-
-  camFooter: { padding: 12, flexDirection: 'row', gap: 10, backgroundColor: '#0f172a' },
-  footerBtn: { flex: 1, paddingVertical: 12, borderRadius: 8, alignItems: 'center' },
-  footerCancel: { backgroundColor: '#374151' },
-  footerUpload: { backgroundColor: '#22c55e' },
-  footerDisabled: { backgroundColor: '#334155' },
-  footerBtnText: { color: '#fff', fontWeight: '700' },
 });
