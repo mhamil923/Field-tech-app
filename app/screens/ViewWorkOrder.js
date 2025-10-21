@@ -566,9 +566,13 @@ export default function ViewWorkOrder() {
   const [poPdfPreviewError, setPoPdfPreviewError] = useState(null);
   const [poPdfInlineHeight, setPoPdfInlineHeight] = useState(Math.max(600, screenHeight * 0.8));
 
-  // Status modal
+  // Status modal / saving
   const [showStatusModal, setShowStatusModal] = useState(false);
   const [pendingStatus, setPendingStatus] = useState('');
+  const [isStatusSaving, setIsStatusSaving] = useState(false);
+
+  // Track whether photo viewer was opened from the attachments modal
+  const [returnToAttachments, setReturnToAttachments] = useState(false);
 
   // -------- helpers for contact actions & address --------
   const normPhone = (p) => String(p || '').replace(/[^\d+]/g, '');
@@ -775,6 +779,15 @@ export default function ViewWorkOrder() {
     try { await Share.share({ url, message: url }); } catch {}
   };
 
+  // Close viewer and (optionally) reopen attachments if we came from there
+  const closePhotoViewer = () => {
+    setPhotoViewerVisible(false);
+    if (returnToAttachments) {
+      setViewAttachmentsVisible(true);
+    }
+    setReturnToAttachments(false);
+  };
+
   const pdfURL = workOrder?.pdfPath ? fileUrl(workOrder.pdfPath) : null;
 
   const openAnnotator = async () => {
@@ -914,14 +927,26 @@ export default function ViewWorkOrder() {
   };
 
   const applyStatus = async () => {
+    const next = pendingStatus || STATUS_OPTIONS[0];
+    const prev = workOrder?.status;
+
+    // Optimistic update for instant feedback
+    setWorkOrder(w => (w ? { ...w, status: next } : w));
+    setShowStatusModal(false);
+    setIsStatusSaving(true);
+
     try {
       const form = new FormData();
-      form.append('status', pendingStatus || STATUS_OPTIONS[0]);
+      form.append('status', next);
       await api.put(`/work-orders/${workOrderId}/edit`, form);
-      setShowStatusModal(false);
-      fetchWorkOrder();
+      // Sync back from server to be 100% accurate (notes, etc.)
+      await fetchWorkOrder();
     } catch (e) {
+      // Roll back if it failed
+      setWorkOrder(w => (w ? { ...w, status: prev } : w));
       Alert.alert('Error', e?.response?.data?.error || e?.message || 'Failed to update status.');
+    } finally {
+      setIsStatusSaving(false);
     }
   };
   // -------------------------
@@ -998,9 +1023,9 @@ export default function ViewWorkOrder() {
 
           <View style={[styles.row, { alignItems: 'center' }]}>
             <Text style={styles.label}>Status:</Text>
-            <Text style={[styles.value, { flex: 0 }]}>{status}</Text>
-            <TouchableOpacity style={styles.smallBtn} onPress={openStatusModal}>
-              <Text style={styles.smallBtnText}>Change</Text>
+            <Text style={[styles.value, { flex: 0 }]}>{status}{isStatusSaving ? ' …' : ''}</Text>
+            <TouchableOpacity style={[styles.smallBtn, isStatusSaving && { opacity: 0.6 }]} onPress={openStatusModal} disabled={isStatusSaving}>
+              <Text style={styles.smallBtnText}>{isStatusSaving ? 'Saving…' : 'Change'}</Text>
             </TouchableOpacity>
           </View>
 
@@ -1166,7 +1191,7 @@ export default function ViewWorkOrder() {
       </ScrollView>
 
       {/* Photo Viewer */}
-      <Modal visible={photoViewerVisible} animationType="fade" onRequestClose={() => setPhotoViewerVisible(false)}>
+      <Modal visible={photoViewerVisible} animationType="fade" onRequestClose={closePhotoViewer}>
         <View style={styles.viewerContainer}>
           <FlatList
             data={photos}
@@ -1186,7 +1211,7 @@ export default function ViewWorkOrder() {
             <TouchableOpacity style={[styles.viewerButton, styles.shareBtn]} onPress={handleShare}>
               <Text style={styles.shareText}>Share</Text>
             </TouchableOpacity>
-            <TouchableOpacity style={[styles.viewerButton, styles.exitBtn]} onPress={() => setPhotoViewerVisible(false)}>
+            <TouchableOpacity style={[styles.viewerButton, styles.exitBtn]} onPress={closePhotoViewer}>
               <Text style={styles.exitText}>Exit</Text>
             </TouchableOpacity>
           </View>
@@ -1216,9 +1241,11 @@ export default function ViewWorkOrder() {
                 <View style={styles.thumbWrapper}>
                   <TouchableOpacity
                     onPress={() => {
-                      setViewAttachmentsVisible(false);
+                      // Open viewer and remember to return to attachments afterward
+                      setReturnToAttachments(true);
                       setViewerIndex(index);
                       setPhotoViewerVisible(true);
+                      setViewAttachmentsVisible(false);
                     }}
                   >
                     <Image source={{ uri: item }} style={styles.thumbnail} />
