@@ -22,6 +22,7 @@ import { WebView } from 'react-native-webview';
 import * as FileSystem from 'expo-file-system';
 import * as ImagePicker from 'expo-image-picker';
 import * as ImageManipulator from 'expo-image-manipulator';
+import { Camera, CameraType } from 'expo-camera';
 import moment from 'moment';
 import { useLocalSearchParams, useRouter } from 'expo-router';
 
@@ -173,13 +174,12 @@ const ANNOTATOR_HTML = `
     function undo(p){if(p.strokes.length)p.overlayCtx.putImageData(p.strokes.pop(),0,0);}
     function clearPage(p){pushUndo(p);p.overlayCtx.clearRect(0,0,p.overlayCanvas.width,p.overlayCanvas.height);}
 
-    // Solid stroke renderer (no midpoints), avoids dashed artifacts on fast moves.
     function widthFor(a,b){
       const dt = Math.max(1, (b.ts - a.ts));
       const dx=b.x-a.x, dy=b.y-a.y;
       const dist=Math.hypot(dx,dy);
       const vel = dist/dt; // px/ms
-      const minW=1.25, maxW=2.8; // higher min to avoid subpixel “dotting”
+      const minW=1.25, maxW=2.8;
       const speedFactor = Math.max(0.25, 1 - Math.min(vel*2.0, 0.85));
       const pressureFactor = (('p' in a) && ('p' in b)) ? (0.6 + 0.4 * ((a.p + b.p)/2)) : 1.0;
       return Math.max(minW, Math.min(maxW, maxW * speedFactor * pressureFactor));
@@ -214,7 +214,7 @@ const ANNOTATOR_HTML = `
           octx.lineCap='round';
           octx.lineJoin='round';
           octx.strokeStyle='#000';
-          octx.setLineDash([]);               // ensure not dashed
+          octx.setLineDash([]);
           octx.miterLimit = 2;
           octx.imageSmoothingEnabled = true;
 
@@ -228,8 +228,7 @@ const ANNOTATOR_HTML = `
             const x=(t.clientX-r.left)*(overlay.width/r.width);
             const y=(t.clientY-r.top)*(overlay.height/r.height);
             const p = (t.force && !isNaN(t.force)) ? t.force : (t.pressure && !isNaN(t.pressure) ? t.pressure : 0.5);
-            const tt = t.touchType || (t.pointerType === 'pen' ? 'stylus' : 'direct');
-            return {x,y,p,ts:performance.now(),tt};
+            return {x,y,p,ts:performance.now()};
           }
 
           function start(ev){
@@ -248,7 +247,6 @@ const ANNOTATOR_HTML = `
             const a = last || pt;
             const b = pt;
 
-            // draw a solid segment a -> b
             const w = widthFor(a,b);
             const erase = (state.tool==='erase');
 
@@ -269,7 +267,6 @@ const ANNOTATOR_HTML = `
             if(!drawing) return;
             drawing=false;
 
-            // Tap-only? add a very small dot
             if(points.length<2){
               const a=points[0];
               octx.save();
@@ -341,7 +338,6 @@ const ANNOTATOR_HTML = `
 
 /**
  * SKETCH HTML (used for "Draw Note")
- * — same solid stroke engine applied here
  */
 const SKETCH_HTML = `
 <!doctype html>
@@ -409,7 +405,7 @@ const SKETCH_HTML = `
       const dt=Math.max(1,(b.ts-a.ts));
       const dx=b.x-a.x, dy=b.y-a.y;
       const dist=Math.hypot(dx,dy);
-      const vel=dist/dt; // px/ms
+      const vel=dist/dt;
       const minW=1.25, maxW=2.8;
       const speedFactor = Math.max(0.25, 1 - Math.min(vel*2.0, 0.85));
       const pressureFactor = (('p' in a) && ('p' in b)) ? (0.6 + 0.4 * ((a.p + b.p)/2)) : 1.0;
@@ -436,7 +432,7 @@ const SKETCH_HTML = `
       octx.lineCap='round';
       octx.lineJoin='round';
       octx.strokeStyle='#000';
-      octx.setLineDash([]);               // make absolutely sure it's not dashed
+      octx.setLineDash([]);
       octx.miterLimit = 2;
       octx.imageSmoothingEnabled = true;
 
@@ -450,8 +446,7 @@ const SKETCH_HTML = `
         const x=(t.clientX-r.left)*(overlay.width/r.width);
         const y=(t.clientY-r.top)*(overlay.height/r.height);
         const p = (t.force && !isNaN(t.force)) ? t.force : (t.pressure && !isNaN(t.pressure) ? t.pressure : 0.5);
-        const tt = t.touchType || (t.pointerType === 'pen' ? 'stylus' : 'direct');
-        return {x,y,p,ts:performance.now(),tt};
+        return {x,y,p,ts:performance.now()};
       }
 
       function start(ev){
@@ -460,7 +455,7 @@ const SKETCH_HTML = `
         pushUndo();
         drawing=true; points=[]; last=null;
         const pt=getPos(ev);
-        if(state.pencilOnly && pt.tt!=='stylus') return;
+        if(state.pencilOnly && (ev.pointerType!=='pen')) return;
         points.push(pt); last=pt;
       }
 
@@ -468,8 +463,6 @@ const SKETCH_HTML = `
         if(!state.drawEnabled||!drawing) return;
         ev.preventDefault();
         const pt=getPos(ev);
-        if(state.pencilOnly && pt.tt!=='stylus') return;
-
         const a=last || pt;
         const b=pt;
 
@@ -553,8 +546,11 @@ export default function ViewWorkOrder() {
   const [showAddNoteModal, setShowAddNoteModal] = useState(false);
   const [newNoteText, setNewNoteText] = useState('');
 
-  // FIX: missing state caused crashes in some builds
+  // Attachments flow
   const [viewAttachmentsVisible, setViewAttachmentsVisible] = useState(false);
+  const [photoViewerVisible, setPhotoViewerVisible] = useState(false);
+  const [viewerIndex, setViewerIndex] = useState(0);
+  const [cameFromAttachments, setCameFromAttachments] = useState(false); // NEW
 
   // Draw Notes (web sketch -> JPEG)
   const [sketchVisible, setSketchVisible] = useState(false);
@@ -577,6 +573,14 @@ export default function ViewWorkOrder() {
   // Status modal
   const [showStatusModal, setShowStatusModal] = useState(false);
   const [pendingStatus, setPendingStatus] = useState('');
+
+  // Multi-photo Camera modal
+  const [cameraVisible, setCameraVisible] = useState(false);
+  const [cameraType, setCameraType] = useState(CameraType.back);
+  const [cameraPermission, requestCameraPermission] = Camera.useCameraPermissions();
+  const cameraRef = useRef(null);
+  const [captures, setCaptures] = useState([]); // array of { uri }
+  const [isUploading, setIsUploading] = useState(false);
 
   // -------- helpers for contact actions & address --------
   const normPhone = (p) => String(p || '').replace(/[^\d+]/g, '');
@@ -698,31 +702,70 @@ export default function ViewWorkOrder() {
     }
   };
 
-  const takePhoto = async () => {
-    const { status } = await ImagePicker.requestCameraPermissionsAsync();
-    if (status !== 'granted') return Alert.alert('Permission required', 'Need camera access.');
-    const result = await ImagePicker.launchCameraAsync({
-      mediaTypes: ImagePicker.MediaTypeOptions.Images,
-      quality: 1,
-    });
-    if (result.canceled) return;
-
-    const form = new FormData();
-    for (let i = 0; i < result.assets.length; i++) {
-      const processedUri = await processImageForUpload(result.assets[i].uri);
-      const name = `photo-${Date.now()}-${i}.jpg`;
-      form.append('photoFile', { uri: processedUri, name, type: 'image/jpeg' });
-    }
-
+  // NEW: open multi-photo camera modal
+  const openCameraModal = async () => {
     try {
-      await api.put(`/work-orders/${workOrderId}/edit`, form, { headers: { 'Content-Type': 'multipart/form-data' } });
-      fetchWorkOrder();
-      Alert.alert('Success', 'Photo taken!');
-    } catch (err) {
-      Alert.alert('Upload Error', err?.response?.data?.error || err.message);
+      const cam = await Camera.requestCameraPermissionsAsync();
+      if (cam.status !== 'granted') {
+        Alert.alert('Permission required', 'Need camera access.');
+        return;
+      }
+      // (Optional) ask for media library permission if you also want to save locally
+      setCaptures([]);
+      setCameraType(CameraType.back);
+      setCameraVisible(true);
+    } catch (e) {
+      Alert.alert('Error', 'Unable to open camera.');
     }
   };
 
+  const capturePhoto = async () => {
+    if (!cameraRef.current) return;
+    try {
+      const photo = await cameraRef.current.takePictureAsync({
+        quality: 1,
+        skipProcessing: true,
+        exif: false,
+      });
+      if (photo?.uri) setCaptures((arr) => [...arr, { uri: photo.uri }]);
+    } catch (e) {
+      Alert.alert('Error', 'Failed to capture photo.');
+    }
+  };
+
+  const clearCaptures = () => setCaptures([]);
+
+  const uploadAllCaptures = async () => {
+    if (!captures.length) {
+      Alert.alert('No photos', 'Take a photo first.');
+      return;
+    }
+    try {
+      setIsUploading(true);
+      const form = new FormData();
+      for (let i = 0; i < captures.length; i++) {
+        const processedUri = await processImageForUpload(captures[i].uri);
+        form.append('photoFile', {
+          uri: processedUri,
+          name: `photo-${Date.now()}-${i}.jpg`,
+          type: 'image/jpeg',
+        });
+      }
+      await api.put(`/work-orders/${workOrderId}/edit`, form, {
+        headers: { 'Content-Type': 'multipart/form-data' },
+      });
+      setCameraVisible(false);
+      setCaptures([]);
+      fetchWorkOrder();
+      Alert.alert('Uploaded', 'Photos uploaded!');
+    } catch (err) {
+      Alert.alert('Upload Error', err?.response?.data?.error || err.message);
+    } finally {
+      setIsUploading(false);
+    }
+  };
+
+  // Keep “Upload Photo(s)” from library with multi-select
   const uploadPhotos = async () => {
     const { status } = await ImagePicker.requestMediaLibraryPermissionsAsync();
     if (status !== 'granted') return Alert.alert('Permission required', 'Need photo library access.');
@@ -770,9 +813,6 @@ export default function ViewWorkOrder() {
       },
     ]);
   };
-
-  const [photoViewerVisible, setPhotoViewerVisible] = useState(false);
-  const [viewerIndex, setViewerIndex] = useState(0);
 
   const handleShare = async () => {
     if (!photos.length) return;
@@ -1022,18 +1062,23 @@ export default function ViewWorkOrder() {
           <Text style={styles.attachText}>Annotate & Sign PDF</Text>
         </TouchableOpacity>
 
-        <TouchableOpacity style={[styles.buttonBase, styles.photoBtn]} onPress={takePhoto}>
-          <Text style={styles.photoText}>Take Photo</Text>
+        {/* Multi-photo camera */}
+        <TouchableOpacity style={[styles.buttonBase, styles.photoBtn]} onPress={openCameraModal}>
+          <Text style={styles.photoText}>Take Photo(s)</Text>
         </TouchableOpacity>
-        <TouchableOpacity style={[styles.buttonBase, styles.photoBtn]} onPress={uploadPhotos}>
+
+        <TouchableOpacity style={[styles.buttonBase, styles photoBtn]} onPress={uploadPhotos}>
           <Text style={styles.photoText}>Upload Photo(s)</Text>
         </TouchableOpacity>
+
         <TouchableOpacity style={[styles.buttonBase, styles.attachBtn]} onPress={() => setViewAttachmentsVisible(true)}>
           <Text style={styles.attachText}>View Attachments</Text>
         </TouchableOpacity>
+
         <TouchableOpacity style={[styles.buttonBase, styles.noteBtn]} onPress={() => setShowAddNoteModal(true)}>
           <Text style={styles.noteText}>Add Note</Text>
         </TouchableOpacity>
+
         <TouchableOpacity style={[styles.buttonBase, styles.drawBtn]} onPress={() => setSketchVisible(true)}>
           <Text style={styles.drawText}>Draw Note</Text>
         </TouchableOpacity>
@@ -1169,7 +1214,18 @@ export default function ViewWorkOrder() {
       </ScrollView>
 
       {/* Photo Viewer */}
-      <Modal visible={photoViewerVisible} animationType="fade" onRequestClose={() => setPhotoViewerVisible(false)}>
+      <Modal
+        visible={photoViewerVisible}
+        animationType="fade"
+        onRequestClose={() => {
+          setPhotoViewerVisible(false);
+          if (cameFromAttachments) {
+            // Re-open attachments modal when viewer was launched from it
+            setViewAttachmentsVisible(true);
+            setCameFromAttachments(false);
+          }
+        }}
+      >
         <View style={styles.viewerContainer}>
           <FlatList
             data={photos}
@@ -1185,7 +1241,16 @@ export default function ViewWorkOrder() {
             <TouchableOpacity style={[styles.viewerButton, styles.shareBtn]} onPress={handleShare}>
               <Text style={styles.shareText}>Share</Text>
             </TouchableOpacity>
-            <TouchableOpacity style={[styles.viewerButton, styles.exitBtn]} onPress={() => setPhotoViewerVisible(false)}>
+            <TouchableOpacity
+              style={[styles.viewerButton, styles.exitBtn]}
+              onPress={() => {
+                setPhotoViewerVisible(false);
+                if (cameFromAttachments) {
+                  setViewAttachmentsVisible(true);
+                  setCameFromAttachments(false);
+                }
+              }}
+            >
               <Text style={styles.exitText}>Exit</Text>
             </TouchableOpacity>
           </View>
@@ -1217,6 +1282,7 @@ export default function ViewWorkOrder() {
                     onPress={() => {
                       setViewAttachmentsVisible(false);
                       setViewerIndex(index);
+                      setCameFromAttachments(true); // mark origin
                       setPhotoViewerVisible(true);
                     }}
                   >
@@ -1350,6 +1416,69 @@ export default function ViewWorkOrder() {
           )}
         </SafeAreaView>
       </Modal>
+
+      {/* Multi-Photo Camera Modal */}
+      <Modal
+        visible={cameraVisible}
+        animationType="slide"
+        onRequestClose={() => setCameraVisible(false)}
+      >
+        <SafeAreaView style={styles.camSafeArea}>
+          <View style={styles.cameraWrap}>
+            {cameraPermission?.granted ? (
+              <Camera ref={cameraRef} style={styles.camera} type={cameraType} ratio="16:9" />
+            ) : (
+              <View style={[styles.camera, styles.center]}>
+                <Text style={{ color: '#fff' }}>Waiting for camera permission…</Text>
+              </View>
+            )}
+            <View style={styles.camControls}>
+              <TouchableOpacity
+                style={[styles.camBtn, styles.camSmall]}
+                onPress={() => setCameraType(prev => (prev === CameraType.back ? CameraType.front : CameraType.back))}
+              >
+                <Text style={styles.camBtnText}>Flip</Text>
+              </TouchableOpacity>
+              <TouchableOpacity style={[styles.camBtn, styles.camShutter]} onPress={capturePhoto}>
+                <Text style={styles.camShutterText}>●</Text>
+              </TouchableOpacity>
+              <TouchableOpacity style={[styles.camBtn, styles.camSmall]} onPress={clearCaptures}>
+                <Text style={styles.camBtnText}>Clear</Text>
+              </TouchableOpacity>
+            </View>
+          </View>
+
+          {captures.length > 0 && (
+            <FlatList
+              data={captures}
+              keyExtractor={(_, i) => i.toString()}
+              horizontal
+              showsHorizontalScrollIndicator={false}
+              contentContainerStyle={styles.thumbBar}
+              renderItem={({ item }) => (
+                <Image source={{ uri: item.uri }} style={styles.camThumb} />
+              )}
+            />
+          )}
+
+          <View style={styles.camFooter}>
+            <TouchableOpacity
+              disabled={isUploading}
+              style={[styles.footerBtn, styles.footerCancel]}
+              onPress={() => { setCameraVisible(false); setCaptures([]); }}
+            >
+              <Text style={styles.footerBtnText}>Close</Text>
+            </TouchableOpacity>
+            <TouchableOpacity
+              disabled={!captures.length || isUploading}
+              style={[styles.footerBtn, !captures.length ? styles.footerDisabled : styles.footerUpload]}
+              onPress={uploadAllCaptures}
+            >
+              <Text style={styles.footerBtnText}>{isUploading ? 'Uploading…' : 'Upload All'}</Text>
+            </TouchableOpacity>
+          </View>
+        </SafeAreaView>
+      </Modal>
     </View>
   );
 }
@@ -1357,7 +1486,7 @@ export default function ViewWorkOrder() {
 const styles = StyleSheet.create({
   screen: { flex: 1, backgroundColor: '#F1F5F9' },
   details: { padding: 16, paddingBottom: 0 },
-  center: { flex: 1, justifyContent: 'center', alignItems: 'center' },
+  center: { justifyContent: 'center', alignItems: 'center' },
   loadingText: { fontSize: 18, color: '#3D5A80' },
   title: { fontSize: 24, fontWeight: '700', color: '#2B2D42', textAlign: 'center', marginBottom: 12 },
   card: { backgroundColor: '#FFF', borderRadius: 8, padding: 16, marginBottom: 16, elevation: 3 },
@@ -1400,6 +1529,7 @@ const styles = StyleSheet.create({
   shareBtn: { backgroundColor: 'rgba(255,255,255,0.3)' },
   shareText: { color: '#fff', fontWeight: '600', fontSize: 16 },
   exitBtn: { backgroundColor: 'rgba(220,53,69,0.8)' },
+  exitText: { color: '#fff', fontWeight: '600', fontSize: 16 },
 
   modal: { flex: 1, padding: 16, backgroundColor: '#fff', marginTop: 80, borderTopLeftRadius: 12, borderTopRightRadius: 12 },
   modalTitle: { fontSize: 18, fontWeight: '600', marginBottom: 12, textAlign: 'center', color: '#2B2D42' },
@@ -1428,4 +1558,32 @@ const styles = StyleSheet.create({
   statusOptionActive: { backgroundColor: '#0ea5e9' },
   statusText: { color: '#2B2D42', fontWeight: '600' },
   statusTextActive: { color: '#fff' },
+
+  // Camera modal
+  camSafeArea: { flex: 1, backgroundColor: '#000' },
+  cameraWrap: { flex: 1 },
+  camera: { flex: 1 },
+  camControls: {
+    position: 'absolute',
+    bottom: 24,
+    left: 0,
+    right: 0,
+    flexDirection: 'row',
+    justifyContent: 'space-evenly',
+    alignItems: 'center',
+  },
+  camBtn: { paddingVertical: 10, paddingHorizontal: 16, borderRadius: 999, backgroundColor: 'rgba(0,0,0,0.5)' },
+  camSmall: {},
+  camBtnText: { color: '#fff', fontWeight: '700' },
+  camShutter: { width: 74, height: 74, borderRadius: 37, backgroundColor: 'rgba(255,255,255,0.15)', alignItems: 'center', justifyContent: 'center', borderWidth: 2, borderColor: '#fff' },
+  camShutterText: { color: '#fff', fontSize: 36, marginTop: -6 },
+  thumbBar: { paddingVertical: 8, paddingHorizontal: 10, backgroundColor: '#111827' },
+  camThumb: { width: 72, height: 72, borderRadius: 6, marginRight: 8 },
+
+  camFooter: { padding: 12, flexDirection: 'row', gap: 10, backgroundColor: '#0f172a' },
+  footerBtn: { flex: 1, paddingVertical: 12, borderRadius: 8, alignItems: 'center' },
+  footerCancel: { backgroundColor: '#374151' },
+  footerUpload: { backgroundColor: '#22c55e' },
+  footerDisabled: { backgroundColor: '#334155' },
+  footerBtnText: { color: '#fff', fontWeight: '700' },
 });
