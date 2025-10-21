@@ -538,6 +538,12 @@ export default function ViewWorkOrder() {
   const workOrderId = params?.id ? (Array.isArray(params.id) ? params.id[0] : params.id) : null;
   const router = useRouter();
 
+  const mountedRef = useRef(true);
+  useEffect(() => {
+    mountedRef.current = true;
+    return () => { mountedRef.current = false; };
+  }, []);
+
   const [workOrder, setWorkOrder] = useState(null);
   const [photos, setPhotos] = useState([]);
   const [notes, setNotes] = useState([]);
@@ -620,6 +626,8 @@ export default function ViewWorkOrder() {
     if (!workOrderId) return;
     try {
       const { data } = await api.get(`/work-orders/${workOrderId}`);
+      if (!mountedRef.current) return;
+
       setWorkOrder(data);
 
       const parsedNotes = Array.isArray(data.notes)
@@ -648,9 +656,9 @@ export default function ViewWorkOrder() {
           const target = FileSystem.cacheDirectory + `wo_preview_${workOrderId}.pdf`;
           await FileSystem.downloadAsync(url, target);
           const b64 = await FileSystem.readAsStringAsync(target, { encoding: FileSystem.EncodingType.Base64 });
-          setPdfInlineB64(b64);
+          if (mountedRef.current) setPdfInlineB64(b64);
         } catch (e) {
-          setPdfPreviewError(e?.message || 'Failed to load PDF.');
+          if (mountedRef.current) setPdfPreviewError(e?.message || 'Failed to load PDF.');
         }
       }
 
@@ -661,13 +669,13 @@ export default function ViewWorkOrder() {
           const target = FileSystem.cacheDirectory + `po_preview_${workOrderId}.pdf`;
           await FileSystem.downloadAsync(url, target);
           const b64 = await FileSystem.readAsStringAsync(target, { encoding: FileSystem.EncodingType.Base64 });
-          setPoPdfInlineB64(b64);
+          if (mountedRef.current) setPoPdfInlineB64(b64);
         } catch (e) {
-          setPoPdfPreviewError(e?.message || 'Failed to load PO PDF.');
+          if (mountedRef.current) setPoPdfPreviewError(e?.message || 'Failed to load PO PDF.');
         }
       }
     } catch {
-      Alert.alert('Error', 'Failed to load work order.');
+      if (mountedRef.current) Alert.alert('Error', 'Failed to load work order.');
     }
   }, [workOrderId]);
 
@@ -679,6 +687,7 @@ export default function ViewWorkOrder() {
     if (!newNoteText.trim()) return;
     try {
       const { data } = await api.post(`/work-orders/${workOrderId}/notes`, { text: newNoteText.trim() });
+      if (!mountedRef.current) return;
       setNewNoteText('');
       setShowAddNoteModal(false);
       setNotes(sortNotesDesc(data.notes || []));
@@ -753,6 +762,7 @@ export default function ViewWorkOrder() {
       await api.put(`/work-orders/${workOrderId}/edit`, form, {
         headers: { 'Content-Type': 'multipart/form-data' },
       });
+      if (!mountedRef.current) return;
       setCameraVisible(false);
       setCaptures([]);
       fetchWorkOrder();
@@ -760,32 +770,44 @@ export default function ViewWorkOrder() {
     } catch (err) {
       Alert.alert('Upload Error', err?.response?.data?.error || err.message);
     } finally {
-      setIsUploading(false);
+      if (mountedRef.current) setIsUploading(false);
     }
   };
 
-  // Keep “Upload Photo(s)” from library with multi-select
+  // Keep “Upload Photo(s)” from library with multi-select (hardened for Android)
   const uploadPhotos = async () => {
     const { status } = await ImagePicker.requestMediaLibraryPermissionsAsync();
     if (status !== 'granted') return Alert.alert('Permission required', 'Need photo library access.');
-    const result = await ImagePicker.launchImageLibraryAsync({
-      mediaTypes: ImagePicker.MediaTypeOptions.Images,
-      allowsMultipleSelection: true,
-      quality: 1,
+
+    const pickerOptions = Platform.select({
+      ios: { mediaTypes: ImagePicker.MediaTypeOptions.Images, allowsMultipleSelection: true, quality: 1 },
+      android: { mediaTypes: ImagePicker.MediaTypeOptions.Images, quality: 1 },
+      default: { mediaTypes: ImagePicker.MediaTypeOptions.Images, quality: 1 },
     });
+
+    const result = await ImagePicker.launchImageLibraryAsync(pickerOptions);
+
     if (result.canceled) return;
 
+    const assets = Array.isArray(result.assets) ? result.assets : (result.assets ? [result.assets] : []);
+    if (!assets.length) {
+      Alert.alert('No selection', 'No images selected.');
+      return;
+    }
+
     const form = new FormData();
-    for (let i = 0; i < result.assets.length; i++) {
-      const processedUri = await processImageForUpload(result.assets[i].uri);
+    for (let i = 0; i < assets.length; i++) {
+      const processedUri = await processImageForUpload(assets[i].uri);
       const name = `photo-${Date.now()}-${i}.jpg`;
       form.append('photoFile', { uri: processedUri, name, type: 'image/jpeg' });
     }
 
     try {
       await api.put(`/work-orders/${workOrderId}/edit`, form, { headers: { 'Content-Type': 'multipart/form-data' } });
-      fetchWorkOrder();
-      Alert.alert('Success', 'Photos uploaded!');
+      if (mountedRef.current) {
+        fetchWorkOrder();
+        Alert.alert('Success', 'Photos uploaded!');
+      }
     } catch (err) {
       Alert.alert('Upload Error', err?.response?.data?.error || err.message);
     }
@@ -803,8 +825,10 @@ export default function ViewWorkOrder() {
         onPress: async () => {
           try {
             await api.delete(`/work-orders/${workOrderId}/attachment`, { data: { photoPath: keys[idx] } });
-            fetchWorkOrder();
-            Alert.alert('Deleted');
+            if (mountedRef.current) {
+              fetchWorkOrder();
+              Alert.alert('Deleted');
+            }
           } catch (err) {
             Alert.alert('Error', err?.response?.data?.error || err.message);
           }
@@ -816,7 +840,7 @@ export default function ViewWorkOrder() {
   const [viewerShareIndex] = useState(0); // placeholder to match earlier pattern
   const handleShare = async () => {
     if (!photos.length) return;
-    const url = photos[viewerIndex];
+    const url = photos[Math.min(Math.max(0, viewerIndex), Math.max(0, photos.length - 1))];
     try { await Share.share({ url, message: url }); } catch {}
   };
 
@@ -829,9 +853,9 @@ export default function ViewWorkOrder() {
       const tmp = FileSystem.cacheDirectory + `wo_${workOrderId}.pdf`;
       await FileSystem.downloadAsync(pdfURL, tmp);
       const b64 = await FileSystem.readAsStringAsync(tmp, { encoding: FileSystem.EncodingType.Base64 });
-      setPdfBase64(b64);
+      if (mountedRef.current) setPdfBase64(b64);
     } catch {
-      setAnnotateVisible(false);
+      if (mountedRef.current) setAnnotateVisible(false);
       Alert.alert('Error', 'Failed to load PDF for annotation.');
     }
   };
@@ -842,12 +866,13 @@ export default function ViewWorkOrder() {
   // WebView message handlers
   const onAnnotatorMessage = async (ev) => {
     const msg = ev?.nativeEvent?.data || '';
+    if (typeof msg !== 'string') return;
     if (msg.startsWith('ERROR:')) {
       Alert.alert('Annotator Error', msg.slice(6));
       return;
     }
     if (msg === 'CLOSE') {
-      setAnnotateVisible(false);
+      if (mountedRef.current) setAnnotateVisible(false);
       return;
     }
     if (msg.startsWith('SIGNED:')) {
@@ -862,9 +887,11 @@ export default function ViewWorkOrder() {
 
         await api.put(`/work-orders/${workOrderId}/edit`, form, { headers: { 'Content-Type': 'multipart/form-data' } });
 
-        setAnnotateVisible(false);
-        fetchWorkOrder();
-        Alert.alert('Success', 'Signed PDF uploaded.');
+        if (mountedRef.current) {
+          setAnnotateVisible(false);
+          fetchWorkOrder();
+          Alert.alert('Success', 'Signed PDF uploaded.');
+        }
       } catch (e) {
         Alert.alert('Upload Error', e?.message || 'Failed to upload signed PDF.');
       }
@@ -873,12 +900,13 @@ export default function ViewWorkOrder() {
 
   const onSketchMessage = async (ev) => {
     const msg = ev?.nativeEvent?.data || '';
+    if (typeof msg !== 'string') return;
     if (msg.startsWith('ERROR:')) {
       Alert.alert('Draw Notes Error', msg.slice(6));
       return;
     }
     if (msg === 'CLOSE') {
-      setSketchVisible(false);
+      if (mountedRef.current) setSketchVisible(false);
       return;
     }
     if (msg.startsWith('IMAGE:')) {
@@ -898,9 +926,11 @@ export default function ViewWorkOrder() {
 
         await api.put(`/work-orders/${workOrderId}/edit`, form, { headers: { 'Content-Type': 'multipart/form-data' } });
 
-        setSketchVisible(false);
-        fetchWorkOrder();
-        Alert.alert('Uploaded', 'Drawing note uploaded as photo.');
+        if (mountedRef.current) {
+          setSketchVisible(false);
+          fetchWorkOrder();
+          Alert.alert('Uploaded', 'Drawing note uploaded as photo.');
+        }
       } catch (e) {
         Alert.alert('Upload Error', e?.message || 'Failed to upload drawing note.');
       }
@@ -961,6 +991,7 @@ export default function ViewWorkOrder() {
       const form = new FormData();
       form.append('status', pendingStatus || STATUS_OPTIONS[0]);
       await api.put(`/work-orders/${workOrderId}/edit`, form);
+      if (!mountedRef.current) return;
       setShowStatusModal(false);
       fetchWorkOrder();
     } catch (e) {
@@ -1132,6 +1163,7 @@ export default function ViewWorkOrder() {
                   domStorageEnabled={false}
                   onMessage={(e) => {
                     const msg = e?.nativeEvent?.data || '';
+                    if (typeof msg !== 'string') return;
                     if (msg.startsWith('ERROR:')) {
                       setPdfPreviewError(msg.slice(6));
                       return;
@@ -1189,6 +1221,7 @@ export default function ViewWorkOrder() {
                   domStorageEnabled={false}
                   onMessage={(e) => {
                     const msg = e?.nativeEvent?.data || '';
+                    if (typeof msg !== 'string') return;
                     if (msg.startsWith('ERROR:')) {
                       setPoPdfPreviewError(msg.slice(6));
                       return;
@@ -1226,16 +1259,29 @@ export default function ViewWorkOrder() {
         }}
       >
         <View style={styles.viewerContainer}>
-          <FlatList
-            data={photos}
-            keyExtractor={(_, i) => i.toString()}
-            horizontal
-            pagingEnabled
-            initialScrollIndex={viewerIndex}
-            getItemLayout={(_, idx) => ({ length: screenWidth, offset: screenWidth * idx, index: idx })}
-            onMomentumScrollEnd={ev => setViewerIndex(Math.round(ev.nativeEvent.contentOffset.x / screenWidth))}
-            renderItem={({ item }) => <Image source={{ uri: item }} style={styles.fullScreenImage} />}
-          />
+          {photos.length > 0 ? (
+            <FlatList
+              data={photos}
+              keyExtractor={(_, i) => i.toString()}
+              horizontal
+              pagingEnabled
+              initialScrollIndex={Math.min(
+                Math.max(0, viewerIndex),
+                Math.max(0, photos.length - 1)
+              )}
+              getItemLayout={(_, idx) => ({ length: screenWidth, offset: screenWidth * idx, index: idx })}
+              onMomentumScrollEnd={ev => {
+                const x = ev?.nativeEvent?.contentOffset?.x ?? 0;
+                const idx = Math.round(x / screenWidth);
+                setViewerIndex(Number.isFinite(idx) ? idx : 0);
+              }}
+              renderItem={({ item }) => <Image source={{ uri: item }} style={styles.fullScreenImage} />}
+            />
+          ) : (
+            <View style={[styles.viewerContainer, styles.center]}>
+              <Text style={{ color: '#fff' }}>No photos.</Text>
+            </View>
+          )}
           <View style={styles.viewerButtons}>
             <TouchableOpacity style={[styles.viewerButton, styles.shareBtn]} onPress={handleShare}>
               <Text style={styles.shareText}>Share</Text>
@@ -1425,7 +1471,8 @@ export default function ViewWorkOrder() {
         <SafeAreaView style={styles.camSafeArea}>
           <View style={styles.cameraWrap}>
             {hasCameraPermission ? (
-              <Camera ref={cameraRef} style={styles.camera} type={cameraType} ratio="16:9" />
+              // IMPORTANT: ratio prop removed to avoid Android crashes.
+              <Camera ref={cameraRef} style={styles.camera} type={cameraType} />
             ) : (
               <View style={[styles.camera, styles.center]}>
                 <Text style={{ color: '#fff' }}>Waiting for camera permission…</Text>
