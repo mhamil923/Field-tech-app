@@ -455,7 +455,6 @@ const SKETCH_HTML = `
         pushUndo();
         drawing=true; points=[]; last=null;
         const pt=getPos(ev);
-        if(state.pencilOnly && (ev.pointerType!=='pen')) return;
         points.push(pt); last=pt;
       }
 
@@ -550,7 +549,7 @@ export default function ViewWorkOrder() {
   const [viewAttachmentsVisible, setViewAttachmentsVisible] = useState(false);
   const [photoViewerVisible, setPhotoViewerVisible] = useState(false);
   const [viewerIndex, setViewerIndex] = useState(0);
-  const [cameFromAttachments, setCameFromAttachments] = useState(false); // NEW
+  const [cameFromAttachments, setCameFromAttachments] = useState(false); // ensures we return to attachments
 
   // Draw Notes (web sketch -> JPEG)
   const [sketchVisible, setSketchVisible] = useState(false);
@@ -577,9 +576,9 @@ export default function ViewWorkOrder() {
   // Multi-photo Camera modal
   const [cameraVisible, setCameraVisible] = useState(false);
   const [cameraType, setCameraType] = useState(CameraType.back);
-  const [cameraPermission, requestCameraPermission] = Camera.useCameraPermissions();
   const cameraRef = useRef(null);
   const [captures, setCaptures] = useState([]); // array of { uri }
+  const [hasCameraPermission, setHasCameraPermission] = useState(false);
   const [isUploading, setIsUploading] = useState(false);
 
   // -------- helpers for contact actions & address --------
@@ -702,7 +701,7 @@ export default function ViewWorkOrder() {
     }
   };
 
-  // NEW: open multi-photo camera modal
+  // Multi-photo camera flow
   const openCameraModal = async () => {
     try {
       const cam = await Camera.requestCameraPermissionsAsync();
@@ -710,11 +709,11 @@ export default function ViewWorkOrder() {
         Alert.alert('Permission required', 'Need camera access.');
         return;
       }
-      // (Optional) ask for media library permission if you also want to save locally
+      setHasCameraPermission(true);
       setCaptures([]);
       setCameraType(CameraType.back);
       setCameraVisible(true);
-    } catch (e) {
+    } catch {
       Alert.alert('Error', 'Unable to open camera.');
     }
   };
@@ -728,7 +727,7 @@ export default function ViewWorkOrder() {
         exif: false,
       });
       if (photo?.uri) setCaptures((arr) => [...arr, { uri: photo.uri }]);
-    } catch (e) {
+    } catch {
       Alert.alert('Error', 'Failed to capture photo.');
     }
   };
@@ -814,6 +813,7 @@ export default function ViewWorkOrder() {
     ]);
   };
 
+  const [viewerShareIndex] = useState(0); // placeholder to match earlier pattern
   const handleShare = async () => {
     if (!photos.length) return;
     const url = photos[viewerIndex];
@@ -1030,7 +1030,6 @@ export default function ViewWorkOrder() {
 
           <View style={styles.row}>
             <Text style={styles.label}>Billing Address:</Text>
-            {/* Display-only to prevent wrong navigation target */}
             <Text style={styles.value}>{billingAddress || '—'}</Text>
           </View>
 
@@ -1067,7 +1066,8 @@ export default function ViewWorkOrder() {
           <Text style={styles.photoText}>Take Photo(s)</Text>
         </TouchableOpacity>
 
-        <TouchableOpacity style={[styles.buttonBase, styles photoBtn]} onPress={uploadPhotos}>
+        {/* Library multi-select */}
+        <TouchableOpacity style={[styles.buttonBase, styles.photoBtn]} onPress={uploadPhotos}>
           <Text style={styles.photoText}>Upload Photo(s)</Text>
         </TouchableOpacity>
 
@@ -1220,7 +1220,6 @@ export default function ViewWorkOrder() {
         onRequestClose={() => {
           setPhotoViewerVisible(false);
           if (cameFromAttachments) {
-            // Re-open attachments modal when viewer was launched from it
             setViewAttachmentsVisible(true);
             setCameFromAttachments(false);
           }
@@ -1282,7 +1281,7 @@ export default function ViewWorkOrder() {
                     onPress={() => {
                       setViewAttachmentsVisible(false);
                       setViewerIndex(index);
-                      setCameFromAttachments(true); // mark origin
+                      setCameFromAttachments(true);
                       setPhotoViewerVisible(true);
                     }}
                   >
@@ -1410,7 +1409,7 @@ export default function ViewWorkOrder() {
               style={{ flex: 1 }}
             />
           ) : (
-            <View style={styles.center}>
+            <View style={[styles.center, { flex: 1 }]}>
               <Text style={styles.loadingText}>Loading PDF…</Text>
             </View>
           )}
@@ -1425,7 +1424,7 @@ export default function ViewWorkOrder() {
       >
         <SafeAreaView style={styles.camSafeArea}>
           <View style={styles.cameraWrap}>
-            {cameraPermission?.granted ? (
+            {hasCameraPermission ? (
               <Camera ref={cameraRef} style={styles.camera} type={cameraType} ratio="16:9" />
             ) : (
               <View style={[styles.camera, styles.center]}>
