@@ -11,6 +11,7 @@ import {
   RefreshControl,
   Modal,
   Pressable,
+  TextInput,
 } from 'react-native';
 import moment from 'moment';
 import { useRouter } from 'expo-router';
@@ -55,6 +56,30 @@ const toCanonicalStatus = (s) =>
 
 const displayPO = (wo, po) => (norm(wo) === norm(po) ? '' : norm(po));
 
+/** notes utilities */
+const safeArray = (x) => (Array.isArray(x) ? x : []);
+const parseNotes = (notesLike) => {
+  if (Array.isArray(notesLike)) return notesLike;
+  if (!notesLike) return [];
+  try {
+    const parsed = JSON.parse(notesLike);
+    return Array.isArray(parsed) ? parsed : [];
+  } catch {
+    return [];
+  }
+};
+const latestNoteText = (notesLike) => {
+  const arr = parseNotes(notesLike);
+  if (!arr.length) return '';
+  const sorted = [...arr].sort((a, b) => {
+    const ta = new Date(a?.createdAt || 0).getTime();
+    const tb = new Date(b?.createdAt || 0).getTime();
+    return tb - ta;
+  });
+  const top = sorted[0] || {};
+  return top.text || '';
+};
+
 export default function WorkOrdersScreen() {
   const router = useRouter();
   const [me, setMe] = useState(null);
@@ -63,6 +88,10 @@ export default function WorkOrdersScreen() {
   const [refreshing, setRefreshing] = useState(false);
   const [loadingFirst, setLoadingFirst] = useState(true);
   const [statusModal, setStatusModal] = useState({ id: null, value: null });
+
+  // Parts In modal
+  const [partsModal, setPartsModal] = useState({ id: null, customer: '', wo: '', po: '' });
+  const [partsNote, setPartsNote] = useState('Parts In');
 
   // Drag order for Today
   const todayKey = `woOrder:${moment().format('YYYY-MM-DD')}`;
@@ -183,6 +212,50 @@ export default function WorkOrdersScreen() {
     }
   };
 
+  const addNote = async (id, text) => {
+    const trimmed = (text || '').trim();
+    if (!trimmed) return;
+    try {
+      await api.post(`/work-orders/${id}/notes`, { text: trimmed });
+    } catch (e) {
+      // non-fatal for UX here
+      console.error('Failed to add note:', e?.message || e);
+    }
+  };
+
+  // Parts modal handlers
+  const openPartsInModal = (order) => {
+    setPartsNote('Parts In');
+    setPartsModal({
+      id: order.id,
+      customer: order.customer || 'Work Order',
+      wo: norm(order.workOrderNumber),
+      po: norm(order.poNumber),
+    });
+  };
+  const closePartsInModal = () => {
+    setPartsModal({ id: null, customer: '', wo: '', po: '' });
+    setPartsNote('Parts In');
+  };
+  const applyPartsIn = async () => {
+    const id = partsModal.id;
+    if (!id) return;
+    try {
+      // 1) Update status to "Needs to be Scheduled"
+      await api.put(`/work-orders/${id}`, { status: PARTS_NEXT });
+      // 2) Add note (optional)
+      if (partsNote && partsNote.trim()) {
+        await addNote(id, partsNote.trim());
+      }
+      closePartsInModal();
+      fetchWorkOrders();
+      Alert.alert('Updated', 'Marked parts received.');
+    } catch (e) {
+      console.error(e);
+      Alert.alert('Error', 'Failed to mark parts in.');
+    }
+  };
+
   const renderChips = () => (
     <View style={styles.chipsWrap}>
       <TouchableOpacity
@@ -220,7 +293,7 @@ export default function WorkOrdersScreen() {
 
   const Card = ({ item, drag }) => {
     // ----- Legacy-safe Site Location / Address handling (mirrors web) -----
-    const rawLoc = norm(item.siteLocation);                 // may be name OR a full address (legacy)
+    const rawLoc = norm(item.siteLocation); // may be name OR a full address (legacy)
     const explicitName = norm(item.siteName) || norm(item.siteLocationName);
 
     // Prefer explicit name for Site Location
@@ -239,6 +312,9 @@ export default function WorkOrdersScreen() {
     }
 
     const hasAddress = !!siteAddress;
+
+    // latest note (clamped in UI)
+    const latest = latestNoteText(item.notes);
 
     return (
       <View style={styles.card}>
@@ -268,6 +344,11 @@ export default function WorkOrdersScreen() {
         )}
 
         <Text style={styles.cardText}>Problem: {item.problemDescription || 'N/A'}</Text>
+        {!!latest && (
+          <Text numberOfLines={2} style={styles.noteLine}>
+            Latest Note: {latest}
+          </Text>
+        )}
         <Text style={styles.cardText}>
           Scheduled:{' '}
           {item.scheduledDate ? moment(item.scheduledDate).format('YYYY-MM-DD HH:mm') : 'Not Scheduled'}
@@ -275,12 +356,23 @@ export default function WorkOrdersScreen() {
         <Text style={styles.cardText}>Status: {item.status}</Text>
 
         <View style={styles.actionsRow}>
-          <TouchableOpacity
-            style={[styles.statusBtn, { marginBottom: 8 }]}
-            onPress={() => setStatusModal({ id: item.id, value: item.status || STATUSES[0] })}
-          >
-            <Text style={styles.statusBtnText}>Status</Text>
-          </TouchableOpacity>
+          <View style={{ flexDirection: 'row', gap: 8, flex: 1 }}>
+            <TouchableOpacity
+              style={[styles.statusBtn]}
+              onPress={() => setStatusModal({ id: item.id, value: item.status || STATUSES[0] })}
+            >
+              <Text style={styles.statusBtnText}>Status</Text>
+            </TouchableOpacity>
+
+            {normStatus(item.status) === normStatus(PARTS_WAITING) && (
+              <TouchableOpacity
+                style={styles.partsBtn}
+                onPress={() => openPartsInModal(item)}
+              >
+                <Text style={styles.partsBtnText}>Parts In</Text>
+              </TouchableOpacity>
+            )}
+          </View>
 
           <TouchableOpacity
             style={styles.viewButton}
@@ -351,6 +443,7 @@ export default function WorkOrdersScreen() {
       <View style={styles.filterBar}>{renderChips()}</View>
       {ListComponent}
 
+      {/* Status Modal */}
       <Modal
         transparent
         visible={statusModal.id != null}
@@ -382,6 +475,42 @@ export default function WorkOrdersScreen() {
               </TouchableOpacity>
               <TouchableOpacity style={styles.modalBtnApply} onPress={applyStatusModal}>
                 <Text style={styles.modalBtnText}>Apply</Text>
+              </TouchableOpacity>
+            </View>
+          </Pressable>
+        </Pressable>
+      </Modal>
+
+      {/* Parts In Modal */}
+      <Modal
+        transparent
+        visible={partsModal.id != null}
+        animationType="fade"
+        onRequestClose={closePartsInModal}
+      >
+        <Pressable style={styles.modalOverlay} onPress={closePartsInModal}>
+          <Pressable style={styles.modalCard} onPress={() => {}}>
+            <Text style={styles.modalTitle}>Mark Parts Received</Text>
+            <Text style={styles.modalSub}>
+              {partsModal.customer} {partsModal.wo ? `• WO: ${partsModal.wo}` : ''}{' '}
+              {partsModal.po ? `• PO: ${partsModal.po}` : ''}
+            </Text>
+
+            <Text style={styles.inputLabel}>Optional note</Text>
+            <TextInput
+              value={partsNote}
+              onChangeText={setPartsNote}
+              placeholder="e.g., Parts In"
+              style={styles.textInput}
+              multiline
+            />
+
+            <View style={styles.modalButtonsRow}>
+              <TouchableOpacity style={styles.modalBtnCancel} onPress={closePartsInModal}>
+                <Text style={styles.modalBtnText}>Cancel</Text>
+              </TouchableOpacity>
+              <TouchableOpacity style={styles.modalBtnApply} onPress={applyPartsIn}>
+                <Text style={styles.modalBtnText}>Save</Text>
               </TouchableOpacity>
             </View>
           </Pressable>
@@ -478,10 +607,17 @@ const styles = StyleSheet.create({
   cardText: { fontSize: 14, color: '#2B2D42', marginBottom: 4 },
   linkText: { color: '#17a2b8', textDecorationLine: 'underline', marginBottom: 4 },
 
+  noteLine: {
+    fontSize: 13,
+    color: '#475569',
+    marginBottom: 4,
+  },
+
   actionsRow: {
     flexDirection: 'row',
     justifyContent: 'space-between',
     marginTop: 8,
+    alignItems: 'center',
   },
 
   statusBtn: {
@@ -491,6 +627,14 @@ const styles = StyleSheet.create({
     paddingHorizontal: 16,
   },
   statusBtnText: { color: '#fff', fontWeight: 'bold' },
+
+  partsBtn: {
+    backgroundColor: '#f59e0b',
+    borderRadius: 6,
+    paddingVertical: 10,
+    paddingHorizontal: 16,
+  },
+  partsBtnText: { color: '#1f2937', fontWeight: 'bold' },
 
   viewButton: {
     backgroundColor: '#17a2b8',
@@ -528,6 +672,26 @@ const styles = StyleSheet.create({
     color: '#0F172A',
     textAlign: 'center',
     marginBottom: 8,
+  },
+  modalSub: {
+    fontSize: 13,
+    color: '#334155',
+    textAlign: 'center',
+    marginBottom: 10,
+  },
+  inputLabel: {
+    fontSize: 12,
+    color: '#475569',
+    marginBottom: 4,
+    fontWeight: '600',
+  },
+  textInput: {
+    minHeight: 60,
+    borderWidth: 1,
+    borderColor: '#E2E8F0',
+    borderRadius: 8,
+    padding: 10,
+    textAlignVertical: 'top',
   },
   statusOption: {
     paddingVertical: 12,
