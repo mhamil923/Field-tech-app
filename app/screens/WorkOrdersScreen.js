@@ -87,10 +87,10 @@ export default function WorkOrdersScreen() {
   const [refreshing, setRefreshing] = useState(false);
   const [loadingFirst, setLoadingFirst] = useState(true);
 
-  // single-status change modal (unchanged)
+  // single-status change modal
   const [statusModal, setStatusModal] = useState({ id: null, value: null });
 
-  // ----- BULK "Parts In" modal (web parity) -----
+  // ----- BULK "Parts In" (web parity) -----
   const [bulkVisible, setBulkVisible] = useState(false);
   const [bulkSearch, setBulkSearch] = useState('');
   const [bulkSelected, setBulkSelected] = useState(() => new Set());
@@ -232,6 +232,8 @@ export default function WorkOrdersScreen() {
     [workOrders]
   );
 
+  const [bulkDefaultSeed, setBulkDefaultSeed] = useState(0); // forces FlatList to refresh selection defaults
+
   const filteredWaitingForModal = useMemo(() => {
     const q = bulkSearch.trim().toLowerCase();
     if (!q) return waitingOrders;
@@ -269,7 +271,8 @@ export default function WorkOrdersScreen() {
   const openBulkModal = () => {
     setBulkSearch('');
     setBulkNote('Parts In');
-    setBulkSelected(new Set(filteredWaitingForModal.map((o) => o.id))); // default select all like web
+    setBulkSelected(new Set(waitingOrders.map((o) => o.id))); // default select all
+    setBulkDefaultSeed((s) => s + 1);
     setBulkVisible(true);
   };
   const closeBulkModal = () => {
@@ -288,28 +291,13 @@ export default function WorkOrdersScreen() {
     }
     try {
       setBulkWorking(true);
-      // do updates sequentially for reliability
-      const results = [];
       for (const id of ids) {
-        try {
-          await api.put(`/work-orders/${id}`, { status: PARTS_NEXT });
-          if (bulkNote && bulkNote.trim()) {
-            await addNote(id, bulkNote.trim());
-          }
-          results.push({ id, ok: true });
-        } catch (e) {
-          results.push({ id, ok: false, err: e });
+        await api.put(`/work-orders/${id}`, { status: PARTS_NEXT });
+        if (bulkNote && bulkNote.trim()) {
+          await addNote(id, bulkNote.trim());
         }
       }
-      const failures = results.filter((r) => !r.ok);
-      if (failures.length) {
-        Alert.alert(
-          'Some failed',
-          `Updated ${results.length - failures.length}/${results.length}.`
-        );
-      } else {
-        Alert.alert('Success', `Marked parts in for ${results.length} work order(s).`);
-      }
+      Alert.alert('Success', `Marked parts in for ${ids.length} work order(s).`);
       closeBulkModal();
       fetchWorkOrders();
     } catch (e) {
@@ -442,7 +430,7 @@ export default function WorkOrdersScreen() {
     ) : (
       <FlatList
         data={filteredOrders}
-        keyExtractor={(it) => String(it.id))}
+        keyExtractor={(it) => String(it.id)}   // ← FIXED: removed stray ")"
         renderItem={({ item }) => <Card item={item} />}
         contentContainerStyle={styles.list}
         refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} />}
@@ -549,7 +537,7 @@ export default function WorkOrdersScreen() {
           <Pressable style={styles.partsModalCard} onPress={() => {}}>
             <Text style={styles.modalTitle}>Mark Parts as Received</Text>
 
-            {/* Search + Select all/none row */}
+            {/* Search + Select all/none */}
             <View style={styles.bulkTopRow}>
               <TextInput
                 style={styles.searchInput}
@@ -571,6 +559,7 @@ export default function WorkOrdersScreen() {
               keyExtractor={(it) => String(it.id)}
               style={{ maxHeight: 380 }}
               ItemSeparatorComponent={() => <View style={styles.rowDivider} />}
+              extraData={bulkDefaultSeed}
               renderItem={({ item }) => {
                 const checked = bulkSelected.has(item.id);
                 const site =
