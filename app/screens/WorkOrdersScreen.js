@@ -57,7 +57,6 @@ const toCanonicalStatus = (s) =>
 const displayPO = (wo, po) => (norm(wo) === norm(po) ? '' : norm(po));
 
 /** notes utilities */
-const safeArray = (x) => (Array.isArray(x) ? x : []);
 const parseNotes = (notesLike) => {
   if (Array.isArray(notesLike)) return notesLike;
   if (!notesLike) return [];
@@ -84,14 +83,19 @@ export default function WorkOrdersScreen() {
   const router = useRouter();
   const [me, setMe] = useState(null);
   const [workOrders, setWorkOrders] = useState([]);
-  const [selectedStatus, setSelectedStatus] = useState('Today'); // no "All"
+  const [selectedStatus, setSelectedStatus] = useState('Today');
   const [refreshing, setRefreshing] = useState(false);
   const [loadingFirst, setLoadingFirst] = useState(true);
+
+  // single-status change modal (unchanged)
   const [statusModal, setStatusModal] = useState({ id: null, value: null });
 
-  // Parts In modal
-  const [partsModal, setPartsModal] = useState({ id: null, customer: '', wo: '', po: '' });
-  const [partsNote, setPartsNote] = useState('Parts In');
+  // ----- BULK "Parts In" modal (web parity) -----
+  const [bulkVisible, setBulkVisible] = useState(false);
+  const [bulkSearch, setBulkSearch] = useState('');
+  const [bulkSelected, setBulkSelected] = useState(() => new Set());
+  const [bulkNote, setBulkNote] = useState('Parts In');
+  const [bulkWorking, setBulkWorking] = useState(false);
 
   // Drag order for Today
   const todayKey = `woOrder:${moment().format('YYYY-MM-DD')}`;
@@ -218,41 +222,100 @@ export default function WorkOrdersScreen() {
     try {
       await api.post(`/work-orders/${id}/notes`, { text: trimmed });
     } catch (e) {
-      // non-fatal for UX here
       console.error('Failed to add note:', e?.message || e);
     }
   };
 
-  // Parts modal handlers
-  const openPartsInModal = (order) => {
-    setPartsNote('Parts In');
-    setPartsModal({
-      id: order.id,
-      customer: order.customer || 'Work Order',
-      wo: norm(order.workOrderNumber),
-      po: norm(order.poNumber),
+  // ----- BULK "Parts In" helpers -----
+  const waitingOrders = useMemo(
+    () => workOrders.filter((o) => normStatus(o.status) === normStatus(PARTS_WAITING)),
+    [workOrders]
+  );
+
+  const filteredWaitingForModal = useMemo(() => {
+    const q = bulkSearch.trim().toLowerCase();
+    if (!q) return waitingOrders;
+    return waitingOrders.filter((o) => {
+      const hay = [
+        o.workOrderNumber,
+        o.poNumber,
+        o.customer,
+        o.siteLocation,
+        o.siteName,
+        o.siteLocationName,
+        o.siteAddress,
+        o.serviceAddress,
+        o.address,
+        o.problemDescription,
+      ]
+        .filter(Boolean)
+        .join(' ')
+        .toLowerCase();
+      return hay.includes(q);
+    });
+  }, [waitingOrders, bulkSearch]);
+
+  const toggleBulkSelect = (id) => {
+    setBulkSelected((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
     });
   };
-  const closePartsInModal = () => {
-    setPartsModal({ id: null, customer: '', wo: '', po: '' });
-    setPartsNote('Parts In');
+  const selectAll = () => setBulkSelected(new Set(filteredWaitingForModal.map((o) => o.id)));
+  const selectNone = () => setBulkSelected(new Set());
+
+  const openBulkModal = () => {
+    setBulkSearch('');
+    setBulkNote('Parts In');
+    setBulkSelected(new Set(filteredWaitingForModal.map((o) => o.id))); // default select all like web
+    setBulkVisible(true);
   };
-  const applyPartsIn = async () => {
-    const id = partsModal.id;
-    if (!id) return;
+  const closeBulkModal = () => {
+    if (bulkWorking) return;
+    setBulkVisible(false);
+    setBulkSelected(new Set());
+    setBulkNote('Parts In');
+    setBulkSearch('');
+  };
+
+  const applyBulkPartsIn = async () => {
+    const ids = Array.from(bulkSelected);
+    if (!ids.length) {
+      Alert.alert('Nothing selected', 'Choose at least one work order.');
+      return;
+    }
     try {
-      // 1) Update status to "Needs to be Scheduled"
-      await api.put(`/work-orders/${id}`, { status: PARTS_NEXT });
-      // 2) Add note (optional)
-      if (partsNote && partsNote.trim()) {
-        await addNote(id, partsNote.trim());
+      setBulkWorking(true);
+      // do updates sequentially for reliability
+      const results = [];
+      for (const id of ids) {
+        try {
+          await api.put(`/work-orders/${id}`, { status: PARTS_NEXT });
+          if (bulkNote && bulkNote.trim()) {
+            await addNote(id, bulkNote.trim());
+          }
+          results.push({ id, ok: true });
+        } catch (e) {
+          results.push({ id, ok: false, err: e });
+        }
       }
-      closePartsInModal();
+      const failures = results.filter((r) => !r.ok);
+      if (failures.length) {
+        Alert.alert(
+          'Some failed',
+          `Updated ${results.length - failures.length}/${results.length}.`
+        );
+      } else {
+        Alert.alert('Success', `Marked parts in for ${results.length} work order(s).`);
+      }
+      closeBulkModal();
       fetchWorkOrders();
-      Alert.alert('Updated', 'Marked parts received.');
     } catch (e) {
-      console.error(e);
-      Alert.alert('Error', 'Failed to mark parts in.');
+      Alert.alert('Error', 'Failed to apply updates.');
+    } finally {
+      setBulkWorking(false);
     }
   };
 
@@ -292,28 +355,19 @@ export default function WorkOrdersScreen() {
   );
 
   const Card = ({ item, drag }) => {
-    // ----- Legacy-safe Site Location / Address handling (mirrors web) -----
-    const rawLoc = norm(item.siteLocation); // may be name OR a full address (legacy)
+    // Legacy-safe Site Location / Address handling
+    const rawLoc = norm(item.siteLocation);
     const explicitName = norm(item.siteName) || norm(item.siteLocationName);
-
-    // Prefer explicit name for Site Location
     let siteLocationName = explicitName;
-
-    // Build Site Address from dedicated address fields first
     let siteAddress = norm(item.siteAddress) || norm(item.serviceAddress) || norm(item.address);
 
     if (!siteAddress && rawLoc) {
-      // Older records: siteLocation stored the full address
       siteAddress = rawLoc;
-      // Leave siteLocationName blank so it doesn't duplicate the address
     } else if (!siteLocationName && rawLoc) {
-      // Newer records: siteLocation is a location NAME
       siteLocationName = rawLoc;
     }
 
     const hasAddress = !!siteAddress;
-
-    // latest note (clamped in UI)
     const latest = latestNoteText(item.notes);
 
     return (
@@ -330,11 +384,8 @@ export default function WorkOrdersScreen() {
         </View>
 
         <Text style={styles.cardText}>Customer: {item.customer || 'N/A'}</Text>
-
-        {/* Site Location (name only) */}
         <Text style={styles.cardText}>Site Location: {siteLocationName || '—'}</Text>
 
-        {/* Site Address (tap to open Maps) */}
         {hasAddress ? (
           <TouchableOpacity onPress={() => openInGoogleMaps(siteAddress || siteLocationName)}>
             <Text style={styles.linkText}>Site Address: {siteAddress}</Text>
@@ -356,23 +407,12 @@ export default function WorkOrdersScreen() {
         <Text style={styles.cardText}>Status: {item.status}</Text>
 
         <View style={styles.actionsRow}>
-          <View style={{ flexDirection: 'row', gap: 8, flex: 1 }}>
-            <TouchableOpacity
-              style={[styles.statusBtn]}
-              onPress={() => setStatusModal({ id: item.id, value: item.status || STATUSES[0] })}
-            >
-              <Text style={styles.statusBtnText}>Status</Text>
-            </TouchableOpacity>
-
-            {normStatus(item.status) === normStatus(PARTS_WAITING) && (
-              <TouchableOpacity
-                style={styles.partsBtn}
-                onPress={() => openPartsInModal(item)}
-              >
-                <Text style={styles.partsBtnText}>Parts In</Text>
-              </TouchableOpacity>
-            )}
-          </View>
+          <TouchableOpacity
+            style={styles.statusBtn}
+            onPress={() => setStatusModal({ id: item.id, value: item.status || STATUSES[0] })}
+          >
+            <Text style={styles.statusBtnText}>Status</Text>
+          </TouchableOpacity>
 
           <TouchableOpacity
             style={styles.viewButton}
@@ -402,7 +442,7 @@ export default function WorkOrdersScreen() {
     ) : (
       <FlatList
         data={filteredOrders}
-        keyExtractor={(it) => String(it.id)}
+        keyExtractor={(it) => String(it.id))}
         renderItem={({ item }) => <Card item={item} />}
         contentContainerStyle={styles.list}
         refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} />}
@@ -424,6 +464,19 @@ export default function WorkOrdersScreen() {
     closeStatusModal();
   };
 
+  const HeaderActions = () => {
+    if (normStatus(selectedStatus) !== normStatus(PARTS_WAITING)) return null;
+    return (
+      <View style={styles.partsHeaderRow}>
+        <TouchableOpacity onPress={openBulkModal} style={styles.partsHeaderBtn}>
+          <Text style={styles.partsHeaderBtnText}>
+            Mark Parts In ({waitingOrders.length})
+          </Text>
+        </TouchableOpacity>
+      </View>
+    );
+  };
+
   return (
     <View style={styles.container}>
       <View style={styles.headerRow}>
@@ -441,6 +494,10 @@ export default function WorkOrdersScreen() {
       </View>
 
       <View style={styles.filterBar}>{renderChips()}</View>
+
+      {/* Web-parity bulk "Mark Parts In" button shown only on Waiting on Parts */}
+      <HeaderActions />
+
       {ListComponent}
 
       {/* Status Modal */}
@@ -481,36 +538,104 @@ export default function WorkOrdersScreen() {
         </Pressable>
       </Modal>
 
-      {/* Parts In Modal */}
+      {/* BULK Parts In Modal */}
       <Modal
         transparent
-        visible={partsModal.id != null}
+        visible={bulkVisible}
         animationType="fade"
-        onRequestClose={closePartsInModal}
+        onRequestClose={closeBulkModal}
       >
-        <Pressable style={styles.modalOverlay} onPress={closePartsInModal}>
-          <Pressable style={styles.modalCard} onPress={() => {}}>
-            <Text style={styles.modalTitle}>Mark Parts Received</Text>
-            <Text style={styles.modalSub}>
-              {partsModal.customer} {partsModal.wo ? `• WO: ${partsModal.wo}` : ''}{' '}
-              {partsModal.po ? `• PO: ${partsModal.po}` : ''}
-            </Text>
+        <Pressable style={styles.modalOverlay} onPress={closeBulkModal}>
+          <Pressable style={styles.partsModalCard} onPress={() => {}}>
+            <Text style={styles.modalTitle}>Mark Parts as Received</Text>
 
-            <Text style={styles.inputLabel}>Optional note</Text>
+            {/* Search + Select all/none row */}
+            <View style={styles.bulkTopRow}>
+              <TextInput
+                style={styles.searchInput}
+                placeholder='Search WO #, PO #, customer, or site...'
+                value={bulkSearch}
+                onChangeText={setBulkSearch}
+              />
+              <TouchableOpacity style={styles.bulkTopBtn} onPress={selectAll}>
+                <Text style={styles.bulkTopBtnText}>Select All</Text>
+              </TouchableOpacity>
+              <TouchableOpacity style={styles.bulkTopBtn} onPress={selectNone}>
+                <Text style={styles.bulkTopBtnText}>Select None</Text>
+              </TouchableOpacity>
+            </View>
+
+            {/* List */}
+            <FlatList
+              data={filteredWaitingForModal}
+              keyExtractor={(it) => String(it.id)}
+              style={{ maxHeight: 380 }}
+              ItemSeparatorComponent={() => <View style={styles.rowDivider} />}
+              renderItem={({ item }) => {
+                const checked = bulkSelected.has(item.id);
+                const site =
+                  norm(item.siteAddress) ||
+                  norm(item.serviceAddress) ||
+                  norm(item.address) ||
+                  norm(item.siteLocation) ||
+                  '';
+                return (
+                  <TouchableOpacity
+                    onPress={() => toggleBulkSelect(item.id)}
+                    style={styles.partsRow}
+                  >
+                    <View style={[styles.checkbox, checked && styles.checkboxChecked]}>
+                      {checked ? <Text style={styles.checkboxGlyph}>✓</Text> : null}
+                    </View>
+                    <View style={{ flex: 1 }}>
+                      <Text style={styles.partsRowTitle}>
+                        WO: {item.workOrderNumber || '—'} {item.poNumber ? ` • PO: ${item.poNumber}` : ''}
+                      </Text>
+                      <Text style={styles.partsRowSub}>{item.customer || '—'}</Text>
+                      {!!site && <Text style={styles.partsRowSub} numberOfLines={1}>{site}</Text>}
+                    </View>
+                  </TouchableOpacity>
+                );
+              }}
+              ListEmptyComponent={
+                <View style={{ paddingVertical: 12 }}>
+                  <Text style={{ textAlign: 'center', color: '#64748b' }}>
+                    No matching work orders.
+                  </Text>
+                </View>
+              }
+            />
+
+            {/* Optional note */}
+            <Text style={[styles.inputLabel, { marginTop: 10 }]}>Optional note</Text>
             <TextInput
-              value={partsNote}
-              onChangeText={setPartsNote}
+              value={bulkNote}
+              onChangeText={setBulkNote}
               placeholder="e.g., Parts In"
               style={styles.textInput}
               multiline
             />
 
+            {/* Action buttons */}
             <View style={styles.modalButtonsRow}>
-              <TouchableOpacity style={styles.modalBtnCancel} onPress={closePartsInModal}>
+              <TouchableOpacity
+                style={[styles.modalBtnCancel, bulkWorking && { opacity: 0.7 }]}
+                onPress={closeBulkModal}
+                disabled={bulkWorking}
+              >
                 <Text style={styles.modalBtnText}>Cancel</Text>
               </TouchableOpacity>
-              <TouchableOpacity style={styles.modalBtnApply} onPress={applyPartsIn}>
-                <Text style={styles.modalBtnText}>Save</Text>
+              <TouchableOpacity
+                style={[
+                  styles.modalBtnApply,
+                  !bulkSelected.size && { backgroundColor: '#94a3b8' },
+                ]}
+                onPress={applyBulkPartsIn}
+                disabled={!bulkSelected.size || bulkWorking}
+              >
+                <Text style={styles.modalBtnText}>
+                  {bulkWorking ? 'Updating…' : `Mark Parts In (${bulkSelected.size})`}
+                </Text>
               </TouchableOpacity>
             </View>
           </Pressable>
@@ -539,7 +664,7 @@ const styles = StyleSheet.create({
   },
   addBtnText: { color: '#fff', fontWeight: '700' },
 
-  /* Fixed chip/filter bar */
+  /* chip/filter bar */
   filterBar: {
     paddingTop: 6,
     paddingBottom: 6,
@@ -585,6 +710,20 @@ const styles = StyleSheet.create({
   badgeText: { color: '#17a2b8', fontSize: 12, fontWeight: '700' },
   badgeTextActive: { color: '#fff' },
 
+  // waiting tab header action
+  partsHeaderRow: {
+    paddingTop: 8,
+    paddingBottom: 4,
+    alignItems: 'flex-start',
+  },
+  partsHeaderBtn: {
+    backgroundColor: '#22c55e',
+    paddingVertical: 10,
+    paddingHorizontal: 14,
+    borderRadius: 8,
+  },
+  partsHeaderBtnText: { color: '#fff', fontWeight: '700' },
+
   list: { paddingTop: 8, paddingBottom: 16 },
 
   card: {
@@ -618,6 +757,7 @@ const styles = StyleSheet.create({
     justifyContent: 'space-between',
     marginTop: 8,
     alignItems: 'center',
+    gap: 8,
   },
 
   statusBtn: {
@@ -627,14 +767,6 @@ const styles = StyleSheet.create({
     paddingHorizontal: 16,
   },
   statusBtnText: { color: '#fff', fontWeight: 'bold' },
-
-  partsBtn: {
-    backgroundColor: '#f59e0b',
-    borderRadius: 6,
-    paddingVertical: 10,
-    paddingHorizontal: 16,
-  },
-  partsBtnText: { color: '#1f2937', fontWeight: 'bold' },
 
   viewButton: {
     backgroundColor: '#17a2b8',
@@ -666,18 +798,21 @@ const styles = StyleSheet.create({
     borderWidth: StyleSheet.hairlineWidth,
     borderColor: '#E2E8F0',
   },
+  partsModalCard: {
+    width: '100%',
+    maxWidth: 640,
+    backgroundColor: '#fff',
+    borderRadius: 12,
+    padding: 16,
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: '#E2E8F0',
+  },
   modalTitle: {
     fontSize: 18,
     fontWeight: '700',
     color: '#0F172A',
     textAlign: 'center',
     marginBottom: 8,
-  },
-  modalSub: {
-    fontSize: 13,
-    color: '#334155',
-    textAlign: 'center',
-    marginBottom: 10,
   },
   inputLabel: {
     fontSize: 12,
@@ -726,4 +861,49 @@ const styles = StyleSheet.create({
     alignItems: 'center',
   },
   modalBtnText: { color: '#fff', fontWeight: '700' },
+
+  // bulk modal specifics
+  bulkTopRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    marginBottom: 10,
+  },
+  searchInput: {
+    flex: 1,
+    borderWidth: 1,
+    borderColor: '#E2E8F0',
+    borderRadius: 8,
+    paddingHorizontal: 10,
+    height: 40,
+  },
+  bulkTopBtn: {
+    backgroundColor: '#e2e8f0',
+    paddingHorizontal: 10,
+    height: 40,
+    borderRadius: 8,
+    justifyContent: 'center',
+  },
+  bulkTopBtnText: { color: '#0f172a', fontWeight: '600' },
+
+  partsRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingVertical: 10,
+    gap: 10,
+  },
+  rowDivider: { height: StyleSheet.hairlineWidth, backgroundColor: '#e5e7eb' },
+  checkbox: {
+    width: 20,
+    height: 20,
+    borderRadius: 4,
+    borderWidth: 2,
+    borderColor: '#94a3b8',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  checkboxChecked: { backgroundColor: '#22c55e', borderColor: '#22c55e' },
+  checkboxGlyph: { color: '#fff', fontWeight: '900', fontSize: 13 },
+  partsRowTitle: { fontWeight: '700', color: '#111827' },
+  partsRowSub: { color: '#475569', fontSize: 12 },
 });
