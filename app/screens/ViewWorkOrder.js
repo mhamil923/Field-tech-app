@@ -55,14 +55,8 @@ const PDF_VIEWER_HTML = `
 <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no" />
 <title>PDF Preview</title>
 <style>
-  html,body { margin:0; padding:0; background:#111; font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Arial,sans-serif; }
-  /* Make the content scroll naturally */
-  #pages {
-    padding: 8px;
-    height: calc(100vh - 0px);
-    overflow-y: auto;
-    -webkit-overflow-scrolling: touch;
-  }
+  html,body { margin:0; padding:0; background:#111; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Arial, sans-serif; }
+  #pages { padding: 8px; }
   .pageWrap { margin: 0 auto 12px; max-width: 1100px; }
   canvas.page { width:100%; height:auto; display:block; background:#fafafa; box-shadow: 0 1px 2px rgba(0,0,0,.35); border-radius: 6px; }
 </style>
@@ -109,167 +103,106 @@ const PDF_VIEWER_HTML = `
 
 /**
  * PDF Annotator (used for "Annotate & Sign PDF")
- * — updated: scrollable page area with momentum scrolling on iOS
- * — keeps multiple signatures over time
- */
 const ANNOTATOR_HTML = `
 <!doctype html>
 <html>
 <head>
 <meta charset="utf-8" />
-<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no" />
+<meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no"/>
 <title>Annotate</title>
 <style>
-  html,body { margin:0; padding:0; background:#000; font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Arial,sans-serif; }
-  body { padding-top: calc(env(safe-area-inset-top, 0px) + 6px); }
-  #toolbar { position: sticky; top: 0; z-index: 1000; background: #111827; color:#fff; display:flex; gap:8px; align-items:center; padding:8px 10px; flex-wrap: wrap; }
-  #toolbar button { background:#374151; border:0; color:#fff; padding:8px 10px; border-radius:6px; font-weight:600; }
-  #toolbar button.primary { background:#2563EB; }
-  #toolbar label { display:flex; align-items:center; gap:6px; font-size:13px; background:#1f2937; padding:6px 10px; border-radius:6px; }
-  #toolbar .sep { flex:1; }
-  /* Make page area scrollable & smooth */
-  #pages {
-    padding: 8px;
-    height: calc(100vh - 56px);
-    overflow-y: auto;
-    -webkit-overflow-scrolling: touch;
-  }
-  .pageWrap { position:relative; margin: 0 auto 16px; max-width: 900px; }
-  canvas.page { width:100%; height:auto; display:block; background:#fafafa; }
-  canvas.overlay { position:absolute; left:0; top:0; touch-action:none; }
+  html,body {margin:0;padding:0;background:#000;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Arial,sans-serif;overflow-y:auto;}
+  #toolbar{position:sticky;top:0;z-index:999;background:#111827;color:#fff;display:flex;flex-wrap:wrap;gap:8px;align-items:center;padding:8px 10px}
+  #toolbar button{background:#374151;border:0;color:#fff;padding:8px 10px;border-radius:6px;font-weight:600}
+  #toolbar button.primary{background:#2563EB}
+  #pages{padding:8px}
+  .pageWrap{position:relative;margin:0 auto 16px;max-width:900px}
+  canvas.page{width:100%;height:auto;display:block;background:#fafafa;border-radius:6px}
+  canvas.overlay{position:absolute;left:0;top:0;touch-action:none}
 </style>
 </head>
 <body>
-  <div id="toolbar">
-    <label><input type="checkbox" id="drawToggle" /> Draw Mode</label>
-    <button id="pen">Pen</button>
-    <button id="erase">Erase</button>
-    <button id="undo">Undo</button>
-    <button id="clear">Clear Page</button>
-    <div class="sep"></div>
-    <div style="display:flex; gap:8px;">
-      <button id="close">Close</button>
-      <button id="save" class="primary">Save & Upload</button>
-    </div>
-  </div>
-  <div id="pages"></div>
-
-  <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
-  <script>pdfjsLib.GlobalWorkerOptions.workerSrc="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js";</script>
-  <script src="https://unpkg.com/pdf-lib@1.17.1/dist/pdf-lib.min.js"></script>
-  <script>
-    function b64ToUint8(b64){const bin=atob(b64);const bytes=new Uint8Array(bin.length);for(let i=0;i<bin.length;i++)bytes[i]=bin.charCodeAt(i);return bytes;}
-    const state={tool:'pen',drawEnabled:false,pages:[]};
-    function applyPointerMode(){
-      for(const p of state.pages){
-        p.overlayCanvas.style.pointerEvents=state.drawEnabled?'auto':'none';
-        p.overlayCanvas.style.touchAction=state.drawEnabled?'none':'auto';
-        p.overlayCanvas.style.cursor=state.drawEnabled?(state.tool==='erase'?'cell':'crosshair'):'default';
-      }
-    }
-    function setTool(t){state.tool=t;applyPointerMode();}
-    function setDrawEnabled(on){state.drawEnabled=!!on;applyPointerMode();}
-    function pushUndo(p){try{const snap=p.overlayCtx.getImageData(0,0,p.overlayCanvas.width,p.overlayCanvas.height);p.strokes.push(snap);if(p.strokes.length>60)p.strokes.shift();}catch(e){}}
-    function undo(p){if(p.strokes.length)p.overlayCtx.putImageData(p.strokes.pop(),0,0);}
-    function clearPage(p){pushUndo(p);p.overlayCtx.clearRect(0,0,p.overlayCanvas.width,p.overlayCanvas.height);}
-    function widthFor(a,b){
-      const dt = Math.max(1, (b.ts - a.ts));
-      const dx=b.x-a.x, dy=b.y-a.y;
-      const dist=Math.hypot(dx,dy);
-      const vel = dist/dt;
-      const minW=1.25, maxW=2.8;
-      const speedFactor = Math.max(0.25, 1 - Math.min(vel*2.0, 0.85));
-      const pressureFactor = (('p' in a) && ('p' in b)) ? (0.6 + 0.4 * ((a.p + b.p)/2)) : 1.0;
-      return Math.max(minW, Math.min(maxW, maxW * speedFactor * pressureFactor));
-    }
-    async function renderPDF(){
-      try{
-        const b64=window.PDF_BASE64||''; if(!b64) throw new Error('Missing PDF data.');
-        const doc=await pdfjsLib.getDocument({data:b64ToUint8(b64)}).promise;
-        const container=document.getElementById('pages'); container.innerHTML='';
-        for(let i=1;i<=doc.numPages;i++){
-          const page=await doc.getPage(i);
-          const vp=page.getViewport({scale:1});
-          const targetWidth=Math.min(900,Math.max(600,vp.width));
-          const scale=targetWidth/vp.width;
-          const viewport=page.getViewport({scale});
-          const wrap=document.createElement('div'); wrap.className='pageWrap';
-          const pageCanvas=document.createElement('canvas'); pageCanvas.className='page';
-          pageCanvas.width=Math.floor(viewport.width); pageCanvas.height=Math.floor(viewport.height);
-          wrap.appendChild(pageCanvas);
-          const overlay=document.createElement('canvas'); overlay.className='overlay';
-          overlay.width=pageCanvas.width; overlay.height=pageCanvas.height;
-          overlay.style.width = pageCanvas.style.width = '100%';
-          overlay.style.height = pageCanvas.style.height = 'auto';
-          wrap.appendChild(overlay);
-          container.appendChild(wrap);
-          const ctx=pageCanvas.getContext('2d');
-          await page.render({canvasContext:ctx,viewport}).promise;
-          const octx=overlay.getContext('2d');
-          octx.lineCap='round'; octx.lineJoin='round'; octx.strokeStyle='#000'; octx.setLineDash([]);
-          const pState={pageCanvas,overlayCanvas:overlay,overlayCtx:octx,strokes:[]}; state.pages.push(pState);
-          let drawing=false,last=null;
-          function getPos(ev){
-            const t=(ev.touches?ev.touches[0]:ev);
-            const r=overlay.getBoundingClientRect();
-            const x=(t.clientX-r.left)*(overlay.width/r.width);
-            const y=(t.clientY-r.top)*(overlay.height/r.height);
-            const p = (t.force && !isNaN(t.force)) ? t.force : (t.pressure && !isNaN(t.pressure) ? t.pressure : 0.5);
-            return {x,y,p,ts:performance.now()};
-          }
-          function start(ev){ if(!state.drawEnabled) return; ev.preventDefault(); pushUndo(pState); drawing=true; last=getPos(ev); }
-          function move(ev){
-            if(!state.drawEnabled||!drawing) return; ev.preventDefault();
-            const pt=getPos(ev); const a=last||pt, b=pt;
-            const w=widthFor(a,b); const erase = (state.tool==='erase');
-            octx.save(); octx.globalCompositeOperation = erase ? 'destination-out' : 'source-over';
-            octx.lineWidth = erase ? Math.max(10, w*10) : w; octx.beginPath(); octx.moveTo(a.x, a.y); octx.lineTo(b.x, b.y); octx.stroke(); octx.restore(); last=pt;
-          }
-          function end(){ drawing=false; }
-          overlay.addEventListener('touchstart',start,{passive:false});
-          overlay.addEventListener('touchmove', move ,{passive:false});
-          overlay.addEventListener('touchend',  end  ,{passive:false});
-          overlay.addEventListener('mousedown',start);
-          overlay.addEventListener('mousemove',move);
-          window.addEventListener('mouseup',end);
-        }
-      }catch(e){window.ReactNativeWebView?.postMessage('ERROR:'+(e?.message||String(e))); }
-    }
-    async function saveAndUpload(){
-      try{
-        const b64=window.PDF_BASE64||''; if(!b64) throw new Error('Missing PDF data.');
-        const pdfBytes=b64ToUint8(b64);
-        const pdfDoc=await PDFLib.PDFDocument.load(pdfBytes);
-        const pages=pdfDoc.getPages();
-        for(let i=0;i<Math.min(pages.length,state.pages.length);i++){
-          const p=pages[i], view=state.pages[i];
-          const dataUrl=view.overlayCanvas.toDataURL('image/png');
-          const pngBytes=await (await fetch(dataUrl)).arrayBuffer();
-          const png=await pdfDoc.embedPng(pngBytes);
-          const pageW=p.getWidth(), pageH=p.getHeight();
-          const scaleX=pageW/view.overlayCanvas.width;
-          const scaleY=pageH/view.overlayCanvas.height;
-          p.drawImage(png,{x:0,y:0,width:view.overlayCanvas.width*scaleX,height:view.overlayCanvas.height*scaleY,opacity:1});
-        }
-        const outB64 = pdfDoc.saveAsBase64 ? await pdfDoc.saveAsBase64({dataUri:false}) : btoa(String.fromCharCode(...(await pdfDoc.save())));
-        window.ReactNativeWebView?.postMessage('SIGNED:'+outB64);
-      }catch(e){window.ReactNativeWebView?.postMessage('ERROR:'+(e?.message||String(e))); }
-    }
-    window.addEventListener('DOMContentLoaded',()=>{
-      document.getElementById('pen').addEventListener('click',()=>setTool('pen'));
-      document.getElementById('erase').addEventListener('click',()=>setTool('erase'));
-      document.getElementById('save').addEventListener('click',saveAndUpload);
-      document.getElementById('close').addEventListener('click',()=>window.ReactNativeWebView?.postMessage('CLOSE'));
-      document.getElementById('undo').addEventListener('click',()=>{ const t=state.pages.at(-1); if(t) undo(t); });
-      document.getElementById('clear').addEventListener('click',()=>{ const t=state.pages.at(-1); if(t) clearPage(t); });
-      document.getElementById('drawToggle').addEventListener('change',e=>setDrawEnabled(e.target.checked));
-      renderPDF();
-    });
-  </script>
+<div id="toolbar">
+  <label style="display:flex;align-items:center;gap:6px;font-size:13px;background:#1f2937;padding:6px 10px;border-radius:6px">
+    <input type="checkbox" id="drawToggle"/> Draw Mode
+  </label>
+  <button id="pen">Pen</button>
+  <button id="erase">Erase</button>
+  <button id="undo">Undo</button>
+  <button id="clear">Clear</button>
+  <div style="flex:1"></div>
+  <button id="close">Close</button>
+  <button id="save" class="primary">Save & Upload</button>
+</div>
+<div id="pages"></div>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
+<script src="https://unpkg.com/pdf-lib@1.17.1/dist/pdf-lib.min.js"></script>
+<script>
+pdfjsLib.GlobalWorkerOptions.workerSrc="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js";
+function b64ToUint8(b64){const bin=atob(b64);const bytes=new Uint8Array(bin.length);for(let i=0;i<bin.length;i++)bytes[i]=bin.charCodeAt(i);return bytes;}
+const state={tool:'pen',drawEnabled:false,pages:[]};
+function setTool(t){state.tool=t;updatePointers();}
+function setDraw(on){state.drawEnabled=!!on;updatePointers();}
+function updatePointers(){for(const p of state.pages){p.overlay.style.pointerEvents=state.drawEnabled?'auto':'none';p.overlay.style.touchAction=state.drawEnabled?'none':'auto';}}
+async function renderPDF(){
+ const b64=window.PDF_BASE64||'';if(!b64)return;
+ const doc=await pdfjsLib.getDocument({data:b64ToUint8(b64)}).promise;
+ const container=document.getElementById('pages');container.innerHTML='';
+ for(let i=1;i<=doc.numPages;i++){
+  const page=await doc.getPage(i);
+  const vp=page.getViewport({scale:1});
+  const scale=Math.min(900/vp.width,1.5);
+  const viewport=page.getViewport({scale});
+  const wrap=document.createElement('div');wrap.className='pageWrap';
+  const c=document.createElement('canvas');c.className='page';
+  c.width=viewport.width;c.height=viewport.height;wrap.appendChild(c);
+  const ctx=c.getContext('2d');await page.render({canvasContext:ctx,viewport}).promise;
+  const overlay=document.createElement('canvas');overlay.className='overlay';
+  overlay.width=c.width;overlay.height=c.height;overlay.style.width='100%';overlay.style.height='auto';
+  wrap.appendChild(overlay);container.appendChild(wrap);
+  const octx=overlay.getContext('2d');octx.lineCap='round';octx.lineJoin='round';octx.strokeStyle='#000';
+  const p={overlay,ctx:octx,strokes:[]};state.pages.push(p);
+  let drawing=false,last=null;
+  function pos(e){const t=(e.touches?e.touches[0]:e);const r=overlay.getBoundingClientRect();
+   return{x:(t.clientX-r.left)*(overlay.width/r.width),y:(t.clientY-r.top)*(overlay.height/r.height)};}
+  overlay.addEventListener('mousedown',e=>{if(!state.drawEnabled)return;drawing=true;last=pos(e);});
+  overlay.addEventListener('mousemove',e=>{if(!drawing)return;const pt=pos(e);draw(last,pt,p);last=pt;});
+  window.addEventListener('mouseup',()=>{drawing=false;});
+  overlay.addEventListener('touchstart',e=>{if(!state.drawEnabled)return;drawing=true;last=pos(e);},{passive:false});
+  overlay.addEventListener('touchmove',e=>{if(!drawing)return;const pt=pos(e);draw(last,pt,p);last=pt;},{passive:false});
+  overlay.addEventListener('touchend',()=>{drawing=false;});
+ }
+}
+function draw(a,b,p){const o=p.ctx;o.save();o.globalCompositeOperation=state.tool==='erase'?'destination-out':'source-over';o.lineWidth=state.tool==='erase'?16:2;o.beginPath();o.moveTo(a.x,a.y);o.lineTo(b.x,b.y);o.stroke();o.restore();}
+async function saveAndUpload(){
+ try{
+  const b64=window.PDF_BASE64||'';if(!b64)throw new Error('Missing PDF');
+  const doc=await PDFLib.PDFDocument.load(b64ToUint8(b64));
+  const pages=doc.getPages();
+  for(let i=0;i<pages.length&&i<state.pages.length;i++){
+    const p=pages[i],v=state.pages[i];
+    const png=await (await fetch(v.overlay.toDataURL('image/png'))).arrayBuffer();
+    const img=await doc.embedPng(png);
+    p.drawImage(img,{x:0,y:0,width:p.getWidth(),height:p.getHeight()});
+  }
+  const out=await doc.saveAsBase64({dataUri:false});
+  window.ReactNativeWebView.postMessage('SIGNED:'+out);
+ }catch(e){window.ReactNativeWebView.postMessage('ERROR:'+e.message);}
+}
+window.addEventListener('DOMContentLoaded',()=>{
+ document.getElementById('pen').onclick=()=>setTool('pen');
+ document.getElementById('erase').onclick=()=>setTool('erase');
+ document.getElementById('undo').onclick=()=>{};
+ document.getElementById('clear').onclick=()=>{for(const p of state.pages)p.ctx.clearRect(0,0,p.overlay.width,p.overlay.height);};
+ document.getElementById('close').onclick=()=>window.ReactNativeWebView.postMessage('CLOSE');
+ document.getElementById('save').onclick=saveAndUpload;
+ document.getElementById('drawToggle').onchange=e=>setDraw(e.target.checked);
+ renderPDF();
+});
+</script>
 </body>
 </html>
 `;
-
 /**
  * SKETCH HTML (used for "Draw Note")
  */
@@ -281,7 +214,7 @@ const SKETCH_HTML = `
 <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no" />
 <title>Draw Note</title>
 <style>
-  html,body { margin:0; padding:0; background:#000; font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Arial,sans-serif; }
+  html,body { margin:0; padding:0; background:#000; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Arial, sans-serif; }
   #toolbar { position: sticky; top: 0; z-index: 1000; background: #111827; color:#fff; display:flex; gap:8px; align-items:center; padding:8px 10px; flex-wrap: wrap; }
   #toolbar button { background:#374151; border:0; color:#fff; padding:8px 10px; border-radius:6px; font-weight:600; }
   #toolbar button.primary { background:#2563EB; }
@@ -395,22 +328,22 @@ export default function ViewWorkOrder() {
   const callNumber = (p) => {
     const n = normPhone(p);
     if (!n) return;
-    Linking.openURL(\`tel:\${n}\`).catch(() => Alert.alert('Error', 'Unable to open Phone app.'));
+    Linking.openURL(`tel:${n}`).catch(() => Alert.alert('Error', 'Unable to open Phone app.'));
   };
   const emailTo = (e) => {
     const addr = String(e || '').trim();
     if (!addr) return;
-    Linking.openURL(\`mailto:\${addr}\`).catch(() => Alert.alert('Error', 'Unable to open Mail app.'));
+    Linking.openURL(`mailto:${addr}`).catch(() => Alert.alert('Error', 'Unable to open Mail app.'));
   };
   const openMap = (loc) => {
     const q = encodeURIComponent(loc || '');
     if (!q) return;
     const googleAppUrl = Platform.select({
-      ios: \`comgooglemaps://?q=\${q}\`,
-      android: \`geo:0,0?q=\${q}\`,
-      default: \`https://www.google.com/maps/search/?api=1&query=\${q}\`,
+      ios: `comgooglemaps://?q=${q}`,
+      android: `geo:0,0?q=${q}`,
+      default: `https://www.google.com/maps/search/?api=1&query=${q}`,
     });
-    const googleWebUrl = \`https://www.google.com/maps/search/?api=1&query=\${q}\`;
+    const googleWebUrl = `https://www.google.com/maps/search/?api=1&query=${q}`;
     Linking.canOpenURL(googleAppUrl)
       .then(supported => (supported ? Linking.openURL(googleAppUrl) : Linking.openURL(googleWebUrl)))
       .catch(() => Alert.alert('Error', 'Unable to open Google Maps.'));
@@ -441,7 +374,7 @@ export default function ViewWorkOrder() {
   const fetchWorkOrder = useCallback(async () => {
     if (!workOrderId) return;
     try {
-      const { data } = await api.get(\`/work-orders/\${workOrderId}\`);
+      const { data } = await api.get(`/work-orders/${workOrderId}`);
       setWorkOrder(data);
 
       // Notes
@@ -489,7 +422,7 @@ export default function ViewWorkOrder() {
       setDocLoading(true);
       setDocError(null);
       setDocB64(null);
-      const target = FileSystem.cacheDirectory + \`doc_\${Date.now()}.pdf\`;
+      const target = FileSystem.cacheDirectory + `doc_${Date.now()}.pdf`;
       await FileSystem.downloadAsync(url, target);
       const b64 = await FileSystem.readAsStringAsync(target, { encoding: FileSystem.EncodingType.Base64 });
       setDocB64(b64);
@@ -504,13 +437,13 @@ export default function ViewWorkOrder() {
     let items = [];
     if (group === 'WO') {
       if (!woPdfUrl) { Alert.alert('No PDF', 'This work order does not have a PDF attached.'); return; }
-      items = [{ title: \`Work Order \${workOrder?.workOrderNumber || workOrderId}\`, url: woPdfUrl }];
+      items = [{ title: `Work Order ${workOrder?.workOrderNumber || workOrderId}`, url: woPdfUrl }];
     } else if (group === 'EST') {
       if (!estimateUrls.length) { Alert.alert('No Estimates', 'No Estimate PDFs found for this job.'); return; }
-      items = estimateUrls.map((u, i) => ({ title: \`Estimate \${i + 1}\`, url: u }));
+      items = estimateUrls.map((u, i) => ({ title: `Estimate ${i + 1}`, url: u }));
     } else if (group === 'PO') {
       if (!poUrls.length) { Alert.alert('No POs', 'No PO PDFs found for this job.'); return; }
-      items = poUrls.map((u, i) => ({ title: \`PO \${i + 1}\`, url: u }));
+      items = poUrls.map((u, i) => ({ title: `PO ${i + 1}`, url: u }));
     }
 
     setDocGroup(group);
@@ -537,7 +470,7 @@ export default function ViewWorkOrder() {
   const addNote = async () => {
     if (!newNoteText.trim()) return;
     try {
-      const { data } = await api.post(\`/work-orders/\${workOrderId}/notes\`, { text: newNoteText.trim() });
+      const { data } = await api.post(`/work-orders/${workOrderId}/notes`, { text: newNoteText.trim() });
       setNewNoteText('');
       setShowAddNoteModal(false);
       setNotes(sortNotesDesc(data.notes || []));
@@ -573,12 +506,12 @@ export default function ViewWorkOrder() {
     const form = new FormData();
     for (let i = 0; i < result.assets.length; i++) {
       const processedUri = await processImageForUpload(result.assets[i].uri);
-      const name = \`photo-\${Date.now()}-\${i}.jpg\`;
+      const name = `photo-${Date.now()}-${i}.jpg`;
       form.append('photoFile', { uri: processedUri, name, type: 'image/jpeg' });
     }
 
     try {
-      await api.put(\`/work-orders/\${workOrderId}/edit\`, form, { headers: { 'Content-Type': 'multipart/form-data' } });
+      await api.put(`/work-orders/${workOrderId}/edit`, form, { headers: { 'Content-Type': 'multipart/form-data' } });
       fetchWorkOrder();
       Alert.alert('Success', 'Photo taken!');
     } catch (err) {
@@ -600,12 +533,12 @@ export default function ViewWorkOrder() {
     const form = new FormData();
     for (let i = 0; i < result.assets.length; i++) {
       const processedUri = await processImageForUpload(result.assets[i].uri);
-      const name = \`photo-\${Date.now()}-\${i}.jpg\`;
+      const name = `photo-${Date.now()}-${i}.jpg`;
       form.append('photoFile', { uri: processedUri, name, type: 'image/jpeg' });
     }
 
     try {
-      await api.put(\`/work-orders/\${workOrderId}/edit\`, form, { headers: { 'Content-Type': 'multipart/form-data' } });
+      await api.put(`/work-orders/${workOrderId}/edit`, form, { headers: { 'Content-Type': 'multipart/form-data' } });
       fetchWorkOrder();
       Alert.alert('Success', 'Photos uploaded!');
     } catch (err) {
@@ -624,7 +557,7 @@ export default function ViewWorkOrder() {
         style: 'destructive',
         onPress: async () => {
           try {
-            await api.delete(\`/work-orders/\${workOrderId}/attachment\`, { data: { photoPath: keys[idx] } });
+            await api.delete(`/work-orders/${workOrderId}/attachment`, { data: { photoPath: keys[idx] } });
             fetchWorkOrder();
             Alert.alert('Deleted');
           } catch (err) {
@@ -652,41 +585,21 @@ export default function ViewWorkOrder() {
 
   const pdfURL = workOrder?.pdfPath ? fileUrl(workOrder.pdfPath) : null;
 
-  /**
-   * IMPORTANT: Close any open lightbox FIRST, then open the Annotator.
-   * This prevents the "modal behind modal" bug where the annotator appears
-   * only after you close the work order screen.
-   */
-  const openAnnotator = async () => {
-    if (!pdfURL) return Alert.alert('No PDF', 'This work order does not have a PDF attached.');
-    try {
-      // Ensure doc lightbox is closed before showing annotator
-      if (docModalVisible) setDocModalVisible(false);
-
-      // Open the annotator immediately so the user sees it
-      setAnnotateVisible(true);
-      setPdfBase64(null); // clear previous
-
-      // Download & load PDF
-      const tmp = FileSystem.cacheDirectory + \`wo_\${workOrderId}.pdf\`;
-      await FileSystem.downloadAsync(pdfURL, tmp);
-      const b64 = await FileSystem.readAsStringAsync(tmp, { encoding: FileSystem.EncodingType.Base64 });
-      setPdfBase64(b64);
-    } catch {
-      setAnnotateVisible(false);
-      Alert.alert('Error', 'Failed to load PDF for annotation.');
-    }
-  };
-
-  // Helper specifically for the lightbox "Annotate & Sign" CTA
-  const openAnnotatorFromLightbox = () => {
-    // Close lightbox first, then open annotator on next tick
-    setDocModalVisible(false);
-    setTimeout(() => {
-      openAnnotator();
-    }, 0);
-  };
-
+const openAnnotator = async () => {
+  if (!workOrder?.pdfPath) return Alert.alert("No PDF", "This work order does not have a PDF attached.");
+  try {
+    // show temporary loading modal first
+    setAnnotateVisible(true);
+    setPdfBase64(null);
+    const tmp = FileSystem.cacheDirectory + `wo_${workOrderId}.pdf`;
+    await FileSystem.downloadAsync(fileUrl(workOrder.pdfPath), tmp);
+    const b64 = await FileSystem.readAsStringAsync(tmp, { encoding: FileSystem.EncodingType.Base64 });
+    setPdfBase64(b64);
+  } catch (e) {
+    setAnnotateVisible(false);
+    Alert.alert("Error", "Failed to load PDF for annotation.");
+  }
+};
   const openSketch = () => setSketchVisible(true);
 
   // WebView message handlers
@@ -698,12 +611,12 @@ export default function ViewWorkOrder() {
     if (msg.startsWith('SIGNED:')) {
       const b64 = msg.slice(7);
       try {
-        const signedUri = FileSystem.cacheDirectory + \`signed_\${Date.now()}.pdf\`;
+        const signedUri = FileSystem.cacheDirectory + `signed_${Date.now()}.pdf`;
         await FileSystem.writeAsStringAsync(signedUri, b64, { encoding: FileSystem.EncodingType.Base64 });
         const form = new FormData();
-        const name = \`WO-\${workOrder?.poNumber || workOrderId}-signed.pdf\`;
+        const name = `WO-${workOrder?.poNumber || workOrderId}-signed.pdf`;
         form.append('pdfFile', { uri: signedUri, name, type: 'application/pdf' });
-        await api.put(\`/work-orders/\${workOrderId}/edit\`, form, { headers: { 'Content-Type': 'multipart/form-data' } });
+        await api.put(`/work-orders/${workOrderId}/edit`, form, { headers: { 'Content-Type': 'multipart/form-data' } });
         setAnnotateVisible(false);
         fetchWorkOrder();
         Alert.alert('Success', 'Signed PDF uploaded.');
@@ -721,12 +634,12 @@ export default function ViewWorkOrder() {
     if (msg.startsWith('IMAGE:')) {
       const b64 = msg.slice(6);
       try {
-        const jpgPath = FileSystem.cacheDirectory + \`drawing_\${Date.now()}.jpg\`;
+        const jpgPath = FileSystem.cacheDirectory + `drawing_${Date.now()}.jpg`;
         await FileSystem.writeAsStringAsync(jpgPath, b64, { encoding: FileSystem.EncodingType.Base64 });
         const processed = await processImageForUpload(jpgPath);
         const form = new FormData();
-        form.append('photoFile', { uri: processed, name: \`drawing-note-\${Date.now()}.jpg\`, type: 'image/jpeg' });
-        await api.put(\`/work-orders/\${workOrderId}/edit\`, form, { headers: { 'Content-Type': 'multipart/form-data' } });
+        form.append('photoFile', { uri: processed, name: `drawing-note-${Date.now()}.jpg`, type: 'image/jpeg' });
+        await api.put(`/work-orders/${workOrderId}/edit`, form, { headers: { 'Content-Type': 'multipart/form-data' } });
         setSketchVisible(false);
         fetchWorkOrder();
         Alert.alert('Uploaded', 'Drawing note uploaded as photo.');
@@ -793,7 +706,7 @@ export default function ViewWorkOrder() {
     try {
       const form = new FormData();
       form.append('status', next);
-      await api.put(\`/work-orders/\${workOrderId}/edit\`, form);
+      await api.put(`/work-orders/${workOrderId}/edit`, form);
       await fetchWorkOrder();
     } catch (e) {
       setWorkOrder(w => (w ? { ...w, status: prev } : w));
@@ -875,14 +788,14 @@ export default function ViewWorkOrder() {
           <TouchableOpacity style={styles.tile} onPress={() => openDocGroup('EST', 0)}>
             <View style={styles.tileIconCircle}><Text style={styles.tileIconText}>EST</Text></View>
             <Text style={styles.tileTitle}>Estimates</Text>
-            <Text style={styles.tileSub}>{estimateUrls.length ? \`\${estimateUrls.length} file\${estimateUrls.length>1?'s':''}\` : 'None'}</Text>
+            <Text style={styles.tileSub}>{estimateUrls.length ? `${estimateUrls.length} file${estimateUrls.length>1?'s':''}` : 'None'}</Text>
             {!!estimateUrls.length && <Text style={styles.tileBadge}>PDF</Text>}
           </TouchableOpacity>
 
           <TouchableOpacity style={styles.tile} onPress={() => openDocGroup('PO', 0)}>
             <View style={styles.tileIconCircle}><Text style={styles.tileIconText}>PO</Text></View>
             <Text style={styles.tileTitle}>POs</Text>
-            <Text style={styles.tileSub}>{poUrls.length ? \`\${poUrls.length} file\${poUrls.length>1?'s':''}\` : 'None'}</Text>
+            <Text style={styles.tileSub}>{poUrls.length ? `${poUrls.length} file${poUrls.length>1?'s':''}` : 'None'}</Text>
             {!!poUrls.length && <Text style={styles.tileBadge}>PDF</Text>}
           </TouchableOpacity>
         </View>
@@ -918,7 +831,7 @@ export default function ViewWorkOrder() {
               <View key={i} style={styles.noteCard}>
                 <Text style={styles.noteTimestamp}>
                   {n?.createdAt ? moment(n.createdAt).format('YYYY-MM-DD HH:mm') : ''}
-                  {n?.by ? \`  •  \${n.by}\` : ''}
+                  {n?.by ? `  •  ${n.by}` : ''}
                 </Text>
                 <Text style={styles.noteBody}>{n?.text || ''}</Text>
               </View>
@@ -1096,11 +1009,8 @@ export default function ViewWorkOrder() {
               javaScriptEnabled
               domStorageEnabled
               onMessage={onAnnotatorMessage}
-              injectedJavaScriptBeforeContentLoaded={\`window.PDF_BASE64 = \${JSON.stringify(pdfBase64)}; true;\`}
+              injectedJavaScriptBeforeContentLoaded={`window.PDF_BASE64 = ${JSON.stringify(pdfBase64)}; true;`}
               style={{ flex: 1 }}
-              /* Make sure scrolling is enabled inside WebView */
-              scrollEnabled
-              nestedScrollEnabled
             />
           ) : (
             <View style={styles.center}>
@@ -1119,14 +1029,16 @@ export default function ViewWorkOrder() {
             </TouchableOpacity>
             <Text style={styles.docHeaderTitle}>
               {docItems[docIndex]?.title || (docGroup === 'WO' ? 'Work Order' : docGroup === 'EST' ? 'Estimate' : 'PO')}
-              {docItems.length > 1 ? \`  (\${docIndex + 1}/\${docItems.length})\` : ''}
+              {docItems.length > 1 ? `  (${docIndex + 1}/${docItems.length})` : ''}
             </Text>
             <View style={styles.docHeaderRight}>
+              {/* Open externally */}
               {!!docItems.length && (
                 <TouchableOpacity onPress={() => Linking.openURL(docItems[docIndex].url)} style={styles.docHeaderBtn}>
                   <Text style={styles.docHeaderBtnText}>Open</Text>
                 </TouchableOpacity>
               )}
+              {/* Only allow signing in dedicated Annotator to keep flow stable */}
             </View>
           </View>
 
@@ -1165,10 +1077,8 @@ export default function ViewWorkOrder() {
                     }
                   }
                 }}
-                injectedJavaScriptBeforeContentLoaded={\`window.PDF_BASE64 = \${JSON.stringify(docB64)}; true;\`}
+                injectedJavaScriptBeforeContentLoaded={`window.PDF_BASE64 = ${JSON.stringify(docB64)}; true;`}
                 style={{ flex: 1 }}
-                scrollEnabled
-                nestedScrollEnabled
               />
             )}
           </View>
@@ -1186,7 +1096,7 @@ export default function ViewWorkOrder() {
 
           {docGroup === 'WO' && woPdfUrl && (
             <View style={{ padding: 12 }}>
-              <TouchableOpacity style={[styles.buttonBase, styles.signBtn]} onPress={openAnnotatorFromLightbox}>
+              <TouchableOpacity style={[styles.buttonBase, styles.signBtn]} onPress={openAnnotator}>
                 <Text style={styles.signBtnText}>Annotate & Sign This Work Order</Text>
               </TouchableOpacity>
             </View>
