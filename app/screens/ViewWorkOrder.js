@@ -45,7 +45,7 @@ const STATUS_OPTIONS = [
 ];
 
 /**
- * Read-only multi-page PDF viewer using pdf.js
+ * Read-only multi-page PDF viewer using pdf.js (for lightbox)
  */
 const PDF_VIEWER_HTML = `
 <!doctype html>
@@ -55,22 +55,18 @@ const PDF_VIEWER_HTML = `
 <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no" />
 <title>PDF Preview</title>
 <style>
-  html,body { margin:0; padding:0; background:#fff; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Arial, sans-serif; }
+  html,body { margin:0; padding:0; background:#111; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Arial, sans-serif; }
   #pages { padding: 8px; }
   .pageWrap { margin: 0 auto 12px; max-width: 1100px; }
-  canvas.page { width:100%; height:auto; display:block; background:#fafafa; box-shadow: 0 1px 2px rgba(0,0,0,.05); }
-  .hint { text-align:center; font-size:12px; color:#6b7280; margin:8px 0 12px; }
+  canvas.page { width:100%; height:auto; display:block; background:#fafafa; box-shadow: 0 1px 2px rgba(0,0,0,.35); border-radius: 6px; }
 </style>
 </head>
 <body>
   <div id="pages"></div>
-  <div class="hint">Scroll to view all pages.</div>
-
   <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
   <script>
     if (window['pdfjsLib']) {
-      pdfjsLib.GlobalWorkerOptions.workerSrc =
-        "https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js";
+      pdfjsLib.GlobalWorkerOptions.workerSrc = "https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js";
     }
     function b64ToUint8(b64){const bin=atob(b64);const bytes=new Uint8Array(bin.length);for(let i=0;i<bin.length;i++)bytes[i]=bin.charCodeAt(i);return bytes;}
     async function renderPDF(){
@@ -107,7 +103,7 @@ const PDF_VIEWER_HTML = `
 
 /**
  * PDF Annotator (used for "Annotate & Sign PDF")
- * — fixed stroke engine: solid lines, higher min width, no gaps
+ * — same as before; keeps multiple signatures over time
  */
 const ANNOTATOR_HTML = `
 <!doctype html>
@@ -117,7 +113,7 @@ const ANNOTATOR_HTML = `
 <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no" />
 <title>Annotate</title>
 <style>
-  html,body { margin:0; padding:0; background:#fff; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Arial, sans-serif; }
+  html,body { margin:0; padding:0; background:#000; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Arial, sans-serif; }
   body { padding-top: calc(env(safe-area-inset-top, 0px) + 6px); }
   #toolbar { position: sticky; top: 0; z-index: 1000; background: #111827; color:#fff; display:flex; gap:8px; align-items:center; padding:8px 10px; flex-wrap: wrap; }
   #toolbar button { background:#374151; border:0; color:#fff; padding:8px 10px; border-radius:6px; font-weight:600; }
@@ -128,9 +124,6 @@ const ANNOTATOR_HTML = `
   .pageWrap { position:relative; margin: 0 auto 16px; max-width: 900px; }
   canvas.page { width:100%; height:auto; display:block; background:#fafafa; }
   canvas.overlay { position:absolute; left:0; top:0; touch-action:none; }
-  .hint { text-align:center; font-size:12px; color:#6b7280; margin:8px 0 12px; }
-  .cursor { position: fixed; pointer-events:none; z-index: 2000; width: 24px; height: 24px; border-radius: 999px; border: 2px solid rgba(0,0,0,0.6); background: rgba(255,255,255,0.9); display:none; transform: translate(-50%, -50%); }
-  .cursor.pen { width: 10px; height: 10px; background: #111827; border-color: #111827; }
 </style>
 </head>
 <body>
@@ -147,15 +140,12 @@ const ANNOTATOR_HTML = `
     </div>
   </div>
   <div id="pages"></div>
-  <div class="hint">Turn OFF “Draw Mode” to scroll. Turn it ON to sign/annotate.</div>
-  <div id="cursor" class="cursor"></div>
 
   <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
   <script>pdfjsLib.GlobalWorkerOptions.workerSrc="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js";</script>
   <script src="https://unpkg.com/pdf-lib@1.17.1/dist/pdf-lib.min.js"></script>
   <script>
     function b64ToUint8(b64){const bin=atob(b64);const bytes=new Uint8Array(bin.length);for(let i=0;i<bin.length;i++)bytes[i]=bin.charCodeAt(i);return bytes;}
-
     const state={tool:'pen',drawEnabled:false,pages:[]};
     function applyPointerMode(){
       for(const p of state.pages){
@@ -163,27 +153,22 @@ const ANNOTATOR_HTML = `
         p.overlayCanvas.style.touchAction=state.drawEnabled?'none':'auto';
         p.overlayCanvas.style.cursor=state.drawEnabled?(state.tool==='erase'?'cell':'crosshair'):'default';
       }
-      const c=document.getElementById('cursor');
-      if(!state.drawEnabled){c.style.display='none';return;}
-      c.style.display='block'; c.className=state.tool==='erase'?'cursor':'cursor pen';
     }
     function setTool(t){state.tool=t;applyPointerMode();}
     function setDrawEnabled(on){state.drawEnabled=!!on;applyPointerMode();}
-    function pushUndo(p){try{const snap=p.overlayCtx.getImageData(0,0,p.overlayCanvas.width,p.overlayCanvas.height);p.strokes.push(snap);if(p.strokes.length>50)p.strokes.shift();}catch(e){}}
+    function pushUndo(p){try{const snap=p.overlayCtx.getImageData(0,0,p.overlayCanvas.width,p.overlayCanvas.height);p.strokes.push(snap);if(p.strokes.length>60)p.strokes.shift();}catch(e){}}
     function undo(p){if(p.strokes.length)p.overlayCtx.putImageData(p.strokes.pop(),0,0);}
     function clearPage(p){pushUndo(p);p.overlayCtx.clearRect(0,0,p.overlayCanvas.width,p.overlayCanvas.height);}
-
     function widthFor(a,b){
       const dt = Math.max(1, (b.ts - a.ts));
       const dx=b.x-a.x, dy=b.y-a.y;
       const dist=Math.hypot(dx,dy);
-      const vel = dist/dt; // px/ms
+      const vel = dist/dt;
       const minW=1.25, maxW=2.8;
       const speedFactor = Math.max(0.25, 1 - Math.min(vel*2.0, 0.85));
       const pressureFactor = (('p' in a) && ('p' in b)) ? (0.6 + 0.4 * ((a.p + b.p)/2)) : 1.0;
       return Math.max(minW, Math.min(maxW, maxW * speedFactor * pressureFactor));
     }
-
     async function renderPDF(){
       try{
         const b64=window.PDF_BASE64||''; if(!b64) throw new Error('Missing PDF data.');
@@ -205,22 +190,12 @@ const ANNOTATOR_HTML = `
           overlay.style.height = pageCanvas.style.height = 'auto';
           wrap.appendChild(overlay);
           container.appendChild(wrap);
-
           const ctx=pageCanvas.getContext('2d');
           await page.render({canvasContext:ctx,viewport}).promise;
-
           const octx=overlay.getContext('2d');
-          octx.lineCap='round';
-          octx.lineJoin='round';
-          octx.strokeStyle='#000';
-          octx.setLineDash([]);
-          octx.miterLimit = 2;
-          octx.imageSmoothingEnabled = true;
-
+          octx.lineCap='round'; octx.lineJoin='round'; octx.strokeStyle='#000'; octx.setLineDash([]);
           const pState={pageCanvas,overlayCanvas:overlay,overlayCtx:octx,strokes:[]}; state.pages.push(pState);
-
-          let drawing=false,last=null,points=[];
-
+          let drawing=false,last=null;
           function getPos(ev){
             const t=(ev.touches?ev.touches[0]:ev);
             const r=overlay.getBoundingClientRect();
@@ -229,57 +204,15 @@ const ANNOTATOR_HTML = `
             const p = (t.force && !isNaN(t.force)) ? t.force : (t.pressure && !isNaN(t.pressure) ? t.pressure : 0.5);
             return {x,y,p,ts:performance.now()};
           }
-
-          function start(ev){
-            if(!state.drawEnabled) return;
-            ev.preventDefault();
-            pushUndo(pState);
-            drawing=true; points=[]; last=null;
-            const pt=getPos(ev);
-            points.push(pt); last=pt;
-          }
-
+          function start(ev){ if(!state.drawEnabled) return; ev.preventDefault(); pushUndo(pState); drawing=true; last=getPos(ev); }
           function move(ev){
-            if(!state.drawEnabled||!drawing) return;
-            ev.preventDefault();
-            const pt=getPos(ev);
-            const a = last || pt;
-            const b = pt;
-
-            const w = widthFor(a,b);
-            const erase = (state.tool==='erase');
-
-            octx.save();
-            octx.globalCompositeOperation = erase ? 'destination-out' : 'source-over';
-            octx.lineWidth = erase ? Math.max(10, w*10) : w;
-            octx.beginPath();
-            octx.moveTo(a.x, a.y);
-            octx.lineTo(b.x, b.y);
-            octx.stroke();
-            octx.restore();
-
-            last = pt;
-            points.push(pt);
+            if(!state.drawEnabled||!drawing) return; ev.preventDefault();
+            const pt=getPos(ev); const a=last||pt, b=pt;
+            const w=widthFor(a,b); const erase = (state.tool==='erase');
+            octx.save(); octx.globalCompositeOperation = erase ? 'destination-out' : 'source-over';
+            octx.lineWidth = erase ? Math.max(10, w*10) : w; octx.beginPath(); octx.moveTo(a.x, a.y); octx.lineTo(b.x, b.y); octx.stroke(); octx.restore(); last=pt;
           }
-
-          function end(){
-            if(!drawing) return;
-            drawing=false;
-
-            if(points.length<2){
-              const a=points[0];
-              octx.save();
-              octx.globalCompositeOperation = (state.tool==='erase')?'destination-out':'source-over';
-              octx.beginPath();
-              octx.arc(a.x,a.y,1.2,0,Math.PI*2);
-              octx.fillStyle='#000';
-              octx.fill();
-              octx.restore();
-            }
-
-            points=[]; last=null;
-          }
-
+          function end(){ drawing=false; }
           overlay.addEventListener('touchstart',start,{passive:false});
           overlay.addEventListener('touchmove', move ,{passive:false});
           overlay.addEventListener('touchend',  end  ,{passive:false});
@@ -287,10 +220,8 @@ const ANNOTATOR_HTML = `
           overlay.addEventListener('mousemove',move);
           window.addEventListener('mouseup',end);
         }
-        applyPointerMode();
       }catch(e){window.ReactNativeWebView?.postMessage('ERROR:'+(e?.message||String(e))); }
     }
-
     async function saveAndUpload(){
       try{
         const b64=window.PDF_BASE64||''; if(!b64) throw new Error('Missing PDF data.');
@@ -311,22 +242,13 @@ const ANNOTATOR_HTML = `
         window.ReactNativeWebView?.postMessage('SIGNED:'+outB64);
       }catch(e){window.ReactNativeWebView?.postMessage('ERROR:'+(e?.message||String(e))); }
     }
-
     window.addEventListener('DOMContentLoaded',()=>{
       document.getElementById('pen').addEventListener('click',()=>setTool('pen'));
       document.getElementById('erase').addEventListener('click',()=>setTool('erase'));
       document.getElementById('save').addEventListener('click',saveAndUpload);
       document.getElementById('close').addEventListener('click',()=>window.ReactNativeWebView?.postMessage('CLOSE'));
-      document.getElementById('undo').addEventListener('click',()=>{
-        const winTop=window.scrollY; let target=state.pages[0];
-        for(const p of state.pages){const top=p.overlayCanvas.getBoundingClientRect().top+window.scrollY; if(top<=winTop+100) target=p;}
-        undo(target);
-      });
-      document.getElementById('clear').addEventListener('click',()=>{
-        const winTop=window.scrollY; let target=state.pages[0];
-        for(const p of state.pages){const top=p.overlayCanvas.getBoundingClientRect().top+window.scrollY; if(top<=winTop+100) target=p;}
-        clearPage(target);
-      });
+      document.getElementById('undo').addEventListener('click',()=>{ const t=state.pages.at(-1); if(t) undo(t); });
+      document.getElementById('clear').addEventListener('click',()=>{ const t=state.pages.at(-1); if(t) clearPage(t); });
       document.getElementById('drawToggle').addEventListener('change',e=>setDrawEnabled(e.target.checked));
       renderPDF();
     });
@@ -337,7 +259,6 @@ const ANNOTATOR_HTML = `
 
 /**
  * SKETCH HTML (used for "Draw Note")
- * — same solid stroke engine applied here
  */
 const SKETCH_HTML = `
 <!doctype html>
@@ -347,185 +268,64 @@ const SKETCH_HTML = `
 <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no" />
 <title>Draw Note</title>
 <style>
-  html,body { margin:0; padding:0; background:#fff; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Arial, sans-serif; }
-  body { padding-top: calc(env(safe-area-inset-top, 0px) + 6px); }
+  html,body { margin:0; padding:0; background:#000; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Arial, sans-serif; }
   #toolbar { position: sticky; top: 0; z-index: 1000; background: #111827; color:#fff; display:flex; gap:8px; align-items:center; padding:8px 10px; flex-wrap: wrap; }
   #toolbar button { background:#374151; border:0; color:#fff; padding:8px 10px; border-radius:6px; font-weight:600; }
   #toolbar button.primary { background:#2563EB; }
-  #toolbar label { display:flex; align-items:center; gap:6px; font-size:13px; background:#1f2937; padding:6px 10px; border-radius:6px; }
-  #toolbar .sep { flex:1; }
   #pages { padding: 8px; }
   .pageWrap { position:relative; margin: 0 auto 16px; max-width: 900px; }
-  canvas.page { width:100%; height:auto; display:block; background:#ffffff; }
+  canvas.page { width:100%; height:auto; display:block; background:#ffffff; border-radius:6px; }
   canvas.overlay { position:absolute; left:0; top:0; touch-action:none; }
-  .hint { text-align:center; font-size:12px; color:#6b7280; margin:8px 0 12px; }
-  .cursor { position: fixed; pointer-events:none; z-index: 2000; width: 22px; height: 22px; border-radius: 999px; border: 2px solid rgba(0,0,0,0.6); background: rgba(255,255,255,0.9); display:none; transform: translate(-50%, -50%); }
-  .cursor.pen { width: 8px; height: 8px; background: #111827; border-color: #111827; }
 </style>
 </head>
 <body>
   <div id="toolbar">
-    <label><input type="checkbox" id="drawToggle" /> Draw Mode</label>
-    <label><input type="checkbox" id="pencilOnly" /> Pencil Only</label>
     <button id="pen">Pen</button>
     <button id="erase">Erase</button>
     <button id="undo">Undo</button>
     <button id="clear">Clear</button>
-    <div class="sep"></div>
-    <div style="display:flex; gap:8px;">
-      <button id="close">Close</button>
-      <button id="save" class="primary">Save & Upload</button>
-    </div>
+    <div style="flex:1"></div>
+    <button id="close">Close</button>
+    <button id="save" class="primary">Save & Upload</button>
   </div>
   <div id="pages"></div>
-  <div class="hint">Turn OFF “Draw Mode” to scroll. Turn it ON to sketch. “Pencil Only” ignores finger.</div>
-  <div id="cursor" class="cursor"></div>
 
   <script>
-    const state = { tool: 'pen', drawEnabled: false, pencilOnly: false, page: null };
-
-    function applyPointerMode(){
-      const { overlayCanvas } = state.page || {};
-      if (!overlayCanvas) return;
-      overlayCanvas.style.pointerEvents = state.drawEnabled ? 'auto' : 'none';
-      overlayCanvas.style.touchAction = state.drawEnabled ? 'none' : 'auto';
-      const c = document.getElementById('cursor');
-      if (!state.drawEnabled) { c.style.display = 'none'; return; }
-      c.style.display = 'block'; c.className = state.tool === 'erase' ? 'cursor' : 'cursor pen';
-    }
-    function setTool(t){ state.tool=t; applyPointerMode(); }
-    function setDrawEnabled(on){ state.drawEnabled=!!on; applyPointerMode(); }
-    function setPencilOnly(on){ state.pencilOnly=!!on; }
-
-    function pushUndo(){ try { const { overlayCtx, overlayCanvas } = state.page; const snap = overlayCtx.getImageData(0,0,overlayCanvas.width,overlayCanvas.height); state.page.strokes.push(snap); if(state.page.strokes.length>80) state.page.strokes.shift(); } catch(e){} }
-    function undo(){ if(state.page?.strokes?.length){ state.page.overlayCtx.putImageData(state.page.strokes.pop(),0,0); } }
-    function clearPage(){ pushUndo(); const { overlayCtx, overlayCanvas } = state.page; overlayCtx.clearRect(0,0,overlayCanvas.width,overlayCanvas.height); }
-
-    function widthFor(a,b){
-      const dt=Math.max(1,(b.ts-a.ts));
-      const dx=b.x-a.x, dy=b.y-a.y;
-      const dist=Math.hypot(dx,dy);
-      const vel=dist/dt; // px/ms
-      const minW=1.25, maxW=2.8;
-      const speedFactor = Math.max(0.25, 1 - Math.min(vel*2.0, 0.85));
-      const pressureFactor = (('p' in a) && ('p' in b)) ? (0.6 + 0.4 * ((a.p + b.p)/2)) : 1.0;
-      return Math.max(minW, Math.min(maxW, maxW * speedFactor * pressureFactor));
-    }
-
+    const state = { tool: 'pen', page: null, drawing:false, last:null };
     function setup(){
       const container=document.getElementById('pages');
       const wrap=document.createElement('div'); wrap.className='pageWrap';
       const targetWidth=Math.min(900,Math.max(600,window.innerWidth-24));
-      const ratio=792/612;
-      const pageW=Math.floor(targetWidth);
-      const pageH=Math.floor(targetWidth*ratio);
-      const pageCanvas=document.createElement('canvas'); pageCanvas.className='page';
-      pageCanvas.width=pageW; pageCanvas.height=pageH; wrap.appendChild(pageCanvas);
-      const overlay=document.createElement('canvas'); overlay.className='overlay';
-      overlay.width=pageW; overlay.height=pageH; overlay.style.width=pageCanvas.style.width='100%'; overlay.style.height=pageCanvas.style.height='auto';
-      wrap.appendChild(overlay);
+      const ratio=792/612; const W=Math.floor(targetWidth); const H=Math.floor(targetWidth*ratio);
+      const pageCanvas=document.createElement('canvas'); pageCanvas.className='page'; pageCanvas.width=W; pageCanvas.height=H; wrap.appendChild(pageCanvas);
+      const overlay=document.createElement('canvas'); overlay.className='overlay'; overlay.width=W; overlay.height=H; overlay.style.width=pageCanvas.style.width='100%'; overlay.style.height=pageCanvas.style.height='auto'; wrap.appendChild(overlay);
       container.appendChild(wrap);
-
-      const bctx=pageCanvas.getContext('2d'); bctx.fillStyle='#FFFFFF'; bctx.fillRect(0,0,pageW,pageH);
-
-      const octx=overlay.getContext('2d');
-      octx.lineCap='round';
-      octx.lineJoin='round';
-      octx.strokeStyle='#000';
-      octx.setLineDash([]);
-      octx.miterLimit = 2;
-      octx.imageSmoothingEnabled = true;
-
-      state.page={pageCanvas,overlayCanvas:overlay,overlayCtx:octx,strokes:[]}; applyPointerMode();
-
-      let drawing=false,last=null,points=[];
-
-      function getPos(ev){
-        const t=(ev.touches?ev.touches[0]:ev);
-        const r=overlay.getBoundingClientRect();
-        const x=(t.clientX-r.left)*(overlay.width/r.width);
-        const y=(t.clientY-r.top)*(overlay.height/r.height);
-        const p = (t.force && !isNaN(t.force)) ? t.force : (t.pressure && !isNaN(t.pressure) ? t.pressure : 0.5);
-        return {x,y,p,ts:performance.now()};
-      }
-
-      function start(ev){
-        if(!state.drawEnabled) return;
-        ev.preventDefault();
-        pushUndo();
-        drawing=true; points=[]; last=null;
-        const pt=getPos(ev);
-        points.push(pt); last=pt;
-      }
-
-      function move(ev){
-        if(!state.drawEnabled||!drawing) return;
-        ev.preventDefault();
-        const pt=getPos(ev);
-        const a=last || pt;
-        const b=pt;
-
-        const w = widthFor(a,b);
-        const erase = (state.tool==='erase');
-
-        octx.save();
-        octx.globalCompositeOperation = erase ? 'destination-out' : 'source-over';
-        octx.lineWidth = erase ? Math.max(10, w*10) : w;
-        octx.beginPath();
-        octx.moveTo(a.x, a.y);
-        octx.lineTo(b.x, b.y);
-        octx.stroke();
-        octx.restore();
-
-        last = pt;
-        points.push(pt);
-      }
-
-      function end(){
-        if(!drawing) return;
-        drawing=false;
-
-        if(points.length<2){
-          const a=points[0];
-          octx.save();
-          octx.globalCompositeOperation = (state.tool==='erase')?'destination-out':'source-over';
-          octx.beginPath();
-          octx.arc(a.x,a.y,1.2,0,Math.PI*2);
-          octx.fillStyle='#000';
-          octx.fill();
-          octx.restore();
-        }
-
-        points=[]; last=null;
-      }
-
-      overlay.addEventListener('touchstart',start,{passive:false});
-      overlay.addEventListener('touchmove', move ,{passive:false});
-      overlay.addEventListener('touchend',  end  ,{passive:false});
-      overlay.addEventListener('mousedown',start);
-      overlay.addEventListener('mousemove',move);
-      window.addEventListener('mouseup',end);
+      const bctx=pageCanvas.getContext('2d'); bctx.fillStyle='#FFFFFF'; bctx.fillRect(0,0,W,H);
+      const octx=overlay.getContext('2d'); octx.lineCap='round'; octx.lineJoin='round'; octx.strokeStyle='#000';
+      state.page={pageCanvas,overlayCanvas:overlay,overlayCtx:octx,strokes:[]};
+      overlay.addEventListener('mousedown',start); overlay.addEventListener('mousemove',move); window.addEventListener('mouseup',end);
+      overlay.addEventListener('touchstart',start,{passive:false}); overlay.addEventListener('touchmove',move,{passive:false}); overlay.addEventListener('touchend',end,{passive:false});
+      function start(ev){ ev.preventDefault(); state.drawing=true; state.last=getPos(ev); pushUndo(); }
+      function move(ev){ if(!state.drawing) return; ev.preventDefault(); const pt=getPos(ev); draw(state.last, pt); state.last=pt; }
+      function end(){ state.drawing=false; }
+      function getPos(ev){ const t=(ev.touches?ev.touches[0]:ev); const r=overlay.getBoundingClientRect(); return {x:(t.clientX-r.left)*(overlay.width/r.width), y:(t.clientY-r.top)*(overlay.height/r.height)}; }
+      function draw(a,b){ const w=2.2; const erase=(state.tool==='erase'); octx.save(); octx.globalCompositeOperation=erase?'destination-out':'source-over'; octx.lineWidth=erase?16:w; octx.beginPath(); octx.moveTo(a.x,a.y); octx.lineTo(b.x,b.y); octx.stroke(); octx.restore(); }
+      function pushUndo(){ try{ const snap=octx.getImageData(0,0,overlay.width,overlay.height); state.page.strokes.push(snap); if(state.page.strokes.length>50) state.page.strokes.shift(); }catch(e){} }
+      document.getElementById('undo').addEventListener('click',()=>{ const s=state.page.strokes.pop(); if(s) state.page.overlayCtx.putImageData(s,0,0);});
+      document.getElementById('clear').addEventListener('click',()=>{ pushUndo(); octx.clearRect(0,0,overlay.width,overlay.height); });
     }
-
     function saveAsJPEG(){
-      try{
-        const { pageCanvas, overlayCanvas } = state.page;
-        const merged=document.createElement('canvas'); merged.width=pageCanvas.width; merged.height=pageCanvas.height;
-        const mctx=merged.getContext('2d'); mctx.drawImage(pageCanvas,0,0); mctx.drawImage(overlayCanvas,0,0);
-        const dataUrl=merged.toDataURL('image/jpeg',0.92); const b64=dataUrl.split(',')[1];
-        window.ReactNativeWebView?.postMessage('IMAGE:'+b64);
-      }catch(e){window.ReactNativeWebView?.postMessage('ERROR:'+(e?.message||String(e)));}
+      const { pageCanvas, overlayCanvas } = state.page;
+      const merged=document.createElement('canvas'); merged.width=pageCanvas.width; merged.height=pageCanvas.height;
+      const mctx=merged.getContext('2d'); mctx.drawImage(pageCanvas,0,0); mctx.drawImage(overlayCanvas,0,0);
+      const dataUrl=merged.toDataURL('image/jpeg',0.92); const b64=dataUrl.split(',')[1];
+      window.ReactNativeWebView?.postMessage('IMAGE:'+b64);
     }
-
     window.addEventListener('DOMContentLoaded',()=>{
-      document.getElementById('pen').addEventListener('click',()=>setTool('pen'));
-      document.getElementById('erase').addEventListener('click',()=>setTool('erase'));
+      document.getElementById('pen').addEventListener('click',()=>state.tool='pen');
+      document.getElementById('erase').addEventListener('click',()=>state.tool='erase');
       document.getElementById('save').addEventListener('click',saveAsJPEG);
       document.getElementById('close').addEventListener('click',()=>window.ReactNativeWebView?.postMessage('CLOSE'));
-      document.getElementById('undo').addEventListener('click',undo);
-      document.getElementById('clear').addEventListener('click',clearPage);
-      document.getElementById('drawToggle').addEventListener('change',e=>setDrawEnabled(e.target.checked));
-      document.getElementById('pencilOnly').addEventListener('change',e=>setPencilOnly(e.target.checked));
       setup();
     });
   </script>
@@ -542,6 +342,7 @@ export default function ViewWorkOrder() {
   const [photos, setPhotos] = useState([]);
   const [notes, setNotes] = useState([]);
 
+  // Notes modal
   const [showAddNoteModal, setShowAddNoteModal] = useState(false);
   const [newNoteText, setNewNoteText] = useState('');
 
@@ -556,23 +357,25 @@ export default function ViewWorkOrder() {
   const [pdfBase64, setPdfBase64] = useState(null);
   const annotatorRef = useRef(null);
 
-  // Inline viewer (read-only preview) — Work Order PDF
-  const [pdfInlineB64, setPdfInlineB64] = useState(null);
-  const [pdfPreviewError, setPdfPreviewError] = useState(null);
-  const [pdfInlineHeight, setPdfInlineHeight] = useState(Math.max(600, screenHeight * 0.8));
-
-  // Inline viewer (read-only preview) — PO Order PDF
-  const [poPdfInlineB64, setPoPdfInlineB64] = useState(null);
-  const [poPdfPreviewError, setPoPdfPreviewError] = useState(null);
-  const [poPdfInlineHeight, setPoPdfInlineHeight] = useState(Math.max(600, screenHeight * 0.8));
-
   // Status modal / saving
   const [showStatusModal, setShowStatusModal] = useState(false);
   const [pendingStatus, setPendingStatus] = useState('');
   const [isStatusSaving, setIsStatusSaving] = useState(false);
 
-  // Track whether photo viewer was opened from the attachments modal
+  // Photo viewer
+  const [photoViewerVisible, setPhotoViewerVisible] = useState(false);
+  const [viewerIndex, setViewerIndex] = useState(0);
   const [returnToAttachments, setReturnToAttachments] = useState(false);
+
+  // NEW: Lightbox for PDFs (tiles)
+  const [docModalVisible, setDocModalVisible] = useState(false);
+  const [docGroup, setDocGroup] = useState(null); // 'WO' | 'EST' | 'PO'
+  const [docIndex, setDocIndex] = useState(0);
+  const [docItems, setDocItems] = useState([]);  // [{title, path, url}]
+  const [docB64, setDocB64] = useState(null);
+  const [docHeight, setDocHeight] = useState(Math.max(600, screenHeight * 0.85));
+  const [docError, setDocError] = useState(null);
+  const [docLoading, setDocLoading] = useState(false);
 
   // -------- helpers for contact actions & address --------
   const normPhone = (p) => String(p || '').replace(/[^\d+]/g, '');
@@ -586,7 +389,6 @@ export default function ViewWorkOrder() {
     if (!addr) return;
     Linking.openURL(`mailto:${addr}`).catch(() => Alert.alert('Error', 'Unable to open Mail app.'));
   };
-
   const openMap = (loc) => {
     const q = encodeURIComponent(loc || '');
     if (!q) return;
@@ -609,12 +411,27 @@ export default function ViewWorkOrder() {
       return tb - ta;
     });
 
+  // Utility to normalize list/CSV fields into URLs
+  const toUrlArray = (val) => {
+    if (!val) return [];
+    if (Array.isArray(val)) return val.filter(Boolean).map(fileUrl);
+    if (typeof val === 'string') {
+      return val
+        .split(',')
+        .map(s => s.trim())
+        .filter(Boolean)
+        .map(fileUrl);
+    }
+    return [];
+  };
+
   const fetchWorkOrder = useCallback(async () => {
     if (!workOrderId) return;
     try {
       const { data } = await api.get(`/work-orders/${workOrderId}`);
       setWorkOrder(data);
 
+      // Notes
       const parsedNotes = Array.isArray(data.notes)
         ? data.notes
         : data.notes
@@ -622,51 +439,87 @@ export default function ViewWorkOrder() {
         : [];
       setNotes(sortNotesDesc(parsedNotes));
 
+      // Photos
       const photoKeys = (data.photoPath || '')
         .split(',')
         .map(s => s.trim())
         .filter(Boolean);
       setPhotos(photoKeys.map(k => fileUrl(k)));
-
-      // Reset previews
-      setPdfInlineB64(null);
-      setPdfPreviewError(null);
-      setPoPdfInlineB64(null);
-      setPoPdfPreviewError(null);
-
-      // Work Order PDF
-      if (data.pdfPath) {
-        try {
-          const url = fileUrl(data.pdfPath);
-          const target = FileSystem.cacheDirectory + `wo_preview_${workOrderId}.pdf`;
-          await FileSystem.downloadAsync(url, target);
-          const b64 = await FileSystem.readAsStringAsync(target, { encoding: FileSystem.EncodingType.Base64 });
-          setPdfInlineB64(b64);
-        } catch (e) {
-          setPdfPreviewError(e?.message || 'Failed to load PDF.');
-        }
-      }
-
-      // PO Order PDF (optional)
-      if (data.poPdfPath) {
-        try {
-          const url = fileUrl(data.poPdfPath);
-          const target = FileSystem.cacheDirectory + `po_preview_${workOrderId}.pdf`;
-          await FileSystem.downloadAsync(url, target);
-          const b64 = await FileSystem.readAsStringAsync(target, { encoding: FileSystem.EncodingType.Base64 });
-          setPoPdfInlineB64(b64);
-        } catch (e) {
-          setPoPdfPreviewError(e?.message || 'Failed to load PO PDF.');
-        }
-      }
     } catch {
       Alert.alert('Error', 'Failed to load work order.');
     }
   }, [workOrderId]);
 
-  useEffect(() => {
-    fetchWorkOrder();
-  }, [fetchWorkOrder]);
+  useEffect(() => { fetchWorkOrder(); }, [fetchWorkOrder]);
+
+  // Derivations for tiles
+  const woPdfUrl = workOrder?.pdfPath ? fileUrl(workOrder.pdfPath) : null;
+
+  // Estimates: try multiple likely fields from backend, normalize to array of URLs
+  const estimateUrls = [
+    ...toUrlArray(workOrder?.estimatePdfPaths),
+    ...toUrlArray(workOrder?.estimatePaths),
+    ...toUrlArray(workOrder?.estimatesPdf),
+    ...toUrlArray(workOrder?.estimatePdfPath),
+  ];
+  // POs: similarly normalize
+  const poUrls = [
+    ...toUrlArray(workOrder?.poPdfPaths),
+    ...toUrlArray(workOrder?.poPaths),
+    ...toUrlArray(workOrder?.poPdfPath),
+  ];
+
+  // Lightbox loader
+  const loadDocIntoModal = useCallback(async (url) => {
+    if (!url) { setDocError('Missing file URL'); return; }
+    try {
+      setDocLoading(true);
+      setDocError(null);
+      setDocB64(null);
+      const target = FileSystem.cacheDirectory + `doc_${Date.now()}.pdf`;
+      await FileSystem.downloadAsync(url, target);
+      const b64 = await FileSystem.readAsStringAsync(target, { encoding: FileSystem.EncodingType.Base64 });
+      setDocB64(b64);
+    } catch (e) {
+      setDocError(e?.message || 'Failed to load document.');
+    } finally {
+      setDocLoading(false);
+    }
+  }, []);
+
+  const openDocGroup = (group, startIndex = 0) => {
+    let items = [];
+    if (group === 'WO') {
+      if (!woPdfUrl) { Alert.alert('No PDF', 'This work order does not have a PDF attached.'); return; }
+      items = [{ title: `Work Order ${workOrder?.workOrderNumber || workOrderId}`, url: woPdfUrl }];
+    } else if (group === 'EST') {
+      if (!estimateUrls.length) { Alert.alert('No Estimates', 'No Estimate PDFs found for this job.'); return; }
+      items = estimateUrls.map((u, i) => ({ title: `Estimate ${i + 1}`, url: u }));
+    } else if (group === 'PO') {
+      if (!poUrls.length) { Alert.alert('No POs', 'No PO PDFs found for this job.'); return; }
+      items = poUrls.map((u, i) => ({ title: `PO ${i + 1}`, url: u }));
+    }
+
+    setDocGroup(group);
+    setDocItems(items);
+    const safeIdx = Math.min(Math.max(0, startIndex), Math.max(0, items.length - 1));
+    setDocIndex(safeIdx);
+    setDocModalVisible(true);
+    loadDocIntoModal(items[safeIdx].url);
+  };
+
+  const nextDoc = () => {
+    if (!docItems.length) return;
+    const ni = (docIndex + 1) % docItems.length;
+    setDocIndex(ni);
+    loadDocIntoModal(docItems[ni].url);
+  };
+  const prevDoc = () => {
+    if (!docItems.length) return;
+    const pi = (docIndex - 1 + docItems.length) % docItems.length;
+    setDocIndex(pi);
+    loadDocIntoModal(docItems[pi].url);
+  };
 
   const addNote = async () => {
     if (!newNoteText.trim()) return;
@@ -694,7 +547,7 @@ export default function ViewWorkOrder() {
     }
   };
 
-  // Simple camera capture via ImagePicker (single photo)
+  // Camera capture
   const takePhoto = async () => {
     const { status } = await ImagePicker.requestCameraPermissionsAsync();
     if (status !== 'granted') return Alert.alert('Permission required', 'Need camera access.');
@@ -769,9 +622,6 @@ export default function ViewWorkOrder() {
     ]);
   };
 
-  const [photoViewerVisible, setPhotoViewerVisible] = useState(false);
-  const [viewerIndex, setViewerIndex] = useState(0);
-
   const handleShare = async () => {
     if (!photos.length) return;
     const safeIndex = Math.min(Math.max(0, viewerIndex), Math.max(0, photos.length - 1));
@@ -779,7 +629,6 @@ export default function ViewWorkOrder() {
     try { await Share.share({ url, message: url }); } catch {}
   };
 
-  // Close viewer and (optionally) reopen attachments if we came from there
   const closePhotoViewer = () => {
     setPhotoViewerVisible(false);
     if (returnToAttachments) {
@@ -804,33 +653,23 @@ export default function ViewWorkOrder() {
     }
   };
 
-  // “Draw Note”
   const openSketch = () => setSketchVisible(true);
 
   // WebView message handlers
   const onAnnotatorMessage = async (ev) => {
     const msg = ev?.nativeEvent?.data || '';
     if (typeof msg !== 'string') return;
-    if (msg.startsWith('ERROR:')) {
-      Alert.alert('Annotator Error', msg.slice(6));
-      return;
-    }
-    if (msg === 'CLOSE') {
-      setAnnotateVisible(false);
-      return;
-    }
+    if (msg.startsWith('ERROR:')) { Alert.alert('Annotator Error', msg.slice(6)); return; }
+    if (msg === 'CLOSE') { setAnnotateVisible(false); return; }
     if (msg.startsWith('SIGNED:')) {
       const b64 = msg.slice(7);
       try {
         const signedUri = FileSystem.cacheDirectory + `signed_${Date.now()}.pdf`;
         await FileSystem.writeAsStringAsync(signedUri, b64, { encoding: FileSystem.EncodingType.Base64 });
-
         const form = new FormData();
         const name = `WO-${workOrder?.poNumber || workOrderId}-signed.pdf`;
         form.append('pdfFile', { uri: signedUri, name, type: 'application/pdf' });
-
         await api.put(`/work-orders/${workOrderId}/edit`, form, { headers: { 'Content-Type': 'multipart/form-data' } });
-
         setAnnotateVisible(false);
         fetchWorkOrder();
         Alert.alert('Success', 'Signed PDF uploaded.');
@@ -843,31 +682,17 @@ export default function ViewWorkOrder() {
   const onSketchMessage = async (ev) => {
     const msg = ev?.nativeEvent?.data || '';
     if (typeof msg !== 'string') return;
-    if (msg.startsWith('ERROR:')) {
-      Alert.alert('Draw Notes Error', msg.slice(6));
-      return;
-    }
-    if (msg === 'CLOSE') {
-      setSketchVisible(false);
-      return;
-    }
+    if (msg.startsWith('ERROR:')) { Alert.alert('Draw Notes Error', msg.slice(6)); return; }
+    if (msg === 'CLOSE') { setSketchVisible(false); return; }
     if (msg.startsWith('IMAGE:')) {
       const b64 = msg.slice(6);
       try {
         const jpgPath = FileSystem.cacheDirectory + `drawing_${Date.now()}.jpg`;
         await FileSystem.writeAsStringAsync(jpgPath, b64, { encoding: FileSystem.EncodingType.Base64 });
-
         const processed = await processImageForUpload(jpgPath);
-
         const form = new FormData();
-        form.append('photoFile', {
-          uri: processed,
-          name: `drawing-note-${Date.now()}.jpg`,
-          type: 'image/jpeg',
-        });
-
+        form.append('photoFile', { uri: processed, name: `drawing-note-${Date.now()}.jpg`, type: 'image/jpeg' });
         await api.put(`/work-orders/${workOrderId}/edit`, form, { headers: { 'Content-Type': 'multipart/form-data' } });
-
         setSketchVisible(false);
         fetchWorkOrder();
         Alert.alert('Uploaded', 'Drawing note uploaded as photo.');
@@ -884,7 +709,6 @@ export default function ViewWorkOrder() {
     workOrder?.siteLocationName ||
     '';
 
-  // Prefer site address for navigation; if it's missing, fall back to site location string.
   const siteAddress =
     workOrder?.siteAddress ||
     workOrder?.serviceAddress ||
@@ -929,20 +753,15 @@ export default function ViewWorkOrder() {
   const applyStatus = async () => {
     const next = pendingStatus || STATUS_OPTIONS[0];
     const prev = workOrder?.status;
-
-    // Optimistic update for instant feedback
     setWorkOrder(w => (w ? { ...w, status: next } : w));
     setShowStatusModal(false);
     setIsStatusSaving(true);
-
     try {
       const form = new FormData();
       form.append('status', next);
       await api.put(`/work-orders/${workOrderId}/edit`, form);
-      // Sync back from server to be 100% accurate (notes, etc.)
       await fetchWorkOrder();
     } catch (e) {
-      // Roll back if it failed
       setWorkOrder(w => (w ? { ...w, status: prev } : w));
       Alert.alert('Error', e?.response?.data?.error || e?.message || 'Failed to update status.');
     } finally {
@@ -957,20 +776,9 @@ export default function ViewWorkOrder() {
         <Text style={styles.title}>Work Order Details</Text>
 
         <View style={styles.card}>
-          <View style={styles.row}>
-            <Text style={styles.label}>Work Order #:</Text>
-            <Text style={styles.value}>{workOrderNumber}</Text>
-          </View>
-
-          <View style={styles.row}>
-            <Text style={styles.label}>PO #:</Text>
-            <Text style={styles.value}>{poNumber}</Text>
-          </View>
-
-          <View style={styles.row}>
-            <Text style={styles.label}>Customer:</Text>
-            <Text style={styles.value}>{customer}</Text>
-          </View>
+          <View style={styles.row}><Text style={styles.label}>Work Order #:</Text><Text style={styles.value}>{workOrderNumber}</Text></View>
+          <View style={styles.row}><Text style={styles.label}>PO #:</Text><Text style={styles.value}>{poNumber}</Text></View>
+          <View style={styles.row}><Text style={styles.label}>Customer:</Text><Text style={styles.value}>{customer}</Text></View>
 
           <View style={styles.row}>
             <Text style={styles.label}>Customer Phone:</Text>
@@ -978,9 +786,7 @@ export default function ViewWorkOrder() {
               <TouchableOpacity onPress={() => callNumber(customerPhone)}>
                 <Text style={[styles.value, styles.linkText]}>{customerPhone}</Text>
               </TouchableOpacity>
-            ) : (
-              <Text style={styles.value}>—</Text>
-            )}
+            ) : <Text style={styles.value}>—</Text>}
           </View>
 
           <View style={styles.row}>
@@ -989,15 +795,10 @@ export default function ViewWorkOrder() {
               <TouchableOpacity onPress={() => emailTo(customerEmail)}>
                 <Text style={[styles.value, styles.linkText]}>{customerEmail}</Text>
               </TouchableOpacity>
-            ) : (
-              <Text style={styles.value}>—</Text>
-            )}
+            ) : <Text style={styles.value}>—</Text>}
           </View>
 
-          <View style={styles.row}>
-            <Text style={styles.label}>Site Location:</Text>
-            <Text style={styles.value}>{siteName || '—'}</Text>
-          </View>
+          <View style={styles.row}><Text style={styles.label}>Site Location:</Text><Text style={styles.value}>{siteName || '—'}</Text></View>
 
           <View style={styles.row}>
             <Text style={styles.label}>Site Address:</Text>
@@ -1005,21 +806,11 @@ export default function ViewWorkOrder() {
               <TouchableOpacity onPress={() => openMap(siteAddress)}>
                 <Text style={[styles.value, styles.linkText]}>{siteAddress}</Text>
               </TouchableOpacity>
-            ) : (
-              <Text style={styles.value}>—</Text>
-            )}
+            ) : <Text style={styles.value}>—</Text>}
           </View>
 
-          <View style={styles.row}>
-            <Text style={styles.label}>Billing Address:</Text>
-            {/* Display-only to prevent wrong navigation target */}
-            <Text style={styles.value}>{billingAddress || '—'}</Text>
-          </View>
-
-          <View style={styles.row}>
-            <Text style={styles.label}>Problem Description:</Text>
-            <Text style={styles.value}>{problem}</Text>
-          </View>
+          <View style={styles.row}><Text style={styles.label}>Billing Address:</Text><Text style={styles.value}>{billingAddress || '—'}</Text></View>
+          <View style={styles.row}><Text style={styles.label}>Problem Description:</Text><Text style={styles.value}>{problem}</Text></View>
 
           <View style={[styles.row, { alignItems: 'center' }]}>
             <Text style={styles.label}>Status:</Text>
@@ -1029,37 +820,63 @@ export default function ViewWorkOrder() {
             </TouchableOpacity>
           </View>
 
-          <View style={styles.row}>
-            <Text style={styles.label}>Scheduled Date:</Text>
-            <Text style={styles.value}>{scheduled}</Text>
-          </View>
+          <View style={styles.row}><Text style={styles.label}>Scheduled Date:</Text><Text style={styles.value}>{scheduled}</Text></View>
         </View>
 
+        {/* Actions */}
         <TouchableOpacity style={[styles.buttonBase, styles.backBtn]} onPress={() => router.back()}>
           <Text style={styles.backText}>Back to List</Text>
         </TouchableOpacity>
 
-        {/* Annotate & Sign */}
-        <TouchableOpacity style={[styles.buttonBase, styles.attachBtn]} onPress={openAnnotator}>
-          <Text style={styles.attachText}>Annotate & Sign PDF</Text>
-        </TouchableOpacity>
+        {/* Tiles (like web CRM) */}
+        <Text style={styles.sectionHeader}>Documents</Text>
+        <View style={styles.tilesGrid}>
+          <TouchableOpacity style={styles.tile} onPress={() => openDocGroup('WO', 0)}>
+            <View style={styles.tileIconCircle}><Text style={styles.tileIconText}>WO</Text></View>
+            <Text style={styles.tileTitle}>Work Order</Text>
+            <Text style={styles.tileSub}>{woPdfUrl ? 'Tap to view' : 'No file'}</Text>
+            {woPdfUrl && <Text style={styles.tileBadge}>PDF</Text>}
+          </TouchableOpacity>
 
-        <TouchableOpacity style={[styles.buttonBase, styles.photoBtn]} onPress={takePhoto}>
-          <Text style={styles.photoText}>Take Photo</Text>
-        </TouchableOpacity>
-        <TouchableOpacity style={[styles.buttonBase, styles.photoBtn]} onPress={uploadPhotos}>
-          <Text style={styles.photoText}>Upload Photo(s)</Text>
-        </TouchableOpacity>
-        <TouchableOpacity style={[styles.buttonBase, styles.attachBtn]} onPress={() => setViewAttachmentsVisible(true)}>
-          <Text style={styles.attachText}>View Attachments</Text>
-        </TouchableOpacity>
-        <TouchableOpacity style={[styles.buttonBase, styles.noteBtn]} onPress={() => setShowAddNoteModal(true)}>
-          <Text style={styles.noteText}>Add Note</Text>
-        </TouchableOpacity>
-        <TouchableOpacity style={[styles.buttonBase, styles.drawBtn]} onPress={() => setSketchVisible(true)}>
-          <Text style={styles.drawText}>Draw Note</Text>
-        </TouchableOpacity>
+          <TouchableOpacity style={styles.tile} onPress={() => openDocGroup('EST', 0)}>
+            <View style={styles.tileIconCircle}><Text style={styles.tileIconText}>EST</Text></View>
+            <Text style={styles.tileTitle}>Estimates</Text>
+            <Text style={styles.tileSub}>{estimateUrls.length ? `${estimateUrls.length} file${estimateUrls.length>1?'s':''}` : 'None'}</Text>
+            {!!estimateUrls.length && <Text style={styles.tileBadge}>PDF</Text>}
+          </TouchableOpacity>
 
+          <TouchableOpacity style={styles.tile} onPress={() => openDocGroup('PO', 0)}>
+            <View style={styles.tileIconCircle}><Text style={styles.tileIconText}>PO</Text></View>
+            <Text style={styles.tileTitle}>POs</Text>
+            <Text style={styles.tileSub}>{poUrls.length ? `${poUrls.length} file${poUrls.length>1?'s':''}` : 'None'}</Text>
+            {!!poUrls.length && <Text style={styles.tileBadge}>PDF</Text>}
+          </TouchableOpacity>
+        </View>
+
+        {/* Quick actions */}
+        <View style={{ marginTop: 8 }}>
+          <TouchableOpacity style={[styles.buttonBase, styles.attachBtn]} onPress={openAnnotator}>
+            <Text style={styles.attachText}>Annotate & Sign PDF</Text>
+          </TouchableOpacity>
+
+          <TouchableOpacity style={[styles.buttonBase, styles.photoBtn]} onPress={takePhoto}>
+            <Text style={styles.photoText}>Take Photo</Text>
+          </TouchableOpacity>
+          <TouchableOpacity style={[styles.buttonBase, styles.photoBtn]} onPress={uploadPhotos}>
+            <Text style={styles.photoText}>Upload Photo(s)</Text>
+          </TouchableOpacity>
+          <TouchableOpacity style={[styles.buttonBase, styles.attachBtn]} onPress={() => setViewAttachmentsVisible(true)}>
+            <Text style={styles.attachText}>View Attachments</Text>
+          </TouchableOpacity>
+          <TouchableOpacity style={[styles.buttonBase, styles.noteBtn]} onPress={() => setShowAddNoteModal(true)}>
+            <Text style={styles.noteText}>Add Note</Text>
+          </TouchableOpacity>
+          <TouchableOpacity style={[styles.buttonBase, styles.drawBtn]} onPress={() => setSketchVisible(true)}>
+            <Text style={styles.drawText}>Draw Note</Text>
+          </TouchableOpacity>
+        </View>
+
+        {/* Notes list */}
         {notes.length > 0 && (
           <>
             <Text style={styles.sectionHeader}>Notes</Text>
@@ -1073,120 +890,6 @@ export default function ViewWorkOrder() {
               </View>
             ))}
           </>
-        )}
-
-        {/* Work Order PDF viewer */}
-        {workOrder?.pdfPath && (
-          <View style={styles.card}>
-            <Text style={styles.sectionHeader}>Work Order PDF</Text>
-
-            {!pdfInlineB64 && !pdfPreviewError && (
-              <View style={[styles.pdfInline, { height: pdfInlineHeight, alignItems:'center', justifyContent:'center' }]}>
-                <Text style={{ color:'#2B2D42' }}>Loading preview…</Text>
-              </View>
-            )}
-
-            {!!pdfPreviewError && (
-              <View style={[styles.pdfInline, { padding: 12 }]}>
-                <Text style={{ marginBottom: 8, color: '#b00020' }}>
-                  Couldn’t load inline preview: {pdfPreviewError}
-                </Text>
-                <TouchableOpacity
-                  onPress={() => Linking.openURL(fileUrl(workOrder.pdfPath))}
-                  style={{ backgroundColor:'#343a40', padding:10, borderRadius:6, alignSelf:'flex-start' }}
-                >
-                  <Text style={{ color:'#fff', fontWeight:'600' }}>Open PDF</Text>
-                </TouchableOpacity>
-              </View>
-            )}
-
-            {!!pdfInlineB64 && (
-              <View style={[styles.pdfInline, { height: pdfInlineHeight }]}>
-                <WebView
-                  originWhitelist={['*']}
-                  source={{ html: PDF_VIEWER_HTML }}
-                  javaScriptEnabled
-                  domStorageEnabled={false}
-                  onMessage={(e) => {
-                    const msg = e?.nativeEvent?.data || '';
-                    if (typeof msg !== 'string') return;
-                    if (msg.startsWith('ERROR:')) {
-                      setPdfPreviewError(msg.slice(6));
-                      return;
-                    }
-                    if (msg.startsWith('HEIGHT:')) {
-                      const h = parseInt(msg.slice(7), 10);
-                      if (Number.isFinite(h)) {
-                        const minH = Math.max(600, screenHeight * 0.8);
-                        const maxH = Math.max(minH, screenHeight * 2.5);
-                        setPdfInlineHeight(Math.max(minH, Math.min(h, maxH)));
-                      }
-                    }
-                  }}
-                  // IMPORTANT: pass code as a STRING, with a safely-escaped value
-                  injectedJavaScriptBeforeContentLoaded={`window.PDF_BASE64 = ${JSON.stringify(pdfInlineB64)}; true;`}
-                  style={{ flex: 1 }}
-                />
-              </View>
-            )}
-          </View>
-        )}
-
-        {/* PO Order PDF viewer (optional) */}
-        {workOrder?.poPdfPath && (
-          <View style={styles.card}>
-            <Text style={styles.sectionHeader}>PO Order PDF</Text>
-
-            {!poPdfInlineB64 && !poPdfPreviewError && (
-              <View style={[styles.pdfInline, { height: poPdfInlineHeight, alignItems:'center', justifyContent:'center' }]}>
-                <Text style={{ color:'#2B2D42' }}>Loading PO preview…</Text>
-              </View>
-            )}
-
-            {!!poPdfPreviewError && (
-              <View style={[styles.pdfInline, { padding: 12 }]}>
-                <Text style={{ marginBottom: 8, color: '#b00020' }}>
-                  Couldn’t load PO PDF preview: {poPdfPreviewError}
-                </Text>
-                <TouchableOpacity
-                  onPress={() => Linking.openURL(fileUrl(workOrder.poPdfPath))}
-                  style={{ backgroundColor:'#343a40', padding:10, borderRadius:6, alignSelf:'flex-start' }}
-                >
-                  <Text style={{ color:'#fff', fontWeight:'600' }}>Open PO PDF</Text>
-                </TouchableOpacity>
-              </View>
-            )}
-
-            {!!poPdfInlineB64 && (
-              <View style={[styles.pdfInline, { height: poPdfInlineHeight }]}>
-                <WebView
-                  originWhitelist={['*']}
-                  source={{ html: PDF_VIEWER_HTML }}
-                  javaScriptEnabled
-                  domStorageEnabled={false}
-                  onMessage={(e) => {
-                    const msg = e?.nativeEvent?.data || '';
-                    if (typeof msg !== 'string') return;
-                    if (msg.startsWith('ERROR:')) {
-                      setPoPdfPreviewError(msg.slice(6));
-                      return;
-                    }
-                    if (msg.startsWith('HEIGHT:')) {
-                      const h = parseInt(msg.slice(7), 10);
-                      if (Number.isFinite(h)) {
-                        const minH = Math.max(600, screenHeight * 0.8);
-                        const maxH = Math.max(minH, screenHeight * 2.5);
-                        setPoPdfInlineHeight(Math.max(minH, Math.min(h, maxH)));
-                      }
-                    }
-                  }}
-                  // IMPORTANT: pass code as a STRING, with a safely-escaped value
-                  injectedJavaScriptBeforeContentLoaded={`window.PDF_BASE64 = ${JSON.stringify(poPdfInlineB64)}; true;`}
-                  style={{ flex: 1 }}
-                />
-              </View>
-            )}
-          </View>
         )}
       </ScrollView>
 
@@ -1241,7 +944,6 @@ export default function ViewWorkOrder() {
                 <View style={styles.thumbWrapper}>
                   <TouchableOpacity
                     onPress={() => {
-                      // Open viewer and remember to return to attachments afterward
                       setReturnToAttachments(true);
                       setViewerIndex(index);
                       setPhotoViewerVisible(true);
@@ -1292,10 +994,7 @@ export default function ViewWorkOrder() {
               <TouchableOpacity style={styles.saveNoteBtn} onPress={addNote}>
                 <Text style={styles.saveNoteText}>Save</Text>
               </TouchableOpacity>
-              <TouchableOpacity
-                style={styles.cancelNoteBtn}
-                onPress={() => setShowAddNoteModal(false)}
-              >
+              <TouchableOpacity style={styles.cancelNoteBtn} onPress={() => setShowAddNoteModal(false)}>
                 <Text style={styles.cancelNoteText}>Cancel</Text>
               </TouchableOpacity>
             </View>
@@ -1330,10 +1029,7 @@ export default function ViewWorkOrder() {
               <TouchableOpacity style={styles.saveNoteBtn} onPress={applyStatus}>
                 <Text style={styles.saveNoteText}>Apply</Text>
               </TouchableOpacity>
-              <TouchableOpacity
-                style={styles.cancelNoteBtn}
-                onPress={() => setShowStatusModal(false)}
-              >
+              <TouchableOpacity style={styles.cancelNoteBtn} onPress={() => setShowStatusModal(false)}>
                 <Text style={styles.cancelNoteText}>Cancel</Text>
               </TouchableOpacity>
             </View>
@@ -1366,7 +1062,6 @@ export default function ViewWorkOrder() {
               javaScriptEnabled
               domStorageEnabled
               onMessage={onAnnotatorMessage}
-              // IMPORTANT: pass code as a STRING, with a safely-escaped value
               injectedJavaScriptBeforeContentLoaded={`window.PDF_BASE64 = ${JSON.stringify(pdfBase64)}; true;`}
               style={{ flex: 1 }}
             />
@@ -1377,26 +1072,111 @@ export default function ViewWorkOrder() {
           )}
         </SafeAreaView>
       </Modal>
+
+      {/* Document Lightbox Modal (for WO/EST/PO) */}
+      <Modal visible={docModalVisible} animationType="slide" onRequestClose={() => setDocModalVisible(false)}>
+        <SafeAreaView style={{ flex: 1, backgroundColor: '#000' }}>
+          <View style={styles.docHeader}>
+            <TouchableOpacity onPress={() => setDocModalVisible(false)} style={styles.docHeaderBtn}>
+              <Text style={styles.docHeaderBtnText}>Close</Text>
+            </TouchableOpacity>
+            <Text style={styles.docHeaderTitle}>
+              {docItems[docIndex]?.title || (docGroup === 'WO' ? 'Work Order' : docGroup === 'EST' ? 'Estimate' : 'PO')}
+              {docItems.length > 1 ? `  (${docIndex + 1}/${docItems.length})` : ''}
+            </Text>
+            <View style={styles.docHeaderRight}>
+              {/* Open externally */}
+              {!!docItems.length && (
+                <TouchableOpacity onPress={() => Linking.openURL(docItems[docIndex].url)} style={styles.docHeaderBtn}>
+                  <Text style={styles.docHeaderBtnText}>Open</Text>
+                </TouchableOpacity>
+              )}
+              {/* Only allow signing in dedicated Annotator to keep flow stable */}
+            </View>
+          </View>
+
+          <View style={{ flex: 1 }}>
+            {docLoading && (
+              <View style={[styles.center, { backgroundColor: '#000' }]}>
+                <Text style={{ color: '#fff' }}>Loading…</Text>
+              </View>
+            )}
+
+            {!!docError && (
+              <View style={[styles.center, { padding: 16 }]}>
+                <Text style={{ color: '#ff6b6b', textAlign: 'center' }}>Couldn’t load document: {docError}</Text>
+              </View>
+            )}
+
+            {!!docB64 && !docError && (
+              <WebView
+                originWhitelist={['*']}
+                source={{ html: PDF_VIEWER_HTML }}
+                javaScriptEnabled
+                domStorageEnabled={false}
+                onMessage={(e) => {
+                  const msg = e?.nativeEvent?.data || '';
+                  if (typeof msg !== 'string') return;
+                  if (msg.startsWith('ERROR:')) {
+                    setDocError(msg.slice(6));
+                    return;
+                  }
+                  if (msg.startsWith('HEIGHT:')) {
+                    const h = parseInt(msg.slice(7), 10);
+                    if (Number.isFinite(h)) {
+                      const minH = Math.max(600, screenHeight * 0.85);
+                      const maxH = Math.max(minH, screenHeight * 2.5);
+                      setDocHeight(Math.max(minH, Math.min(h, maxH)));
+                    }
+                  }
+                }}
+                injectedJavaScriptBeforeContentLoaded={`window.PDF_BASE64 = ${JSON.stringify(docB64)}; true;`}
+                style={{ flex: 1 }}
+              />
+            )}
+          </View>
+
+          {docItems.length > 1 && (
+            <View style={styles.docNavBar}>
+              <TouchableOpacity onPress={prevDoc} style={[styles.docNavBtn, { marginRight: 8 }]}>
+                <Text style={styles.docNavText}>Prev</Text>
+              </TouchableOpacity>
+              <TouchableOpacity onPress={nextDoc} style={[styles.docNavBtn, { marginLeft: 8 }]}>
+                <Text style={styles.docNavText}>Next</Text>
+              </TouchableOpacity>
+            </View>
+          )}
+
+          {docGroup === 'WO' && woPdfUrl && (
+            <View style={{ padding: 12 }}>
+              <TouchableOpacity style={[styles.buttonBase, styles.signBtn]} onPress={openAnnotator}>
+                <Text style={styles.signBtnText}>Annotate & Sign This Work Order</Text>
+              </TouchableOpacity>
+            </View>
+          )}
+        </SafeAreaView>
+      </Modal>
     </View>
   );
 }
 
 const styles = StyleSheet.create({
   screen: { flex: 1, backgroundColor: '#F1F5F9' },
-  details: { padding: 16, paddingBottom: 0 },
+  details: { padding: 16, paddingBottom: 24 },
   center: { flex: 1, justifyContent: 'center', alignItems: 'center' },
   loadingText: { fontSize: 18, color: '#3D5A80' },
   title: { fontSize: 24, fontWeight: '700', color: '#2B2D42', textAlign: 'center', marginBottom: 12 },
-  card: { backgroundColor: '#FFF', borderRadius: 8, padding: 16, marginBottom: 16, elevation: 3 },
+  card: { backgroundColor: '#FFF', borderRadius: 12, padding: 16, marginBottom: 16, elevation: 3 },
+
   row: { flexDirection: 'row', marginBottom: 8, flexWrap: 'wrap' },
   label: { width: 140, fontWeight: '600', color: '#3D5A80' },
   value: { flex: 1, color: '#2B2D42' },
   linkText: { color: '#007bff', textDecorationLine: 'underline' },
-  pdfInline: { width: '100%', backgroundColor: '#E2E8F0', borderRadius: 6, overflow: 'hidden', marginTop: 8 },
 
-  buttonBase: { width: '100%', paddingVertical: 12, borderRadius: 6, alignItems: 'center', marginBottom: 12 },
+  buttonBase: { width: '100%', paddingVertical: 12, borderRadius: 8, alignItems: 'center', marginBottom: 12 },
   backBtn: { backgroundColor: '#6c757d' },
   backText: { color: '#FFF', fontWeight: '600', fontSize: 16 },
+
   photoBtn: { backgroundColor: '#17a2b8' },
   photoText: { color: '#FFF', fontWeight: '600', fontSize: 16 },
   attachBtn: { backgroundColor: '#343a40' },
@@ -1406,54 +1186,89 @@ const styles = StyleSheet.create({
   drawBtn: { backgroundColor: '#28a745' },
   drawText: { color: '#FFF', fontWeight: '600', fontSize: 16 },
 
-  smallBtn: {
-    marginLeft: 8,
-    paddingHorizontal: 10,
-    paddingVertical: 6,
-    backgroundColor: '#0ea5e9',
-    borderRadius: 6,
-  },
+  smallBtn: { marginLeft: 8, paddingHorizontal: 10, paddingVertical: 6, backgroundColor: '#0ea5e9', borderRadius: 8 },
   smallBtnText: { color: '#fff', fontWeight: '700' },
 
-  sectionHeader: { fontSize: 18, fontWeight: '600', marginVertical: 8, color: '#2B2D42' },
-  noteCard: { backgroundColor: '#FFF', borderRadius: 6, padding: 12, marginBottom: 8, borderWidth: 1, borderColor: '#E2E8F0' },
+  sectionHeader: { fontSize: 18, fontWeight: '700', marginVertical: 8, color: '#2B2D42' },
+
+  // Tiles
+  tilesGrid: { flexDirection: 'row', flexWrap: 'wrap', gap: 12 },
+  tile: {
+    flexBasis: '31%',
+    backgroundColor: '#ffffff',
+    borderRadius: 12,
+    padding: 12,
+    elevation: 2,
+    borderWidth: 1,
+    borderColor: '#E5E7EB',
+    alignItems: 'center',
+  },
+  tileIconCircle: {
+    width: 44, height: 44, borderRadius: 22,
+    backgroundColor: '#0ea5e9', alignItems: 'center', justifyContent: 'center', marginBottom: 8,
+  },
+  tileIconText: { color: '#fff', fontWeight: '800' },
+  tileTitle: { fontWeight: '700', color: '#1f2937', marginBottom: 2 },
+  tileSub: { color: '#6b7280', fontSize: 12 },
+  tileBadge: {
+    marginTop: 6, paddingHorizontal: 8, paddingVertical: 2, borderRadius: 999,
+    backgroundColor: '#e5f3ff', color: '#0369a1', overflow: 'hidden',
+  },
+
+  noteCard: { backgroundColor: '#FFF', borderRadius: 10, padding: 12, marginBottom: 8, borderWidth: 1, borderColor: '#E2E8F0' },
   noteTimestamp: { fontSize: 12, color: '#8D99AE', marginBottom: 4 },
   noteBody: { fontSize: 14, color: '#2B2D42' },
 
+  // Photo viewer
   viewerContainer: { flex: 1, backgroundColor: '#000' },
   fullScreenImage: { width: screenWidth, height: screenHeight, resizeMode: 'contain' },
   viewerButtons: { position: 'absolute', bottom: 40, left: 0, right: 0, flexDirection: 'row', justifyContent: 'space-around' },
-  viewerButton: { flex: 1, marginHorizontal: 8, padding: 12, borderRadius: 6, alignItems: 'center' },
+  viewerButton: { flex: 1, marginHorizontal: 8, padding: 12, borderRadius: 8, alignItems: 'center' },
   shareBtn: { backgroundColor: 'rgba(255,255,255,0.3)' },
   shareText: { color: '#fff', fontWeight: '600', fontSize: 16 },
-  exitBtn: { backgroundColor: 'rgba(220,53,69,0.8)' },
+  exitBtn: { backgroundColor: 'rgba(220,53,69,0.85)' },
   exitText: { color: '#fff', fontWeight: '600', fontSize: 16 },
 
+  // Attachments modal
   modal: { flex: 1, padding: 16, backgroundColor: '#fff', marginTop: 80, borderTopLeftRadius: 12, borderTopRightRadius: 12 },
-  modalTitle: { fontSize: 18, fontWeight: '600', marginBottom: 12, textAlign: 'center', color: '#2B2D42' },
+  modalTitle: { fontSize: 18, fontWeight: '700', marginBottom: 12, textAlign: 'center', color: '#2B2D42' },
   noPhotosText: { textAlign: 'center', marginTop: 20, fontStyle: 'italic' },
   galleryList: { paddingBottom: 16 },
   thumbWrapper: { flex: 1 / 3, aspectRatio: 1, padding: 4 },
-  thumbnail: { width: '100%', height: '100%', borderRadius: 4 },
+  thumbnail: { width: '100%', height: '100%', borderRadius: 8 },
   deleteIcon: { position: 'absolute', top: 6, right: 6, backgroundColor: 'rgba(0,0,0,0.6)', width: 24, height: 24, borderRadius: 12, alignItems: 'center', justifyContent: 'center' },
   deleteText: { color: '#fff', fontSize: 14, lineHeight: 18 },
-  cancelBtn: { backgroundColor: '#dc3545', padding: 12, borderRadius: 6, alignItems: 'center', marginTop: 16 },
-  cancelText: { color: '#fff', fontWeight: '600', fontSize: 16 },
+  cancelBtn: { backgroundColor: '#dc3545', padding: 12, borderRadius: 8, alignItems: 'center', marginTop: 16 },
+  cancelText: { color: '#fff', fontWeight: '700', fontSize: 16 },
 
-  // Overlay for modals that need transparency (iOS fix uses overFullScreen)
+  // Transparent overlays
   addNoteOverlay: { flex: 1, backgroundColor: 'rgba(0,0,0,0.45)', justifyContent: 'center', padding: 16 },
-  addNoteContainer: { backgroundColor: '#fff', borderRadius: 10, padding: 16 },
-  addNoteTitle: { fontSize: 18, fontWeight: '600', marginBottom: 12, textAlign: 'center', color: '#2B2D42' },
-  addNoteInput: { height: 120, borderColor: '#cfd5dd', borderWidth: 1, borderRadius: 8, padding: 10, textAlignVertical: 'top', marginBottom: 12 },
+  addNoteContainer: { backgroundColor: '#fff', borderRadius: 12, padding: 16 },
+  addNoteTitle: { fontSize: 18, fontWeight: '700', marginBottom: 12, textAlign: 'center', color: '#2B2D42' },
+  addNoteInput: { height: 120, borderColor: '#cfd5dd', borderWidth: 1, borderRadius: 10, padding: 10, textAlignVertical: 'top', marginBottom: 12 },
   addNoteButtons: { flexDirection: 'row', justifyContent: 'space-around' },
-  saveNoteBtn: { backgroundColor: '#28a745', padding: 10, borderRadius: 6, flex: 1, marginHorizontal: 4 },
-  saveNoteText: { color: '#fff', textAlign: 'center', fontWeight: '600' },
-  cancelNoteBtn: { backgroundColor: '#dc3545', padding: 10, borderRadius: 6, flex: 1, marginHorizontal: 4 },
-  cancelNoteText: { color: '#fff', textAlign: 'center', fontWeight: '600' },
+  saveNoteBtn: { backgroundColor: '#28a745', padding: 10, borderRadius: 8, flex: 1, marginHorizontal: 4 },
+  saveNoteText: { color: '#fff', textAlign: 'center', fontWeight: '700' },
+  cancelNoteBtn: { backgroundColor: '#dc3545', padding: 10, borderRadius: 8, flex: 1, marginHorizontal: 4 },
+  cancelNoteText: { color: '#fff', textAlign: 'center', fontWeight: '700' },
 
   statusList: { gap: 8 },
-  statusOption: { padding: 12, borderWidth: 1, borderColor: '#e2e8f0', borderRadius: 8, backgroundColor: '#fff' },
+  statusOption: { padding: 12, borderWidth: 1, borderColor: '#e2e8f0', borderRadius: 10, backgroundColor: '#fff' },
   statusOptionActive: { backgroundColor: '#0ea5e9' },
-  statusText: { color: '#2B2D42', fontWeight: '600' },
+  statusText: { color: '#2B2D42', fontWeight: '700' },
   statusTextActive: { color: '#fff' },
+
+  // Doc modal header & nav
+  docHeader: { paddingHorizontal: 12, paddingTop: 6, paddingBottom: 6, backgroundColor: '#0b0f14', flexDirection: 'row', alignItems: 'center' },
+  docHeaderBtn: { paddingVertical: 6, paddingHorizontal: 10, backgroundColor: '#1f2937', borderRadius: 8, marginRight: 8 },
+  docHeaderBtnText: { color: '#fff', fontWeight: '700' },
+  docHeaderTitle: { color: '#fff', fontWeight: '800', fontSize: 16, flex: 1, textAlign: 'center' },
+  docHeaderRight: { flexDirection: 'row', alignItems: 'center', gap: 8 },
+
+  docNavBar: { flexDirection: 'row', justifyContent: 'center', padding: 12, backgroundColor: '#0b0f14' },
+  docNavBtn: { paddingVertical: 10, paddingHorizontal: 16, backgroundColor: '#1f2937', borderRadius: 999 },
+  docNavText: { color: '#fff', fontWeight: '700' },
+
+  signBtn: { backgroundColor: '#2563EB', borderRadius: 10 },
+  signBtnText: { color: '#fff', fontWeight: '800' },
 });
