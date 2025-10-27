@@ -12,6 +12,7 @@ import {
   Modal,
   Pressable,
   TextInput,
+  Platform,
 } from 'react-native';
 import moment from 'moment';
 import { useRouter } from 'expo-router';
@@ -88,7 +89,8 @@ export default function WorkOrdersScreen() {
   const [loadingFirst, setLoadingFirst] = useState(true);
 
   // single-status change modal
-  const [statusModal, setStatusModal] = useState({ id: null, value: null });
+  theStatusModal = useState({ id: null, value: null });
+  const [statusModal, setStatusModal] = theStatusModal;
 
   // ----- BULK "Parts In" (web parity) -----
   const [bulkVisible, setBulkVisible] = useState(false);
@@ -413,6 +415,8 @@ export default function WorkOrdersScreen() {
     );
   };
 
+  const BottomSpacer = () => <View style={styles.bottomSpacer} />;
+
   const ListComponent =
     selectedStatus === 'Today' ? (
       <>
@@ -423,16 +427,25 @@ export default function WorkOrdersScreen() {
           activationDistance={12}
           onDragEnd={({ data }) => saveTodayOrder(data.map((d) => String(d.id)))}
           renderItem={({ item, drag }) => <Card item={item} drag={drag} />}
-          contentContainerStyle={styles.list}
+          // --- Cutoff fix: make the list fill space and add safe bottom padding + footer spacer
+          style={styles.flexList}
+          contentContainerStyle={styles.listContent}
+          ListFooterComponent={BottomSpacer}
+          keyboardShouldPersistTaps="handled"
+          keyboardDismissMode="on-drag"
           refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} />}
         />
       </>
     ) : (
       <FlatList
         data={filteredOrders}
-        keyExtractor={(it) => String(it.id)}   // ← FIXED: removed stray ")"
+        keyExtractor={(it) => String(it.id)}
         renderItem={({ item }) => <Card item={item} />}
-        contentContainerStyle={styles.list}
+        style={styles.flexList}
+        contentContainerStyle={styles.listContent}
+        ListFooterComponent={BottomSpacer}
+        keyboardShouldPersistTaps="handled"
+        keyboardDismissMode="on-drag"
         refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} />}
         ListEmptyComponent={
           !loadingFirst ? (
@@ -541,7 +554,7 @@ export default function WorkOrdersScreen() {
             <View style={styles.bulkTopRow}>
               <TextInput
                 style={styles.searchInput}
-                placeholder='Search WO #, PO #, customer, or site...'
+                placeholder="Search WO #, PO #, customer, or site..."
                 value={bulkSearch}
                 onChangeText={setBulkSearch}
               />
@@ -713,7 +726,13 @@ const styles = StyleSheet.create({
   },
   partsHeaderBtnText: { color: '#fff', fontWeight: '700' },
 
-  list: { paddingTop: 8, paddingBottom: 16 },
+  // Lists
+  flexList: { flex: 1 },
+  listContent: {
+    paddingTop: 8,
+    paddingBottom: Platform.OS === 'ios' ? 56 : 40, // extra bottom room to prevent cutoffs
+  },
+  bottomSpacer: { height: Platform.OS === 'ios' ? 24 : 16 },
 
   card: {
     backgroundColor: '#fff',
