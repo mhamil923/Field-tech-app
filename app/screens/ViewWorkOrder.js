@@ -55,52 +55,96 @@ const PDF_VIEWER_HTML = `
 <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no" />
 <title>PDF Preview</title>
 <style>
-  html,body { margin:0; padding:0; background:#111; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Arial, sans-serif; height:100%; overflow-y:auto; -webkit-overflow-scrolling: touch; }
-  #pages { padding: 8px; }
-  .pageWrap { margin: 0 auto 12px; max-width: 1100px; }
-  canvas.page { width:100%; height:auto; display:block; background:#fafafa; box-shadow: 0 1px 2px rgba(0,0,0,.35); border-radius: 6px; }
+  html,body {
+    margin:0;
+    padding:0;
+    background:#111;
+    font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Arial,sans-serif;
+    height:100%;
+    overflow-y:auto;
+    -webkit-overflow-scrolling:touch;
+  }
+  #pages {
+    padding:8px;
+  }
+  .pageWrap {
+    margin:0 auto 16px;
+    max-width:1100px;
+    display:flex;
+    justify-content:center;
+  }
+  canvas.page {
+    width:100%;
+    height:auto;
+    background:#fafafa;
+    box-shadow:0 2px 6px rgba(0,0,0,.35);
+    border-radius:6px;
+  }
+  #loader {
+    color:#fff;
+    text-align:center;
+    padding:20px;
+    font-size:16px;
+  }
 </style>
 </head>
 <body>
+  <div id="loader">Loading PDF…</div>
   <div id="pages"></div>
   <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
   <script>
-    if (window['pdfjsLib']) {
-      pdfjsLib.GlobalWorkerOptions.workerSrc = "https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js";
+    pdfjsLib.GlobalWorkerOptions.workerSrc = "https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js";
+
+    function b64ToUint8(b64){
+      const bin = atob(b64);
+      const bytes = new Uint8Array(bin.length);
+      for(let i=0;i<bin.length;i++) bytes[i] = bin.charCodeAt(i);
+      return bytes;
     }
-    function b64ToUint8(b64){const bin=atob(b64);const bytes=new Uint8Array(bin.length);for(let i=0;i<bin.length;i++)bytes[i]=bin.charCodeAt(i);return bytes;}
-    async function renderPDF(){
-      try{
-        const b64 = window.PDF_BASE64 || '';
-        if(!b64) throw new Error('Missing PDF data.');
-        const doc = await pdfjsLib.getDocument({ data: b64ToUint8(b64) }).promise;
-        const container = document.getElementById('pages'); container.innerHTML='';
-        for (let i=1; i<=doc.numPages; i++){
-          const page = await doc.getPage(i);
-          const vp = page.getViewport({ scale: 1 });
-          const targetWidth = Math.min(1100, Math.max(600, vp.width));
-          const scale = targetWidth / vp.width;
-          const viewport = page.getViewport({ scale });
-          const wrap = document.createElement('div'); wrap.className = 'pageWrap';
-          const c = document.createElement('canvas'); c.className='page';
-          c.width = Math.floor(viewport.width); c.height = Math.floor(viewport.height);
-          wrap.appendChild(c); container.appendChild(wrap);
-          await page.render({ canvasContext: c.getContext('2d'), viewport }).promise;
+
+    async function renderAllPages(){
+      const b64 = window.PDF_BASE64 || '';
+      if(!b64){ 
+        document.getElementById('loader').innerText = 'Missing PDF data.';
+        return;
+      }
+
+      try {
+        const pdfDoc = await pdfjsLib.getDocument({ data: b64ToUint8(b64) }).promise;
+        const pagesContainer = document.getElementById('pages');
+        document.getElementById('loader').remove();
+
+        for(let i=1; i<=pdfDoc.numPages; i++){
+          const page = await pdfDoc.getPage(i);
+          const viewport = page.getViewport({ scale: 1.2 });
+          const wrap = document.createElement('div');
+          wrap.className = 'pageWrap';
+          const canvas = document.createElement('canvas');
+          canvas.className = 'page';
+          const context = canvas.getContext('2d');
+          canvas.height = viewport.height;
+          canvas.width = viewport.width;
+          wrap.appendChild(canvas);
+          pagesContainer.appendChild(wrap);
+          await page.render({ canvasContext: context, viewport: viewport }).promise;
         }
+
+        // Report total height to RN for proper scroll area sizing
         setTimeout(()=>{
-          const h=Math.max(document.documentElement.scrollHeight,document.body.scrollHeight);
+          const h = Math.max(document.body.scrollHeight, document.documentElement.scrollHeight);
           window.ReactNativeWebView?.postMessage('HEIGHT:'+h);
-        },50);
-      } catch(e){
-        window.ReactNativeWebView?.postMessage('ERROR:'+(e?.message||String(e)));
+        }, 500);
+      } catch(err){
+        document.getElementById('loader').innerText = 'Error loading PDF: ' + err.message;
+        window.ReactNativeWebView?.postMessage('ERROR:' + err.message);
       }
     }
-    window.addEventListener('DOMContentLoaded', renderPDF);
+
+    document.addEventListener('DOMContentLoaded', renderAllPages);
   </script>
 </body>
 </html>
 `;
-
 /**
  * PDF Annotator (used for "Annotate & Sign PDF")
  * — scrollable by default; overlay disabled until Draw Mode is enabled

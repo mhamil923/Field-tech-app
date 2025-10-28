@@ -2,14 +2,14 @@
   "expo": {
     "name": "field-tech-app",
     "slug": "field-tech-app-v2",
-    "owner": "mhamil",
+    "owner": "first-class-glass",
     "version": "1.0.0",
     "orientation": "portrait",
     "icon": "./assets/images/icon-1024.png",
     "scheme": "myapp",
     "userInterfaceStyle": "automatic",
     "ios": {
-      "buildNumber": "103",
+      "buildNumber": "128",
       "supportsTablet": true,
       "bundleIdentifier": "com.firstclassglass.fieldtech",
       "infoPlist": {
