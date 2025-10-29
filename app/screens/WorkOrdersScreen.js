@@ -13,6 +13,7 @@ import {
   Pressable,
   TextInput,
   Platform,
+  SafeAreaView,
 } from 'react-native';
 import moment from 'moment';
 import { useRouter } from 'expo-router';
@@ -89,7 +90,7 @@ export default function WorkOrdersScreen() {
   const [loadingFirst, setLoadingFirst] = useState(true);
 
   // single-status change modal
-  theStatusModal = useState({ id: null, value: null });
+  const theStatusModal = useState({ id: null, value: null });
   const [statusModal, setStatusModal] = theStatusModal;
 
   // ----- BULK "Parts In" (web parity) -----
@@ -99,8 +100,11 @@ export default function WorkOrdersScreen() {
   const [bulkNote, setBulkNote] = useState('Parts In');
   const [bulkWorking, setBulkWorking] = useState(false);
 
-  // Drag order for Today
-  const todayKey = `woOrder:${moment().format('YYYY-MM-DD')}`;
+  // Drag order for Today (keyed by date)
+  const todayKey = useMemo(
+    () => `woOrder:${moment().format('YYYY-MM-DD')}`,
+    []
+  );
   const [todayOrderIds, setTodayOrderIds] = useState([]);
 
   const loadTodayOrder = useCallback(async () => {
@@ -115,7 +119,9 @@ export default function WorkOrdersScreen() {
   const saveTodayOrder = useCallback(
     async (ids) => {
       setTodayOrderIds(ids);
-      await AsyncStorage.setItem(todayKey, JSON.stringify(ids));
+      try {
+        await AsyncStorage.setItem(todayKey, JSON.stringify(ids));
+      } catch {}
     },
     [todayKey]
   );
@@ -150,7 +156,10 @@ export default function WorkOrdersScreen() {
   useEffect(() => {
     fetchWorkOrders();
   }, [fetchWorkOrders]);
-  useFocusEffect(useCallback(() => fetchWorkOrders(), [fetchWorkOrders]));
+
+  useFocusEffect(useCallback(() => { fetchWorkOrders(); }, [fetchWorkOrders]));
+
+  // load saved Today order whenever list changes or on mount
   useEffect(() => {
     loadTodayOrder();
   }, [loadTodayOrder, workOrders.length]);
@@ -178,11 +187,11 @@ export default function WorkOrdersScreen() {
     }
   };
 
-  // ✅ FIX: use moment(...).isSame(moment(), 'day') for Today filtering (timezone-safe)
   const filteredOrders = useMemo(() => {
     if (selectedStatus === 'Today') {
+      const today = moment().format('YYYY-MM-DD');
       return workOrders.filter(
-        (o) => o?.scheduledDate && moment(o.scheduledDate).isSame(moment(), 'day')
+        (o) => o.scheduledDate && moment(o.scheduledDate).format('YYYY-MM-DD') === today
       );
     }
     return workOrders.filter((o) => normStatus(o.status) === normStatus(selectedStatus));
@@ -234,7 +243,7 @@ export default function WorkOrdersScreen() {
     [workOrders]
   );
 
-  const [bulkDefaultSeed, setBulkDefaultSeed] = useState(0); // forces FlatList to refresh selection defaults
+  const [bulkDefaultSeed, setBulkDefaultSeed] = useState(0);
 
   const filteredWaitingForModal = useMemo(() => {
     const q = bulkSearch.trim().toLowerCase();
@@ -417,37 +426,16 @@ export default function WorkOrdersScreen() {
 
   const BottomSpacer = () => <View style={styles.bottomSpacer} />;
 
-  const ListComponent =
-    selectedStatus === 'Today' ? (
-      <>
-        <Text style={styles.dragBanner}>Long-press to drag order.</Text>
-        <DraggableFlatList
-          data={orderedToday}
-          keyExtractor={(it) => String(it.id)}
-          activationDistance={12}
-          onDragEnd={({ data }) => saveTodayOrder(data.map((d) => String(d.id)))}
-          renderItem={({ item, drag }) => <Card item={item} drag={drag} />}
-          // --- Cutoff fix: make the list fill space and add safe bottom padding + footer spacer
-          style={styles.flexList}
-          contentContainerStyle={styles.listContent}
-          ListFooterComponent={BottomSpacer}
-          keyboardShouldPersistTaps="handled"
-          keyboardDismissMode="on-drag"
-          refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} />}
-          ListEmptyComponent={
-            !loadingFirst ? (
-              <View style={styles.center}>
-                <Text style={styles.noData}>No work orders scheduled for today.</Text>
-              </View>
-            ) : null
-          }
-        />
-      </>
-    ) : (
-      <FlatList
-        data={filteredOrders}
+  const TodayList = (
+    <>
+      <Text style={styles.dragBanner}>Long-press to drag order.</Text>
+      <DraggableFlatList
+        data={orderedToday}
         keyExtractor={(it) => String(it.id)}
-        renderItem={({ item }) => <Card item={item} />}
+        activationDistance={12}
+        onDragEnd={({ data }) => saveTodayOrder(data.map((d) => String(d.id)))}
+        renderItem={({ item, drag }) => <Card item={item} drag={drag} />}
+        // Cutoff fix: fill available space and add safe bottom padding + footer spacer
         style={styles.flexList}
         contentContainerStyle={styles.listContent}
         ListFooterComponent={BottomSpacer}
@@ -457,12 +445,34 @@ export default function WorkOrdersScreen() {
         ListEmptyComponent={
           !loadingFirst ? (
             <View style={styles.center}>
-              <Text style={styles.noData}>No work orders to display.</Text>
+              <Text style={styles.noData}>No work orders scheduled for today.</Text>
             </View>
           ) : null
         }
       />
-    );
+    </>
+  );
+
+  const StatusList = (
+    <FlatList
+      data={filteredOrders}
+      keyExtractor={(it) => String(it.id)}
+      renderItem={({ item }) => <Card item={item} />}
+      style={styles.flexList}
+      contentContainerStyle={styles.listContent}
+      ListFooterComponent={BottomSpacer}
+      keyboardShouldPersistTaps="handled"
+      keyboardDismissMode="on-drag"
+      refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} />}
+      ListEmptyComponent={
+        !loadingFirst ? (
+          <View style={styles.center}>
+            <Text style={styles.noData}>No work orders to display.</Text>
+          </View>
+        ) : null
+      }
+    />
+  );
 
   const closeStatusModal = () => setStatusModal({ id: null, value: null });
   const applyStatusModal = () => {
@@ -486,176 +496,181 @@ export default function WorkOrdersScreen() {
   };
 
   return (
-    <View style={styles.container}>
-      <View style={styles.headerRow}>
-        <Text style={styles.header}>Work Orders</Text>
-        <View style={{ flexDirection: 'row', gap: 8 }}>
-          {me?.username === 'Jeff' && (
-            <TouchableOpacity
-              onPress={() => router.push('/screens/AddWorkOrder')}
-              style={styles.addBtn}
-            >
-              <Text style={styles.addBtnText}>+ Add Work Order</Text>
-            </TouchableOpacity>
-          )}
+    <SafeAreaView style={styles.safe}>
+      <View style={styles.container}>
+        <View style={styles.headerRow}>
+          <Text style={styles.header}>Work Orders</Text>
+          <View style={{ flexDirection: 'row', gap: 8 }}>
+            {me?.username === 'Jeff' && (
+              <TouchableOpacity
+                onPress={() => router.push('/screens/AddWorkOrder')}
+                style={styles.addBtn}
+              >
+                <Text style={styles.addBtnText}>+ Add Work Order</Text>
+              </TouchableOpacity>
+            )}
+          </View>
         </View>
-      </View>
 
-      <View style={styles.filterBar}>{renderChips()}</View>
+        <View style={styles.filterBar}>{renderChips()}</View>
 
-      {/* Web-parity bulk "Mark Parts In" button shown only on Waiting on Parts */}
-      <HeaderActions />
+        {/* Web-parity bulk "Mark Parts In" button shown only on Waiting on Parts */}
+        <HeaderActions />
 
-      {ListComponent}
+        {selectedStatus === 'Today' ? TodayList : StatusList}
 
-      {/* Status Modal */}
-      <Modal
-        transparent
-        visible={statusModal.id != null}
-        animationType="fade"
-        onRequestClose={closeStatusModal}
-      >
-        <Pressable style={styles.modalOverlay} onPress={closeStatusModal}>
-          <Pressable style={styles.modalCard}>
-            <Text style={styles.modalTitle}>Change Status</Text>
-            {STATUSES.map((s) => (
-              <TouchableOpacity
-                key={s}
-                style={[styles.statusOption, statusModal.value === s && styles.statusOptionActive]}
-                onPress={() => setStatusModal({ ...statusModal, value: s })}
-              >
-                <Text
-                  style={[
-                    styles.statusOptionText,
-                    statusModal.value === s && styles.statusOptionTextActive,
-                  ]}
+        {/* Status Modal */}
+        <Modal
+          transparent
+          visible={statusModal.id != null}
+          animationType="fade"
+          onRequestClose={closeStatusModal}
+        >
+          <Pressable style={styles.modalOverlay} onPress={closeStatusModal}>
+            <Pressable style={styles.modalCard}>
+              <Text style={styles.modalTitle}>Change Status</Text>
+              {STATUSES.map((s) => (
+                <TouchableOpacity
+                  key={s}
+                  style={[styles.statusOption, statusModal.value === s && styles.statusOptionActive]}
+                  onPress={() => setStatusModal({ ...statusModal, value: s })}
                 >
-                  {s}
-                </Text>
-              </TouchableOpacity>
-            ))}
-            <View style={styles.modalButtonsRow}>
-              <TouchableOpacity style={styles.modalBtnCancel} onPress={closeStatusModal}>
-                <Text style={styles.modalBtnText}>Cancel</Text>
-              </TouchableOpacity>
-              <TouchableOpacity style={styles.modalBtnApply} onPress={applyStatusModal}>
-                <Text style={styles.modalBtnText}>Apply</Text>
-              </TouchableOpacity>
-            </View>
-          </Pressable>
-        </Pressable>
-      </Modal>
-
-      {/* BULK Parts In Modal */}
-      <Modal
-        transparent
-        visible={bulkVisible}
-        animationType="fade"
-        onRequestClose={closeBulkModal}
-      >
-        <Pressable style={styles.modalOverlay} onPress={closeBulkModal}>
-          <Pressable style={styles.partsModalCard} onPress={() => {}}>
-            <Text style={styles.modalTitle}>Mark Parts as Received</Text>
-
-            {/* Search + Select all/none */}
-            <View style={styles.bulkTopRow}>
-              <TextInput
-                style={styles.searchInput}
-                placeholder="Search WO #, PO #, customer, or site..."
-                value={bulkSearch}
-                onChangeText={setBulkSearch}
-              />
-              <TouchableOpacity style={styles.bulkTopBtn} onPress={selectAll}>
-                <Text style={styles.bulkTopBtnText}>Select All</Text>
-              </TouchableOpacity>
-              <TouchableOpacity style={styles.bulkTopBtn} onPress={selectNone}>
-                <Text style={styles.bulkTopBtnText}>Select None</Text>
-              </TouchableOpacity>
-            </View>
-
-            {/* List */}
-            <FlatList
-              data={filteredWaitingForModal}
-              keyExtractor={(it) => String(it.id)}
-              style={{ maxHeight: 380 }}
-              ItemSeparatorComponent={() => <View style={styles.rowDivider} />}
-              extraData={bulkDefaultSeed}
-              renderItem={({ item }) => {
-                const checked = bulkSelected.has(item.id);
-                const site =
-                  norm(item.siteAddress) ||
-                  norm(item.serviceAddress) ||
-                  norm(item.address) ||
-                  norm(item.siteLocation) ||
-                  '';
-                return (
-                  <TouchableOpacity
-                    onPress={() => toggleBulkSelect(item.id)}
-                    style={styles.partsRow}
+                  <Text
+                    style={[
+                      styles.statusOptionText,
+                      statusModal.value === s && styles.statusOptionTextActive,
+                    ]}
                   >
-                    <View style={[styles.checkbox, checked && styles.checkboxChecked]}>
-                      {checked ? <Text style={styles.checkboxGlyph}>✓</Text> : null}
-                    </View>
-                    <View style={{ flex: 1 }}>
-                      <Text style={styles.partsRowTitle}>
-                        WO: {item.workOrderNumber || '—'} {item.poNumber ? ` • PO: ${item.poNumber}` : ''}
-                      </Text>
-                      <Text style={styles.partsRowSub}>{item.customer || '—'}</Text>
-                      {!!site && <Text style={styles.partsRowSub} numberOfLines={1}>{site}</Text>}
-                    </View>
-                  </TouchableOpacity>
-                );
-              }}
-              ListEmptyComponent={
-                <View style={{ paddingVertical: 12 }}>
-                  <Text style={{ textAlign: 'center', color: '#64748b' }}>
-                    No matching work orders.
+                    {s}
                   </Text>
-                </View>
-              }
-            />
-
-            {/* Optional note */}
-            <Text style={[styles.inputLabel, { marginTop: 10 }]}>Optional note</Text>
-            <TextInput
-              value={bulkNote}
-              onChangeText={setBulkNote}
-              placeholder="e.g., Parts In"
-              style={styles.textInput}
-              multiline
-            />
-
-            {/* Action buttons */}
-            <View style={styles.modalButtonsRow}>
-              <TouchableOpacity
-                style={[styles.modalBtnCancel, bulkWorking && { opacity: 0.7 }]}
-                onPress={closeBulkModal}
-                disabled={bulkWorking}
-              >
-                <Text style={styles.modalBtnText}>Cancel</Text>
-              </TouchableOpacity>
-              <TouchableOpacity
-                style={[
-                  styles.modalBtnApply,
-                  !bulkSelected.size && { backgroundColor: '#94a3b8' },
-                ]}
-                onPress={applyBulkPartsIn}
-                disabled={!bulkSelected.size || bulkWorking}
-              >
-                <Text style={styles.modalBtnText}>
-                  {bulkWorking ? 'Updating…' : `Mark Parts In (${bulkSelected.size})`}
-                </Text>
-              </TouchableOpacity>
-            </View>
+                </TouchableOpacity>
+              ))}
+              <View style={styles.modalButtonsRow}>
+                <TouchableOpacity style={styles.modalBtnCancel} onPress={closeStatusModal}>
+                  <Text style={styles.modalBtnText}>Cancel</Text>
+                </TouchableOpacity>
+                <TouchableOpacity style={styles.modalBtnApply} onPress={applyStatusModal}>
+                  <Text style={styles.modalBtnText}>Apply</Text>
+                </TouchableOpacity>
+              </View>
+            </Pressable>
           </Pressable>
-        </Pressable>
-      </Modal>
-    </View>
+        </Modal>
+
+        {/* BULK Parts In Modal */}
+        <Modal
+          transparent
+          visible={bulkVisible}
+          animationType="fade"
+          onRequestClose={closeBulkModal}
+        >
+          <Pressable style={styles.modalOverlay} onPress={closeBulkModal}>
+            <Pressable style={styles.partsModalCard} onPress={() => {}}>
+              <Text style={styles.modalTitle}>Mark Parts as Received</Text>
+
+              {/* Search + Select all/none */}
+              <View style={styles.bulkTopRow}>
+                <TextInput
+                  style={styles.searchInput}
+                  placeholder="Search WO #, PO #, customer, or site..."
+                  value={bulkSearch}
+                  onChangeText={setBulkSearch}
+                />
+                <TouchableOpacity style={styles.bulkTopBtn} onPress={selectAll}>
+                  <Text style={styles.bulkTopBtnText}>Select All</Text>
+                </TouchableOpacity>
+                <TouchableOpacity style={styles.bulkTopBtn} onPress={selectNone}>
+                  <Text style={styles.bulkTopBtnText}>Select None</Text>
+                </TouchableOpacity>
+              </View>
+
+              {/* List */}
+              <FlatList
+                data={filteredWaitingForModal}
+                keyExtractor={(it) => String(it.id)}
+                style={{ maxHeight: 380 }}
+                ItemSeparatorComponent={() => <View style={styles.rowDivider} />}
+                extraData={bulkDefaultSeed}
+                renderItem={({ item }) => {
+                  const checked = bulkSelected.has(item.id);
+                  const site =
+                    norm(item.siteAddress) ||
+                    norm(item.serviceAddress) ||
+                    norm(item.address) ||
+                    norm(item.siteLocation) ||
+                    '';
+                  return (
+                    <TouchableOpacity
+                      onPress={() => toggleBulkSelect(item.id)}
+                      style={styles.partsRow}
+                    >
+                      <View style={[styles.checkbox, checked && styles.checkboxChecked]}>
+                        {checked ? <Text style={styles.checkboxGlyph}>✓</Text> : null}
+                      </View>
+                      <View style={{ flex: 1 }}>
+                        <Text style={styles.partsRowTitle}>
+                          WO: {item.workOrderNumber || '—'}
+                          {item.poNumber ? `  •  PO: ${item.poNumber}` : ''}
+                        </Text>
+                        <Text style={styles.partsRowSub}>{item.customer || '—'}</Text>
+                        {!!site && <Text style={styles.partsRowSub} numberOfLines={1}>{site}</Text>}
+                      </View>
+                    </TouchableOpacity>
+                  );
+                }}
+                ListEmptyComponent={
+                  <View style={{ paddingVertical: 12 }}>
+                    <Text style={{ textAlign: 'center', color: '#64748b' }}>
+                      No matching work orders.
+                    </Text>
+                  </View>
+                }
+              />
+
+              {/* Optional note */}
+              <Text style={[styles.inputLabel, { marginTop: 10 }]}>Optional note</Text>
+              <TextInput
+                value={bulkNote}
+                onChangeText={setBulkNote}
+                placeholder="e.g., Parts In"
+                style={styles.textInput}
+                multiline
+              />
+
+              {/* Action buttons */}
+              <View style={styles.modalButtonsRow}>
+                <TouchableOpacity
+                  style={[styles.modalBtnCancel, bulkWorking && { opacity: 0.7 }]}
+                  onPress={closeBulkModal}
+                  disabled={bulkWorking}
+                >
+                  <Text style={styles.modalBtnText}>Cancel</Text>
+                </TouchableOpacity>
+                <TouchableOpacity
+                  style={[
+                    styles.modalBtnApply,
+                    !bulkSelected.size && { backgroundColor: '#94a3b8' },
+                  ]}
+                  onPress={applyBulkPartsIn}
+                  disabled={!bulkSelected.size || bulkWorking}
+                >
+                  <Text style={styles.modalBtnText}>
+                    {bulkWorking ? 'Updating…' : `Mark Parts In (${bulkSelected.size})`}
+                  </Text>
+                </TouchableOpacity>
+              </View>
+            </Pressable>
+          </Pressable>
+        </Modal>
+      </View>
+    </SafeAreaView>
   );
 }
 
 const styles = StyleSheet.create({
-  container: { flex: 1, backgroundColor: '#F1F5F9', padding: 16 },
+  safe: { flex: 1, backgroundColor: '#F1F5F9' },
+
+  container: { flex: 1, padding: 16 },
 
   headerRow: {
     flexDirection: 'row',
@@ -737,9 +752,9 @@ const styles = StyleSheet.create({
   flexList: { flex: 1 },
   listContent: {
     paddingTop: 8,
-    paddingBottom: Platform.OS === 'ios' ? 56 : 40, // extra bottom room to prevent cutoffs
+    paddingBottom: Platform.OS === 'ios' ? 72 : 56, // extra bottom room to prevent cutoffs
   },
-  bottomSpacer: { height: Platform.OS === 'ios' ? 24 : 16 },
+  bottomSpacer: { height: Platform.OS === 'ios' ? 28 : 20 },
 
   card: {
     backgroundColor: '#fff',
