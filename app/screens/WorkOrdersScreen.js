@@ -178,11 +178,11 @@ export default function WorkOrdersScreen() {
     }
   };
 
+  // ✅ FIX: use moment(...).isSame(moment(), 'day') for Today filtering (timezone-safe)
   const filteredOrders = useMemo(() => {
     if (selectedStatus === 'Today') {
-      const today = moment().format('YYYY-MM-DD');
       return workOrders.filter(
-        (o) => o.scheduledDate && moment(o.scheduledDate).format('YYYY-MM-DD') === today
+        (o) => o?.scheduledDate && moment(o.scheduledDate).isSame(moment(), 'day')
       );
     }
     return workOrders.filter((o) => normStatus(o.status) === normStatus(selectedStatus));
@@ -434,6 +434,13 @@ export default function WorkOrdersScreen() {
           keyboardShouldPersistTaps="handled"
           keyboardDismissMode="on-drag"
           refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} />}
+          ListEmptyComponent={
+            !loadingFirst ? (
+              <View style={styles.center}>
+                <Text style={styles.noData}>No work orders scheduled for today.</Text>
+              </View>
+            ) : null
+          }
         />
       </>
     ) : (
