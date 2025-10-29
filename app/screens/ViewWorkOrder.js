@@ -62,17 +62,32 @@ const PDF_VIEWER_HTML = `
     height:100%;
     overflow-y:scroll;
     -webkit-overflow-scrolling:touch;
+    overscroll-behavior: contain; /* helps momentum scroll */
   }
   #pages { padding:8px; display:flex; flex-direction:column; align-items:center; }
-  .pageWrap { margin-bottom:16px; width:100%; max-width:1100px; display:flex; justify-content:center; }
+
+  /* NEW: allow vertical pan on the wrapper */
+  .pageWrap {
+    margin-bottom:16px;
+    width:100%;
+    max-width:1100px;
+    display:flex;
+    justify-content:center;
+    touch-action: pan-y; /* <-- key fix */
+  }
+
   canvas.page {
     width:100%;
     height:auto;
     background:#fafafa;
     box-shadow:0 2px 6px rgba(0,0,0,.35);
     border-radius:6px;
-    touch-action:none;
+
+    /* NEW: let the page scroll by NOT catching touches on canvas */
+    touch-action: pan-y;   /* allow vertical panning */
+    pointer-events: none;  /* don't swallow touch/mouse events */
   }
+
   #loader { color:#fff; text-align:center; padding:20px; font-size:16px; }
   #pageIndicator {
     position:fixed;
@@ -141,7 +156,8 @@ const PDF_VIEWER_HTML = `
           }
           indicator.textContent=\`Page \${current} of \${total}\`;
         }
-        window.addEventListener('scroll',updatePageIndicator);
+        // NEW: passive scroll listener for smoother scrolling
+        window.addEventListener('scroll',updatePageIndicator,{passive:true});
         updatePageIndicator();
 
         // Report height to React Native
