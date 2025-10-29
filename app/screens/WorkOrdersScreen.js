@@ -22,6 +22,9 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 import DraggableFlatList from 'react-native-draggable-flatlist';
 import api from '../../constants/api';
 
+/** ─────────────────────────────────────────────────────────────
+ * Status configuration
+ * ───────────────────────────────────────────────────────────── */
 const STATUSES = [
   'New',
   'Scheduled',
@@ -58,7 +61,7 @@ const toCanonicalStatus = (s) =>
 
 const displayPO = (wo, po) => (norm(wo) === norm(po) ? '' : norm(po));
 
-/** notes utilities */
+/** Notes utilities */
 const parseNotes = (notesLike) => {
   if (Array.isArray(notesLike)) return notesLike;
   if (!notesLike) return [];
@@ -101,7 +104,7 @@ export default function WorkOrdersScreen() {
   const [bulkWorking, setBulkWorking] = useState(false);
 
   // Drag order for Today (keyed by date)
-  const todayKey = useMemo(
+  const todayStorageKey = useMemo(
     () => `woOrder:${moment().format('YYYY-MM-DD')}`,
     []
   );
@@ -109,21 +112,21 @@ export default function WorkOrdersScreen() {
 
   const loadTodayOrder = useCallback(async () => {
     try {
-      const raw = await AsyncStorage.getItem(todayKey);
+      const raw = await AsyncStorage.getItem(todayStorageKey);
       setTodayOrderIds(raw ? JSON.parse(raw) : []);
     } catch {
       setTodayOrderIds([]);
     }
-  }, [todayKey]);
+  }, [todayStorageKey]);
 
   const saveTodayOrder = useCallback(
     async (ids) => {
       setTodayOrderIds(ids);
       try {
-        await AsyncStorage.setItem(todayKey, JSON.stringify(ids));
+        await AsyncStorage.setItem(todayStorageKey, JSON.stringify(ids));
       } catch {}
     },
-    [todayKey]
+    [todayStorageKey]
   );
 
   // current user (Add button)
@@ -164,16 +167,23 @@ export default function WorkOrdersScreen() {
     loadTodayOrder();
   }, [loadTodayOrder, workOrders.length]);
 
+  /** IMPORTANT: Use isSame('day') instead of string-equality to avoid UTC/offset misses */
+  const isScheduledToday = useCallback((dateLike) => {
+    if (!dateLike) return false;
+    // moment handles ISO strings, numbers, and Date objects
+    return moment(dateLike).isSame(moment(), 'day');
+  }, []);
+
   const counts = useMemo(() => {
     const map = Object.fromEntries(STATUSES.map((s) => [s, 0]));
     let today = 0;
     for (const o of workOrders) {
       const label = toCanonicalStatus(o?.status);
       if (map[label] !== undefined) map[label] += 1;
-      if (o?.scheduledDate && moment(o.scheduledDate).isSame(moment(), 'day')) today += 1;
+      if (isScheduledToday(o?.scheduledDate)) today += 1;
     }
     return { byStatus: map, today };
-  }, [workOrders]);
+  }, [workOrders, isScheduledToday]);
 
   const openInGoogleMaps = async (query) => {
     const q = encodeURIComponent(query || '');
@@ -189,13 +199,10 @@ export default function WorkOrdersScreen() {
 
   const filteredOrders = useMemo(() => {
     if (selectedStatus === 'Today') {
-      const today = moment().format('YYYY-MM-DD');
-      return workOrders.filter(
-        (o) => o.scheduledDate && moment(o.scheduledDate).format('YYYY-MM-DD') === today
-      );
+      return workOrders.filter((o) => isScheduledToday(o?.scheduledDate));
     }
     return workOrders.filter((o) => normStatus(o.status) === normStatus(selectedStatus));
-  }, [workOrders, selectedStatus]);
+  }, [workOrders, selectedStatus, isScheduledToday]);
 
   const orderedToday = useMemo(() => {
     if (selectedStatus !== 'Today') return filteredOrders;
@@ -435,7 +442,7 @@ export default function WorkOrdersScreen() {
         activationDistance={12}
         onDragEnd={({ data }) => saveTodayOrder(data.map((d) => String(d.id)))}
         renderItem={({ item, drag }) => <Card item={item} drag={drag} />}
-        // Cutoff fix: fill available space and add safe bottom padding + footer spacer
+        // Fill available space and add safe bottom padding + footer spacer
         style={styles.flexList}
         contentContainerStyle={styles.listContent}
         ListFooterComponent={BottomSpacer}
