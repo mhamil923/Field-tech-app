@@ -22,9 +22,7 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 import DraggableFlatList from 'react-native-draggable-flatlist';
 import api from '../../constants/api';
 
-/** ─────────────────────────────────────────────────────────────
- * Status configuration
- * ───────────────────────────────────────────────────────────── */
+/** Status configuration */
 const STATUSES = [
   'New',
   'Scheduled',
@@ -61,7 +59,7 @@ const toCanonicalStatus = (s) =>
 
 const displayPO = (wo, po) => (norm(wo) === norm(po) ? '' : norm(po));
 
-/** Notes utilities */
+/** Notes helpers */
 const parseNotes = (notesLike) => {
   if (Array.isArray(notesLike)) return notesLike;
   if (!notesLike) return [];
@@ -84,6 +82,53 @@ const latestNoteText = (notesLike) => {
   return top.text || '';
 };
 
+/** -----------------------------------------------------------
+ * SINGLE SOURCE OF TRUTH: isOnToday(wo)
+ * Accepts any of these fields from a work order:
+ *   scheduledDate | scheduledStart | scheduledEnd | scheduled_at | date
+ * Handles ISO strings, timestamps, and date-only ("YYYY-MM-DD").
+ * Treats a (start,end) as “today” if it overlaps today’s window.
+ * ---------------------------------------------------------- */
+const isOnToday = (wo) => {
+  const startOfDay = moment().startOf('day');
+  const endOfDay = moment().endOf('day');
+
+  const rawStart =
+    wo?.scheduledStart ??
+    wo?.scheduledDate ??
+    wo?.scheduled_at ??
+    wo?.date ??
+    null;
+
+  const rawEnd =
+    wo?.scheduledEnd ??
+    wo?.scheduledDate ??
+    wo?.scheduled_at ??
+    wo?.date ??
+    null;
+
+  // Try as moments
+  const mStart = rawStart ? moment(rawStart) : null;
+  const mEnd = rawEnd ? moment(rawEnd) : null;
+
+  // If both are valid, check range overlap with today
+  if (mStart?.isValid() && mEnd?.isValid()) {
+    return mStart.isSameOrBefore(endOfDay) && mEnd.isSameOrAfter(startOfDay);
+  }
+
+  // If at least one valid, check that for today
+  const m = mStart?.isValid() ? mStart : mEnd?.isValid() ? mEnd : null;
+  if (m) return m.isBetween(startOfDay, endOfDay, 'millisecond', '[]') || m.isSame(moment(), 'day');
+
+  // Fallback for date-only strings that Moment didn't parse (very rare)
+  const any = (rawStart || rawEnd || '').toString();
+  if (any.length >= 10) {
+    const dateOnly = any.slice(0, 10);
+    return dateOnly === moment().format('YYYY-MM-DD');
+  }
+  return false;
+};
+
 export default function WorkOrdersScreen() {
   const router = useRouter();
   const [me, setMe] = useState(null);
@@ -92,11 +137,11 @@ export default function WorkOrdersScreen() {
   const [refreshing, setRefreshing] = useState(false);
   const [loadingFirst, setLoadingFirst] = useState(true);
 
-  // single-status change modal
+  // Status modal
   const theStatusModal = useState({ id: null, value: null });
   const [statusModal, setStatusModal] = theStatusModal;
 
-  // ----- BULK "Parts In" (web parity) -----
+  // Bulk "Parts In"
   const [bulkVisible, setBulkVisible] = useState(false);
   const [bulkSearch, setBulkSearch] = useState('');
   const [bulkSelected, setBulkSelected] = useState(() => new Set());
@@ -129,7 +174,7 @@ export default function WorkOrdersScreen() {
     [todayStorageKey]
   );
 
-  // current user (Add button)
+  // Current user (Add button)
   useEffect(() => {
     (async () => {
       try {
@@ -162,28 +207,22 @@ export default function WorkOrdersScreen() {
 
   useFocusEffect(useCallback(() => { fetchWorkOrders(); }, [fetchWorkOrders]));
 
-  // load saved Today order whenever list changes or on mount
+  // Load saved Today order whenever list changes or on mount
   useEffect(() => {
     loadTodayOrder();
   }, [loadTodayOrder, workOrders.length]);
 
-  /** IMPORTANT: Use isSame('day') instead of string-equality to avoid UTC/offset misses */
-  const isScheduledToday = useCallback((dateLike) => {
-    if (!dateLike) return false;
-    // moment handles ISO strings, numbers, and Date objects
-    return moment(dateLike).isSame(moment(), 'day');
-  }, []);
-
+  /** Counts use the *same* predicate as filtering */
   const counts = useMemo(() => {
     const map = Object.fromEntries(STATUSES.map((s) => [s, 0]));
     let today = 0;
     for (const o of workOrders) {
       const label = toCanonicalStatus(o?.status);
       if (map[label] !== undefined) map[label] += 1;
-      if (isScheduledToday(o?.scheduledDate)) today += 1;
+      if (isOnToday(o)) today += 1;
     }
     return { byStatus: map, today };
-  }, [workOrders, isScheduledToday]);
+  }, [workOrders]);
 
   const openInGoogleMaps = async (query) => {
     const q = encodeURIComponent(query || '');
@@ -199,19 +238,20 @@ export default function WorkOrdersScreen() {
 
   const filteredOrders = useMemo(() => {
     if (selectedStatus === 'Today') {
-      return workOrders.filter((o) => isScheduledToday(o?.scheduledDate));
+      return workOrders.filter(isOnToday);
     }
     return workOrders.filter((o) => normStatus(o.status) === normStatus(selectedStatus));
-  }, [workOrders, selectedStatus, isScheduledToday]);
+  }, [workOrders, selectedStatus]);
 
+  /** Keep user drag order, but never hide anything */
   const orderedToday = useMemo(() => {
     if (selectedStatus !== 'Today') return filteredOrders;
     const map = new Map(filteredOrders.map((o) => [String(o.id), o]));
     const ordered = [];
     for (const id of todayOrderIds) {
-      if (map.has(id)) {
-        ordered.push(map.get(id));
-        map.delete(id);
+      if (map.has(String(id))) {
+        ordered.push(map.get(String(id)));
+        map.delete(String(id));
       }
     }
     return [...ordered, ...Array.from(map.values())];
@@ -244,7 +284,7 @@ export default function WorkOrdersScreen() {
     }
   };
 
-  // ----- BULK "Parts In" helpers -----
+  // Bulk "Parts In" helpers
   const waitingOrders = useMemo(
     () => workOrders.filter((o) => normStatus(o.status) === normStatus(PARTS_WAITING)),
     [workOrders]
@@ -361,7 +401,6 @@ export default function WorkOrdersScreen() {
   );
 
   const Card = ({ item, drag }) => {
-    // Legacy-safe Site Location / Address handling
     const rawLoc = norm(item.siteLocation);
     const explicitName = norm(item.siteName) || norm(item.siteLocationName);
     let siteLocationName = explicitName;
@@ -408,7 +447,13 @@ export default function WorkOrdersScreen() {
         )}
         <Text style={styles.cardText}>
           Scheduled:{' '}
-          {item.scheduledDate ? moment(item.scheduledDate).format('YYYY-MM-DD HH:mm') : 'Not Scheduled'}
+          {item.scheduledStart
+            ? moment(item.scheduledStart).format('YYYY-MM-DD HH:mm')
+            : item.scheduledDate
+            ? moment(item.scheduledDate).format('YYYY-MM-DD HH:mm')
+            : item.scheduledEnd
+            ? moment(item.scheduledEnd).format('YYYY-MM-DD HH:mm')
+            : 'Not Scheduled'}
         </Text>
         <Text style={styles.cardText}>Status: {item.status}</Text>
 
@@ -442,7 +487,6 @@ export default function WorkOrdersScreen() {
         activationDistance={12}
         onDragEnd={({ data }) => saveTodayOrder(data.map((d) => String(d.id)))}
         renderItem={({ item, drag }) => <Card item={item} drag={drag} />}
-        // Fill available space and add safe bottom padding + footer spacer
         style={styles.flexList}
         contentContainerStyle={styles.listContent}
         ListFooterComponent={BottomSpacer}
@@ -520,8 +564,6 @@ export default function WorkOrdersScreen() {
         </View>
 
         <View style={styles.filterBar}>{renderChips()}</View>
-
-        {/* Web-parity bulk "Mark Parts In" button shown only on Waiting on Parts */}
         <HeaderActions />
 
         {selectedStatus === 'Today' ? TodayList : StatusList}
@@ -676,7 +718,6 @@ export default function WorkOrdersScreen() {
 
 const styles = StyleSheet.create({
   safe: { flex: 1, backgroundColor: '#F1F5F9' },
-
   container: { flex: 1, padding: 16 },
 
   headerRow: {
@@ -695,7 +736,6 @@ const styles = StyleSheet.create({
   },
   addBtnText: { color: '#fff', fontWeight: '700' },
 
-  /* chip/filter bar */
   filterBar: {
     paddingTop: 6,
     paddingBottom: 6,
@@ -741,26 +781,12 @@ const styles = StyleSheet.create({
   badgeText: { color: '#17a2b8', fontSize: 12, fontWeight: '700' },
   badgeTextActive: { color: '#fff' },
 
-  // waiting tab header action
-  partsHeaderRow: {
-    paddingTop: 8,
-    paddingBottom: 4,
-    alignItems: 'flex-start',
-  },
-  partsHeaderBtn: {
-    backgroundColor: '#22c55e',
-    paddingVertical: 10,
-    paddingHorizontal: 14,
-    borderRadius: 8,
-  },
+  partsHeaderRow: { paddingTop: 8, paddingBottom: 4, alignItems: 'flex-start' },
+  partsHeaderBtn: { backgroundColor: '#22c55e', paddingVertical: 10, paddingHorizontal: 14, borderRadius: 8 },
   partsHeaderBtnText: { color: '#fff', fontWeight: '700' },
 
-  // Lists
   flexList: { flex: 1 },
-  listContent: {
-    paddingTop: 8,
-    paddingBottom: Platform.OS === 'ios' ? 72 : 56, // extra bottom room to prevent cutoffs
-  },
+  listContent: { paddingTop: 8, paddingBottom: Platform.OS === 'ios' ? 72 : 56 },
   bottomSpacer: { height: Platform.OS === 'ios' ? 28 : 20 },
 
   card: {
@@ -771,11 +797,7 @@ const styles = StyleSheet.create({
     padding: 16,
     marginBottom: 12,
   },
-  cardHeaderRow: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    marginBottom: 6,
-  },
+  cardHeaderRow: { flexDirection: 'row', justifyContent: 'space-between', marginBottom: 6 },
   dragHandle: { flexDirection: 'row', alignItems: 'center' },
   dragGlyph: { fontSize: 20, color: '#64748b' },
 
@@ -783,162 +805,42 @@ const styles = StyleSheet.create({
   cardText: { fontSize: 14, color: '#2B2D42', marginBottom: 4 },
   linkText: { color: '#17a2b8', textDecorationLine: 'underline', marginBottom: 4 },
 
-  noteLine: {
-    fontSize: 13,
-    color: '#475569',
-    marginBottom: 4,
-  },
+  noteLine: { fontSize: 13, color: '#475569', marginBottom: 4 },
 
-  actionsRow: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    marginTop: 8,
-    alignItems: 'center',
-    gap: 8,
-  },
-
-  statusBtn: {
-    backgroundColor: '#0ea5a6',
-    borderRadius: 6,
-    paddingVertical: 10,
-    paddingHorizontal: 16,
-  },
+  actionsRow: { flexDirection: 'row', justifyContent: 'space-between', marginTop: 8, alignItems: 'center', gap: 8 },
+  statusBtn: { backgroundColor: '#0ea5a6', borderRadius: 6, paddingVertical: 10, paddingHorizontal: 16 },
   statusBtnText: { color: '#fff', fontWeight: 'bold' },
 
-  viewButton: {
-    backgroundColor: '#17a2b8',
-    borderRadius: 6,
-    paddingVertical: 10,
-    paddingHorizontal: 16,
-  },
+  viewButton: { backgroundColor: '#17a2b8', borderRadius: 6, paddingVertical: 10, paddingHorizontal: 16 },
   viewButtonText: { color: '#fff', fontWeight: 'bold' },
 
   center: { alignItems: 'center', marginTop: 24 },
   noData: { fontStyle: 'italic', color: '#8D99AE' },
-
   dragBanner: { textAlign: 'center', color: '#64748b', marginVertical: 6 },
 
-  // Shared modal styles
-  modalOverlay: {
-    flex: 1,
-    backgroundColor: 'rgba(0,0,0,0.35)',
-    justifyContent: 'center',
-    alignItems: 'center',
-    padding: 20,
-  },
-  modalCard: {
-    width: '100%',
-    maxWidth: 520,
-    backgroundColor: '#fff',
-    borderRadius: 12,
-    padding: 16,
-    borderWidth: StyleSheet.hairlineWidth,
-    borderColor: '#E2E8F0',
-  },
-  partsModalCard: {
-    width: '100%',
-    maxWidth: 640,
-    backgroundColor: '#fff',
-    borderRadius: 12,
-    padding: 16,
-    borderWidth: StyleSheet.hairlineWidth,
-    borderColor: '#E2E8F0',
-  },
-  modalTitle: {
-    fontSize: 18,
-    fontWeight: '700',
-    color: '#0F172A',
-    textAlign: 'center',
-    marginBottom: 8,
-  },
-  inputLabel: {
-    fontSize: 12,
-    color: '#475569',
-    marginBottom: 4,
-    fontWeight: '600',
-  },
-  textInput: {
-    minHeight: 60,
-    borderWidth: 1,
-    borderColor: '#E2E8F0',
-    borderRadius: 8,
-    padding: 10,
-    textAlignVertical: 'top',
-  },
-  statusOption: {
-    paddingVertical: 12,
-    paddingHorizontal: 12,
-    borderRadius: 8,
-    borderWidth: 1,
-    borderColor: '#E2E8F0',
-    marginBottom: 8,
-    backgroundColor: '#FFFFFF',
-  },
+  modalOverlay: { flex: 1, backgroundColor: 'rgba(0,0,0,0.35)', justifyContent: 'center', alignItems: 'center', padding: 20 },
+  modalCard: { width: '100%', maxWidth: 520, backgroundColor: '#fff', borderRadius: 12, padding: 16, borderWidth: StyleSheet.hairlineWidth, borderColor: '#E2E8F0' },
+  partsModalCard: { width: '100%', maxWidth: 640, backgroundColor: '#fff', borderRadius: 12, padding: 16, borderWidth: StyleSheet.hairlineWidth, borderColor: '#E2E8F0' },
+  modalTitle: { fontSize: 18, fontWeight: '700', color: '#0F172A', textAlign: 'center', marginBottom: 8 },
+  inputLabel: { fontSize: 12, color: '#475569', marginBottom: 4, fontWeight: '600' },
+  textInput: { minHeight: 60, borderWidth: 1, borderColor: '#E2E8F0', borderRadius: 8, padding: 10, textAlignVertical: 'top' },
+  statusOption: { paddingVertical: 12, paddingHorizontal: 12, borderRadius: 8, borderWidth: 1, borderColor: '#E2E8F0', marginBottom: 8, backgroundColor: '#FFFFFF' },
   statusOptionActive: { backgroundColor: '#17a2b8', borderColor: '#17a2b8' },
   statusOptionText: { color: '#0F172A', fontWeight: '600' },
   statusOptionTextActive: { color: '#FFFFFF', fontWeight: '700' },
-  modalButtonsRow: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    marginTop: 12,
-    gap: 12,
-  },
-  modalBtnCancel: {
-    flex: 1,
-    backgroundColor: '#EF4444',
-    paddingVertical: 10,
-    borderRadius: 8,
-    alignItems: 'center',
-  },
-  modalBtnApply: {
-    flex: 1,
-    backgroundColor: '#22C55E',
-    paddingVertical: 10,
-    borderRadius: 8,
-    alignItems: 'center',
-  },
+  modalButtonsRow: { flexDirection: 'row', justifyContent: 'space-between', marginTop: 12, gap: 12 },
+  modalBtnCancel: { flex: 1, backgroundColor: '#EF4444', paddingVertical: 10, borderRadius: 8, alignItems: 'center' },
+  modalBtnApply: { flex: 1, backgroundColor: '#22C55E', paddingVertical: 10, borderRadius: 8, alignItems: 'center' },
   modalBtnText: { color: '#fff', fontWeight: '700' },
 
-  // bulk modal specifics
-  bulkTopRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 8,
-    marginBottom: 10,
-  },
-  searchInput: {
-    flex: 1,
-    borderWidth: 1,
-    borderColor: '#E2E8F0',
-    borderRadius: 8,
-    paddingHorizontal: 10,
-    height: 40,
-  },
-  bulkTopBtn: {
-    backgroundColor: '#e2e8f0',
-    paddingHorizontal: 10,
-    height: 40,
-    borderRadius: 8,
-    justifyContent: 'center',
-  },
+  bulkTopRow: { flexDirection: 'row', alignItems: 'center', gap: 8, marginBottom: 10 },
+  searchInput: { flex: 1, borderWidth: 1, borderColor: '#E2E8F0', borderRadius: 8, paddingHorizontal: 10, height: 40 },
+  bulkTopBtn: { backgroundColor: '#e2e8f0', paddingHorizontal: 10, height: 40, borderRadius: 8, justifyContent: 'center' },
   bulkTopBtnText: { color: '#0f172a', fontWeight: '600' },
 
-  partsRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    paddingVertical: 10,
-    gap: 10,
-  },
+  partsRow: { flexDirection: 'row', alignItems: 'center', paddingVertical: 10, gap: 10 },
   rowDivider: { height: StyleSheet.hairlineWidth, backgroundColor: '#e5e7eb' },
-  checkbox: {
-    width: 20,
-    height: 20,
-    borderRadius: 4,
-    borderWidth: 2,
-    borderColor: '#94a3b8',
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
+  checkbox: { width: 20, height: 20, borderRadius: 4, borderWidth: 2, borderColor: '#94a3b8', alignItems: 'center', justifyContent: 'center' },
   checkboxChecked: { backgroundColor: '#22c55e', borderColor: '#22c55e' },
   checkboxGlyph: { color: '#fff', fontWeight: '900', fontSize: 13 },
   partsRowTitle: { fontWeight: '700', color: '#111827' },
