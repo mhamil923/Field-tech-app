@@ -18,6 +18,7 @@ import { useRouter } from 'expo-router';
 import { useFocusEffect } from '@react-navigation/native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import DraggableFlatList from 'react-native-draggable-flatlist';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import api from '../../constants/api';
 
 const STATUSES = [
@@ -81,6 +82,7 @@ const latestNoteText = (notesLike) => {
 
 export default function WorkOrdersScreen() {
   const router = useRouter();
+  const insets = useSafeAreaInsets();
   const [me, setMe] = useState(null);
   const [workOrders, setWorkOrders] = useState([]);
   const [selectedStatus, setSelectedStatus] = useState('Today');
@@ -402,7 +404,7 @@ export default function WorkOrdersScreen() {
             <Text style={styles.statusBtnText}>Status</Text>
           </TouchableOpacity>
 
-          <TouchableOpacity
+        <TouchableOpacity
             style={styles.viewButton}
             onPress={() => router.push(`/screens/ViewWorkOrder?id=${item.id}`)}
           >
@@ -423,15 +425,17 @@ export default function WorkOrdersScreen() {
           activationDistance={12}
           onDragEnd={({ data }) => saveTodayOrder(data.map((d) => String(d.id)))}
           renderItem={({ item, drag }) => <Card item={item} drag={drag} />}
-          contentContainerStyle={styles.list}
+          // ⬇️ Safe-area aware bottom padding so last card isn't hidden
+          contentContainerStyle={[styles.list, { paddingBottom: insets.bottom + 120 }]}
           refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} />}
-          ListFooterComponent={<View style={styles.bottomSpacer} />}
+          // Extra dynamic spacer at very end for iPad home indicator / tab bar
+          ListFooterComponent={<View style={{ height: insets.bottom + 40 }} />}
         />
       </>
     ) : (
       <FlatList
         data={filteredOrders}
-        keyExtractor={(it) => String(it.id)}   // ← FIXED: removed stray ")"
+        keyExtractor={(it) => String(it.id)}
         renderItem={({ item }) => <Card item={item} />}
         contentContainerStyle={styles.list}
         refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} />}
@@ -715,9 +719,10 @@ const styles = StyleSheet.create({
   },
   partsHeaderBtnText: { color: '#fff', fontWeight: '700' },
 
-  // Increased bottom space to prevent cutoff under tab bar/home indicator
+  // List padding (base)
   list: { paddingTop: 8, paddingBottom: 16 },
 
+  // Non-Today footer spacer (Today uses dynamic footer)
   bottomSpacer: { height: 96 },
 
   card: {
