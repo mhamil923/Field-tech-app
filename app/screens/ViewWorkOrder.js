@@ -44,6 +44,85 @@ const STATUS_OPTIONS = [
   'Completed',
 ];
 
+/* ---------- auth header (match web) ---------- */
+const authHeaders = () => {
+  try {
+    const token = typeof localStorage !== 'undefined' ? localStorage.getItem('jwt') : null;
+    // React Native doesn't have localStorage; try AsyncStorage-like shim if you added one to api.
+    // If your axios instance already attaches the token, this just harmlessly adds it again.
+    return token ? { Authorization: `Bearer ${token}` } : {};
+  } catch {
+    return {};
+  }
+};
+
+/* --------------------------------------------------------------------------
+ * Notes parsing/formatting (JSON array OR legacy TEXT log)
+ * -------------------------------------------------------------------------- */
+function parseNotesArrayOrText(raw) {
+  if (!raw) return [];
+  // If it's already an array
+  if (Array.isArray(raw)) {
+    return raw.map((n) => ({
+      text: String(n?.text ?? '').trim(),
+      createdAt: n?.createdAt || n?.time || null,
+      by: n?.by || n?.author || n?.user || null,
+    }));
+  }
+  // If it's JSON-encoded
+  if (typeof raw === 'string') {
+    try {
+      const arr = JSON.parse(raw);
+      if (Array.isArray(arr)) {
+        return arr.map((n) => ({
+          text: String(n?.text ?? '').trim(),
+          createdAt: n?.createdAt || n?.time || null,
+          by: n?.by || n?.author || n?.user || null,
+        }));
+      }
+    } catch {
+      /* fall through to log parser */
+    }
+  }
+  // Legacy text log:
+  const s = String(raw);
+  const lines = s.split(/\r?\n/);
+  const entries = [];
+  let current = null;
+  const startRe = /^\[([^\]]+)\]\s*([^:]+):\s*(.*)$/;
+
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i];
+    const m = line.match(startRe);
+    if (m) {
+      if (current) entries.push({ ...current });
+      current = {
+        createdAt: m[1],
+        by: (m[2] || '').trim(),
+        text: m[3] ? m[3] : '',
+      };
+      continue;
+    }
+    if (/^\s*$/.test(line)) {
+      if (current) {
+        entries.push({ ...current });
+        current = null;
+      }
+      continue;
+    }
+    if (current) current.text = (current.text ? current.text + '\n' : '') + line;
+  }
+  if (current) entries.push({ ...current });
+  return entries;
+}
+
+const sortNotesDesc = (arr = []) =>
+  [...arr].sort((a, b) => {
+    const ta = new Date(a?.createdAt || 0).getTime();
+    const tb = new Date(b?.createdAt || 0).getTime();
+    return tb - ta;
+  });
+
 /**
  * Read-only multi-page PDF viewer using pdf.js (for lightbox)
  */
@@ -62,124 +141,56 @@ const PDF_VIEWER_HTML = `
     height:100%;
     overflow-y:scroll;
     -webkit-overflow-scrolling:touch;
-    overscroll-behavior: contain; /* helps momentum scroll */
+    overscroll-behavior: contain;
   }
   #pages { padding:8px; display:flex; flex-direction:column; align-items:center; }
-
-  /* NEW: allow vertical pan on the wrapper */
-  .pageWrap {
-    margin-bottom:16px;
-    width:100%;
-    max-width:1100px;
-    display:flex;
-    justify-content:center;
-    touch-action: pan-y; /* <-- key fix */
-  }
-
-  canvas.page {
-    width:100%;
-    height:auto;
-    background:#fafafa;
-    box-shadow:0 2px 6px rgba(0,0,0,.35);
-    border-radius:6px;
-
-    /* NEW: let the page scroll by NOT catching touches on canvas */
-    touch-action: pan-y;   /* allow vertical panning */
-    pointer-events: none;  /* don't swallow touch/mouse events */
-  }
-
+  .pageWrap { margin-bottom:16px; width:100%; max-width:1100px; display:flex; justify-content:center; touch-action: pan-y; }
+  canvas.page { width:100%; height:auto; background:#fafafa; box-shadow:0 2px 6px rgba(0,0,0,.35); border-radius:6px; touch-action: pan-y; pointer-events: none; }
   #loader { color:#fff; text-align:center; padding:20px; font-size:16px; }
-  #pageIndicator {
-    position:fixed;
-    bottom:12px;
-    right:16px;
-    background:rgba(0,0,0,0.65);
-    color:#fff;
-    padding:6px 10px;
-    border-radius:8px;
-    font-size:14px;
-    font-weight:600;
-    z-index:1000;
-  }
+  #pageIndicator { position:fixed; bottom:12px; right:16px; background:rgba(0,0,0,0.65); color:#fff; padding:6px 10px; border-radius:8px; font-size:14px; font-weight:600; z-index:1000; }
 </style>
 </head>
 <body>
   <div id="loader">Loading PDF…</div>
   <div id="pages"></div>
   <div id="pageIndicator" style="display:none;">Page 1 of 1</div>
-
   <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
   <script>
     pdfjsLib.GlobalWorkerOptions.workerSrc="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js";
-
-    function b64ToUint8(b64){
-      const bin=atob(b64);
-      const bytes=new Uint8Array(bin.length);
-      for(let i=0;i<bin.length;i++)bytes[i]=bin.charCodeAt(i);
-      return bytes;
-    }
-
+    function b64ToUint8(b64){const bin=atob(b64);const bytes=new Uint8Array(bin.length);for(let i=0;i<bin.length;i++)bytes[i]=bin.charCodeAt(i);return bytes;}
     async function renderAllPages(){
-      const b64=window.PDF_BASE64||'';
-      if(!b64){ document.getElementById('loader').innerText='Missing PDF data.'; return; }
+      const b64=window.PDF_BASE64||''; if(!b64){ document.getElementById('loader').innerText='Missing PDF data.'; return; }
       try{
         const pdfDoc=await pdfjsLib.getDocument({data:b64ToUint8(b64)}).promise;
-        const pagesContainer=document.getElementById('pages');
-        const loader=document.getElementById('loader');
-        loader.remove();
-
+        const pagesContainer=document.getElementById('pages'); const loader=document.getElementById('loader'); loader.remove();
         for(let i=1;i<=pdfDoc.numPages;i++){
           const page=await pdfDoc.getPage(i);
           const viewport=page.getViewport({scale:1.2});
-          const wrap=document.createElement('div');
-          wrap.className='pageWrap';
-          const canvas=document.createElement('canvas');
-          canvas.className='page';
-          const context=canvas.getContext('2d');
-          canvas.height=viewport.height;
-          canvas.width=viewport.width;
-          wrap.appendChild(canvas);
-          pagesContainer.appendChild(wrap);
+          const wrap=document.createElement('div'); wrap.className='pageWrap';
+          const canvas=document.createElement('canvas'); canvas.className='page';
+          const context=canvas.getContext('2d'); canvas.height=viewport.height; canvas.width=viewport.width;
+          wrap.appendChild(canvas); pagesContainer.appendChild(wrap);
           await page.render({canvasContext:context,viewport}).promise;
         }
-
-        // Page indicator logic
-        const indicator=document.getElementById('pageIndicator');
-        indicator.style.display='block';
+        const indicator=document.getElementById('pageIndicator'); indicator.style.display='block';
         const total=pdfDoc.numPages;
         function updatePageIndicator(){
-          const wraps=document.querySelectorAll('.pageWrap');
-          let current=1;
-          for(let i=0;i<wraps.length;i++){
-            const rect=wraps[i].getBoundingClientRect();
-            if(rect.top<window.innerHeight*0.5) current=i+1;
-          }
-          indicator.textContent=\`Page \${current} of \${total}\`;
+          const wraps=document.querySelectorAll('.pageWrap'); let current=1;
+          for(let i=0;i<wraps.length;i++){ const rect=wraps[i].getBoundingClientRect(); if(rect.top<window.innerHeight*0.5) current=i+1; }
+          indicator.textContent='Page '+current+' of '+total;
         }
-        // NEW: passive scroll listener for smoother scrolling
-        window.addEventListener('scroll',updatePageIndicator,{passive:true});
-        updatePageIndicator();
-
-        // Report height to React Native
-        setTimeout(()=>{
-          const h=Math.max(document.body.scrollHeight,document.documentElement.scrollHeight);
-          window.ReactNativeWebView?.postMessage('HEIGHT:'+h);
-        },800);
-
-      }catch(e){
-        document.getElementById('loader').innerText='Error loading PDF: '+e.message;
-        window.ReactNativeWebView?.postMessage('ERROR:'+e.message);
-      }
+        window.addEventListener('scroll',updatePageIndicator,{passive:true}); updatePageIndicator();
+        setTimeout(()=>{ const h=Math.max(document.body.scrollHeight,document.documentElement.scrollHeight); window.ReactNativeWebView?.postMessage('HEIGHT:'+h); },800);
+      }catch(e){ document.getElementById('loader').innerText='Error loading PDF: '+e.message; window.ReactNativeWebView?.postMessage('ERROR:'+e.message); }
     }
-
     document.addEventListener('DOMContentLoaded',renderAllPages);
   </script>
 </body>
 </html>
 `;
+
 /**
  * PDF Annotator (used for "Annotate & Sign PDF")
- * — scrollable by default; overlay disabled until Draw Mode is enabled
  */
 const ANNOTATOR_HTML = `
 <!doctype html>
@@ -199,7 +210,7 @@ const ANNOTATOR_HTML = `
   #pages { padding: 8px; }
   .pageWrap { position:relative; margin: 0 auto 16px; max-width: 900px; }
   canvas.page { width:100%; height:auto; display:block; background:#fafafa; border-radius:6px; }
-  canvas.overlay { position:absolute; left:0; top:0; pointer-events:none; } /* start disabled so scrolling works */
+  canvas.overlay { position:absolute; left:0; top:0; pointer-events:none; }
 </style>
 </head>
 <body>
@@ -480,13 +491,6 @@ export default function ViewWorkOrder() {
   };
   // -------------------------------------------------------
 
-  const sortNotesDesc = (arr = []) =>
-    [...arr].sort((a, b) => {
-      const ta = new Date(a?.createdAt || 0).getTime();
-      const tb = new Date(b?.createdAt || 0).getTime();
-      return tb - ta;
-    });
-
   // Utility to normalize list/CSV fields into URLs
   const toUrlArray = (val) => {
     if (!val) return [];
@@ -504,25 +508,21 @@ export default function ViewWorkOrder() {
   const fetchWorkOrder = useCallback(async () => {
     if (!workOrderId) return;
     try {
-      const { data } = await api.get(`/work-orders/${workOrderId}`);
+      const { data } = await api.get(`/work-orders/${workOrderId}`, { headers: authHeaders() });
       setWorkOrder(data);
 
-      // Notes
-      const parsedNotes = Array.isArray(data.notes)
-        ? data.notes
-        : data.notes
-        ? (() => { try { return JSON.parse(data.notes); } catch { return []; } })()
-        : [];
-      setNotes(sortNotesDesc(parsedNotes));
+      // Notes (supports array or legacy TEXT)
+      const parsed = parseNotesArrayOrText(data?.notes);
+      setNotes(sortNotesDesc(parsed));
 
       // Photos
-      const photoKeys = (data.photoPath || '')
+      const photoKeys = (data?.photoPath || '')
         .split(',')
         .map(s => s.trim())
         .filter(Boolean);
       setPhotos(photoKeys.map(k => fileUrl(k)));
-    } catch {
-      Alert.alert('Error', 'Failed to load work order.');
+    } catch (err) {
+      Alert.alert('Error', err?.response?.data?.error || 'Failed to load work order.');
     }
   }, [workOrderId]);
 
@@ -597,16 +597,41 @@ export default function ViewWorkOrder() {
     loadDocIntoModal(docItems[pi].url);
   };
 
+  /* ---------- ADD NOTE (FIXED like web) ---------- */
   const addNote = async () => {
-    if (!newNoteText.trim()) return;
+    const text = newNoteText.trim();
+    if (!text) return;
+
     try {
-      const { data } = await api.post(`/work-orders/${workOrderId}/notes`, { text: newNoteText.trim() });
-      setNewNoteText('');
-      setShowAddNoteModal(false);
-      setNotes(sortNotesDesc(data.notes || []));
-    } catch (err) {
-      Alert.alert('Error', err?.response?.data?.error || err.message);
+      // Primary: EXACT match to working curl
+      await api.put(
+        `/work-orders/${workOrderId}/notes`,
+        { notes: text, append: true },
+        { headers: { 'Content-Type': 'application/json', ...authHeaders() } }
+      );
+    } catch (err1) {
+      // Fallback: some deployments accept "text" instead of "notes"
+      try {
+        await api.put(
+          `/work-orders/${workOrderId}/notes`,
+          { text, append: true },
+          { headers: { 'Content-Type': 'application/json', ...authHeaders() } }
+        );
+      } catch (err2) {
+        const msg =
+          err2?.response?.data?.error ||
+          err1?.response?.data?.error ||
+          err2?.message ||
+          err1?.message ||
+          'Failed to add note.';
+        Alert.alert('Error', msg);
+        return;
+      }
     }
+
+    setNewNoteText('');
+    setShowAddNoteModal(false);
+    await fetchWorkOrder();
   };
 
   // keep uploads smaller
@@ -641,7 +666,7 @@ export default function ViewWorkOrder() {
     }
 
     try {
-      await api.put(`/work-orders/${workOrderId}/edit`, form, { headers: { 'Content-Type': 'multipart/form-data' } });
+      await api.put(`/work-orders/${workOrderId}/edit`, form, { headers: { 'Content-Type': 'multipart/form-data', ...authHeaders() } });
       fetchWorkOrder();
       Alert.alert('Success', 'Photo taken!');
     } catch (err) {
@@ -668,7 +693,7 @@ export default function ViewWorkOrder() {
     }
 
     try {
-      await api.put(`/work-orders/${workOrderId}/edit`, form, { headers: { 'Content-Type': 'multipart/form-data' } });
+      await api.put(`/work-orders/${workOrderId}/edit`, form, { headers: { 'Content-Type': 'multipart/form-data', ...authHeaders() } });
       fetchWorkOrder();
       Alert.alert('Success', 'Photos uploaded!');
     } catch (err) {
@@ -687,7 +712,7 @@ export default function ViewWorkOrder() {
         style: 'destructive',
         onPress: async () => {
           try {
-            await api.delete(`/work-orders/${workOrderId}/attachment`, { data: { photoPath: keys[idx] } });
+            await api.delete(`/work-orders/${workOrderId}/attachment`, { data: { photoPath: keys[idx] }, headers: authHeaders() });
             fetchWorkOrder();
             Alert.alert('Deleted');
           } catch (err) {
@@ -734,7 +759,6 @@ export default function ViewWorkOrder() {
   // If the user taps "Annotate" from inside the Lightbox, close it first then open annotator
   const openAnnotatorFromLightbox = async () => {
     setDocModalVisible(false);
-    // small delay to let the modal dismiss animation finish; prevents z-index conflicts
     setTimeout(() => { openAnnotator(); }, 250);
   };
 
@@ -754,7 +778,7 @@ export default function ViewWorkOrder() {
         const form = new FormData();
         const name = `WO-${workOrder?.poNumber || workOrderId}-signed.pdf`;
         form.append('pdfFile', { uri: signedUri, name, type: 'application/pdf' });
-        await api.put(`/work-orders/${workOrderId}/edit`, form, { headers: { 'Content-Type': 'multipart/form-data' } });
+        await api.put(`/work-orders/${workOrderId}/edit`, form, { headers: { 'Content-Type': 'multipart/form-data', ...authHeaders() } });
         setAnnotateVisible(false);
         fetchWorkOrder();
         Alert.alert('Success', 'Signed PDF uploaded.');
@@ -777,7 +801,7 @@ export default function ViewWorkOrder() {
         const processed = await processImageForUpload(jpgPath);
         const form = new FormData();
         form.append('photoFile', { uri: processed, name: `drawing-note-${Date.now()}.jpg`, type: 'image/jpeg' });
-        await api.put(`/work-orders/${workOrderId}/edit`, form, { headers: { 'Content-Type': 'multipart/form-data' } });
+        await api.put(`/work-orders/${workOrderId}/edit`, form, { headers: { 'Content-Type': 'multipart/form-data', ...authHeaders() } });
         setSketchVisible(false);
         fetchWorkOrder();
         Alert.alert('Uploaded', 'Drawing note uploaded as photo.');
@@ -844,7 +868,7 @@ export default function ViewWorkOrder() {
     try {
       const form = new FormData();
       form.append('status', next);
-      await api.put(`/work-orders/${workOrderId}/edit`, form);
+      await api.put(`/work-orders/${workOrderId}/edit`, form, { headers: authHeaders() });
       await fetchWorkOrder();
     } catch (e) {
       setWorkOrder(w => (w ? { ...w, status: prev } : w));
@@ -940,7 +964,6 @@ export default function ViewWorkOrder() {
 
         {/* Quick actions */}
         <View style={{ marginTop: 8 }}>
-          {/* If the lightbox is open, call the special handler; otherwise open directly */}
           <TouchableOpacity
             style={[styles.buttonBase, styles.attachBtn]}
             onPress={() => (docModalVisible ? openAnnotatorFromLightbox() : openAnnotator())}
@@ -1204,26 +1227,26 @@ export default function ViewWorkOrder() {
             )}
 
             {!!docB64 && !docError && (
-<WebView
-  originWhitelist={['*']}
-  source={{ html: PDF_VIEWER_HTML }}
-  javaScriptEnabled
-  scrollEnabled
-  nestedScrollEnabled
-  showsVerticalScrollIndicator
-  automaticallyAdjustContentInsets={false}
-  onMessage={(e) => {
-    const msg = e?.nativeEvent?.data || '';
-    if (msg.startsWith('HEIGHT:')) {
-      const h = parseInt(msg.slice(7), 10);
-      if (Number.isFinite(h)) setDocHeight(Math.min(h + 200, screenHeight * 5));
-    } else if (msg.startsWith('ERROR:')) {
-      setDocError(msg.slice(6));
-    }
-  }}
-  injectedJavaScriptBeforeContentLoaded={`window.PDF_BASE64 = ${JSON.stringify(docB64)}; true;`}
-  style={{ flex: 1, height: docHeight, backgroundColor: '#000' }}
-/>
+              <WebView
+                originWhitelist={['*']}
+                source={{ html: PDF_VIEWER_HTML }}
+                javaScriptEnabled
+                scrollEnabled
+                nestedScrollEnabled
+                showsVerticalScrollIndicator
+                automaticallyAdjustContentInsets={false}
+                onMessage={(e) => {
+                  const msg = e?.nativeEvent?.data || '';
+                  if (msg.startsWith('HEIGHT:')) {
+                    const h = parseInt(msg.slice(7), 10);
+                    if (Number.isFinite(h)) setDocHeight(Math.min(h + 200, screenHeight * 5));
+                  } else if (msg.startsWith('ERROR:')) {
+                    setDocError(msg.slice(6));
+                  }
+                }}
+                injectedJavaScriptBeforeContentLoaded={`window.PDF_BASE64 = ${JSON.stringify(docB64)}; true;`}
+                style={{ flex: 1, height: docHeight, backgroundColor: '#000' }}
+              />
             )}
           </View>
 
