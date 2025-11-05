@@ -36,6 +36,16 @@ const STATUSES = [
 const PARTS_WAITING = 'Waiting on Parts';
 const PARTS_NEXT = 'Needs to be Scheduled';
 
+/* ---------------- auth header (safe no-op if axios already injects) ---------------- */
+const authHeaders = () => {
+  try {
+    const token = typeof localStorage !== 'undefined' ? localStorage.getItem('jwt') : null;
+    return token ? { Authorization: `Bearer ${token}` } : {};
+  } catch {
+    return {};
+  }
+};
+
 const norm = (v) => (v ?? '').toString().trim();
 const statusKey = (s) =>
   norm(s).toLowerCase().replace(/[_-]+/g, ' ').replace(/\s+/g, ' ').trim();
@@ -124,7 +134,7 @@ export default function WorkOrdersScreen() {
   useEffect(() => {
     (async () => {
       try {
-        const r = await api.get('/auth/me');
+        const r = await api.get('/auth/me', { headers: authHeaders() });
         setMe(r.data || null);
       } catch {}
     })();
@@ -132,7 +142,7 @@ export default function WorkOrdersScreen() {
 
   const fetchWorkOrders = useCallback(async () => {
     try {
-      const res = await api.get('/work-orders');
+      const res = await api.get('/work-orders', { headers: authHeaders() });
       const canon = (res.data || []).map((o) => ({
         ...o,
         status: toCanonicalStatus(o.status),
@@ -206,25 +216,64 @@ export default function WorkOrdersScreen() {
     fetchWorkOrders();
   };
 
-  const handleUpdateStatus = async (id, newStatus) => {
-    const prev = workOrders;
-    setWorkOrders(prev.map((o) => (o.id === id ? { ...o, status: newStatus } : o)));
+  /* ---------------- Status update: primary /edit (FormData), fallback JSON ---------------- */
+  const putStatus = async (id, newStatus) => {
+    // Primary: /edit with FormData (parity with web + other screens)
     try {
-      await api.put(`/work-orders/${id}`, { status: newStatus });
+      const form = new FormData();
+      form.append('status', newStatus);
+      await api.put(`/work-orders/${id}/edit`, form, {
+        headers: { 'Content-Type': 'multipart/form-data', ...authHeaders() },
+      });
+      return;
     } catch (err) {
-      console.error(err);
-      setWorkOrders(prev);
-      Alert.alert('Error', 'Failed to update status.');
+      // Fallback: JSON to /work-orders/:id (older servers)
+      await api.put(
+        `/work-orders/${id}`,
+        { status: newStatus },
+        { headers: { 'Content-Type': 'application/json', ...authHeaders() } }
+      );
     }
   };
 
+  const handleUpdateStatus = async (id, newStatus) => {
+    const prev = workOrders;
+    setWorkOrders(prev.map((o) => (o.id === id ? { ...o, status: newStatus } : o)));
+
+    try {
+      await putStatus(id, newStatus);
+      await fetchWorkOrders();
+    } catch (err) {
+      console.error(err);
+      setWorkOrders(prev);
+      const msg = err?.response?.data?.error || err?.message || 'Failed to update status.';
+      Alert.alert('Error', msg);
+    }
+  };
+
+  /* ---------------- Notes: primary {notes, append:true}, fallback {text, append:true} ------ */
   const addNote = async (id, text) => {
     const trimmed = (text || '').trim();
     if (!trimmed) return;
+
     try {
-      await api.post(`/work-orders/${id}/notes`, { text: trimmed });
-    } catch (e) {
-      console.error('Failed to add note:', e?.message || e);
+      // primary
+      await api.put(
+        `/work-orders/${id}/notes`,
+        { notes: trimmed, append: true },
+        { headers: { 'Content-Type': 'application/json', ...authHeaders() } }
+      );
+    } catch (e1) {
+      try {
+        // fallback legacy body shape
+        await api.put(
+          `/work-orders/${id}/notes`,
+          { text: trimmed, append: true },
+          { headers: { 'Content-Type': 'application/json', ...authHeaders() } }
+        );
+      } catch (e2) {
+        console.error('Failed to add note:', e2?.response?.data?.error || e2?.message || e1?.message);
+      }
     }
   };
 
@@ -294,16 +343,21 @@ export default function WorkOrdersScreen() {
     try {
       setBulkWorking(true);
       for (const id of ids) {
-        await api.put(`/work-orders/${id}`, { status: PARTS_NEXT });
-        if (bulkNote && bulkNote.trim()) {
-          await addNote(id, bulkNote.trim());
+        try {
+          await putStatus(id, PARTS_NEXT);
+          if (bulkNote && bulkNote.trim()) {
+            await addNote(id, bulkNote.trim());
+          }
+        } catch (e) {
+          // continue others but surface one error at end
+          console.error('Bulk status error for id', id, e?.response?.data?.error || e?.message);
         }
       }
       Alert.alert('Success', `Marked parts in for ${ids.length} work order(s).`);
       closeBulkModal();
       fetchWorkOrders();
     } catch (e) {
-      Alert.alert('Error', 'Failed to apply updates.');
+      Alert.alert('Error', e?.response?.data?.error || e?.message || 'Failed to apply updates.');
     } finally {
       setBulkWorking(false);
     }
@@ -404,7 +458,7 @@ export default function WorkOrdersScreen() {
             <Text style={styles.statusBtnText}>Status</Text>
           </TouchableOpacity>
 
-        <TouchableOpacity
+          <TouchableOpacity
             style={styles.viewButton}
             onPress={() => router.push(`/screens/ViewWorkOrder?id=${item.id}`)}
           >
@@ -425,10 +479,8 @@ export default function WorkOrdersScreen() {
           activationDistance={12}
           onDragEnd={({ data }) => saveTodayOrder(data.map((d) => String(d.id)))}
           renderItem={({ item, drag }) => <Card item={item} drag={drag} />}
-          // ⬇️ Safe-area aware bottom padding so last card isn't hidden
           contentContainerStyle={[styles.list, { paddingBottom: insets.bottom + 120 }]}
           refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} />}
-          // Extra dynamic spacer at very end for iPad home indicator / tab bar
           ListFooterComponent={<View style={{ height: insets.bottom + 40 }} />}
         />
       </>
