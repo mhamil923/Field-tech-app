@@ -11,6 +11,7 @@ import {
   ActivityIndicator,
   Modal,
   FlatList,
+  Platform,
 } from 'react-native';
 import { useRouter } from 'expo-router';
 import * as ImagePicker from 'expo-image-picker';
@@ -32,8 +33,15 @@ const STATUS_OPTIONS = [
   'Completed',
 ];
 
-/** Google Places API key */
+/** Google Places API key (mobile uses HTTP endpoints, not JS SDK) */
 const GOOGLE_PLACES_KEY = 'AIzaSyCVEFeBpSVhhhct5ILlOXAvEZip0B9tC4M';
+
+/** Format helpers */
+const pad2 = (n) => String(n).padStart(2, '0');
+const toLocalYYYYMMDD = (d = new Date()) =>
+  `${d.getFullYear()}-${pad2(d.getMonth() + 1)}-${pad2(d.getDate())}`;
+const toLocalHHMM = (d = new Date()) =>
+  `${pad2(d.getHours())}:${pad2(d.getMinutes())}`;
 
 export default function AddWorkOrder() {
   const router = useRouter();
@@ -46,20 +54,25 @@ export default function AddWorkOrder() {
   const [customerEmail, setCustomerEmail] = useState('');
   const [poNumber, setPoNumber] = useState('');
 
-  // NEW: split location name vs address
+  // Split location name vs address
   const [siteLocation, setSiteLocation] = useState(''); // location name (e.g., "Panda Express")
   const [siteAddress, setSiteAddress] = useState('');   // street address
 
   const [billingAddress, setBillingAddress] = useState('');
   const [problemDescription, setProblemDescription] = useState('');
 
-  // NEW: pick status from full list
+  // Status
   const [status, setStatus] = useState('Needs to be Scheduled');
   const [showStatusPicker, setShowStatusPicker] = useState(false);
 
+  // Scheduled date/time (sent as single scheduledDate)
+  const [scheduledDatePart, setScheduledDatePart] = useState(''); // YYYY-MM-DD
+  const [scheduledTimePart, setScheduledTimePart] = useState(''); // HH:mm
+
   // attachments
   const [photoUri, setPhotoUri] = useState(null);
-  const [pdfUri, setPdfUri] = useState(null);
+  const [workOrderPdfUri, setWorkOrderPdfUri] = useState(null);
+  const [estimatePdfUri, setEstimatePdfUri] = useState(null);
 
   useEffect(() => {
     (async () => {
@@ -100,24 +113,54 @@ export default function AddWorkOrder() {
     setPhotoUri(processed);
   };
 
-  const pickPdf = async () => {
+  const pickWorkOrderPdf = async () => {
     const res = await DocumentPicker.getDocumentAsync({
       type: 'application/pdf',
       multiple: false,
+      copyToCacheDirectory: true,
     });
     if (res.canceled || !res.assets?.length) return;
-    setPdfUri(res.assets[0].uri);
+    setWorkOrderPdfUri(res.assets[0].uri);
+  };
+
+  const pickEstimatePdf = async () => {
+    const res = await DocumentPicker.getDocumentAsync({
+      type: 'application/pdf',
+      multiple: false,
+      copyToCacheDirectory: true,
+    });
+    if (res.canceled || !res.assets?.length) return;
+    setEstimatePdfUri(res.assets[0].uri);
+  };
+
+  const validate = () => {
+    const missing = [];
+    if (!customer.trim()) missing.push('Customer');
+    if (!billingAddress.trim()) missing.push('Billing Address');
+    if (!problemDescription.trim()) missing.push('Problem Description');
+    if (!siteLocation.trim()) missing.push('Site Location (name)');
+    if (!siteAddress.trim()) missing.push('Site Address');
+
+    if (missing.length) {
+      Alert.alert('Missing info', `Please fill required: ${missing.join(', ')}`);
+      return false;
+    }
+
+    // If one of date/time is set, require both
+    if ((scheduledDatePart && !scheduledTimePart) || (!scheduledDatePart && scheduledTimePart)) {
+      Alert.alert('Incomplete time', 'Please set both Scheduled Date and Time, or leave both empty.');
+      return false;
+    }
+    return true;
   };
 
   const submit = async () => {
-    if (!customer.trim() || !billingAddress.trim() || !problemDescription.trim()) {
-      return Alert.alert('Missing info', 'Customer, Billing Address, and Problem Description are required.');
-    }
-    if (!siteLocation.trim()) {
-      return Alert.alert('Missing info', 'Site Location (name) is required.');
-    }
-    if (!siteAddress.trim()) {
-      return Alert.alert('Missing info', 'Site Address is required.');
+    if (!validate()) return;
+
+    // Build scheduledDate string like "YYYY-MM-DDTHH:mm"
+    let scheduledDate = '';
+    if (scheduledDatePart && scheduledTimePart) {
+      scheduledDate = `${scheduledDatePart}T${scheduledTimePart}`;
     }
 
     setBusy(true);
@@ -126,20 +169,32 @@ export default function AddWorkOrder() {
       form.append('customer', customer.trim());
       form.append('customerPhone', customerPhone.trim());
       form.append('customerEmail', customerEmail.trim());
-
       if (me?.id != null) form.append('assignedTo', String(me.id));
-      form.append('status', status); // use picked status
 
+      form.append('status', status);
       form.append('poNumber', poNumber.trim());
       form.append('siteLocation', siteLocation.trim()); // name
       form.append('siteAddress', siteAddress.trim());   // address
       form.append('billingAddress', billingAddress);
       form.append('problemDescription', problemDescription);
 
-      if (pdfUri) {
-        form.append('pdfFile', {
-          uri: pdfUri,
+      if (scheduledDate) {
+        // server normalizes this like the web app’s <input type="datetime-local">
+        form.append('scheduledDate', scheduledDate);
+      }
+
+      // Use the SAME field names as the web CRM so the backend routes are consistent
+      if (workOrderPdfUri) {
+        form.append('workOrderPdf', {
+          uri: workOrderPdfUri,
           name: `workorder-${Date.now()}.pdf`,
+          type: 'application/pdf',
+        });
+      }
+      if (estimatePdfUri) {
+        form.append('estimatePdf', {
+          uri: estimatePdfUri,
+          name: `estimate-${Date.now()}.pdf`,
           type: 'application/pdf',
         });
       }
@@ -164,6 +219,13 @@ export default function AddWorkOrder() {
     }
   };
 
+  // Prefill date/time with “now” if user taps quick set
+  const quickSetNow = () => {
+    const now = new Date();
+    setScheduledDatePart(toLocalYYYYMMDD(now));
+    setScheduledTimePart(toLocalHHMM(now));
+  };
+
   return (
     <ScrollView contentContainerStyle={styles.form} keyboardShouldPersistTaps="handled">
       <Text style={styles.title}>Add Work Order</Text>
@@ -186,9 +248,9 @@ export default function AddWorkOrder() {
       />
 
       {/* PO */}
-      <LabeledInput label="PO Number" value={poNumber} onChangeText={setPoNumber} placeholder="Optional" />
+      <LabeledInput label="PO Number (optional)" value={poNumber} onChangeText={setPoNumber} placeholder="Optional" />
 
-      {/* NEW: Site Location Name */}
+      {/* Site Location Name */}
       <LabeledInput
         required
         label="Site Location (name)"
@@ -197,7 +259,7 @@ export default function AddWorkOrder() {
         placeholder="e.g., Panda Express"
       />
 
-      {/* NEW: Site Address with Google Places autocomplete */}
+      {/* Site Address with Google Places autocomplete */}
       <PlacesAutocompleteInput
         label="Site Address"
         value={siteAddress}
@@ -210,7 +272,7 @@ export default function AddWorkOrder() {
       <LabeledInput required label="Billing Address" value={billingAddress} onChangeText={setBillingAddress} multiline />
       <LabeledInput required label="Problem Description" value={problemDescription} onChangeText={setProblemDescription} multiline />
 
-      {/* NEW: Status picker */}
+      {/* Status picker */}
       <Text style={styles.label}>Status</Text>
       <TouchableOpacity
         onPress={() => setShowStatusPicker(true)}
@@ -245,11 +307,43 @@ export default function AddWorkOrder() {
         </View>
       </Modal>
 
+      {/* Scheduled date/time */}
+      <Text style={[styles.label, { marginTop: 8 }]}>Scheduled Date & Time (optional)</Text>
+      <View style={{ flexDirection: 'row', gap: 10 }}>
+        <TextInput
+          style={[styles.input, { flex: 1 }]}
+          placeholder="YYYY-MM-DD"
+          value={scheduledDatePart}
+          onChangeText={setScheduledDatePart}
+          inputMode="numeric"
+          autoCapitalize="none"
+        />
+        <TextInput
+          style={[styles.input, { width: 120 }]}
+          placeholder="HH:mm"
+          value={scheduledTimePart}
+          onChangeText={setScheduledTimePart}
+          inputMode="numeric"
+          autoCapitalize="none"
+        />
+        <TouchableOpacity onPress={quickSetNow} style={[styles.btn, { backgroundColor: '#22c55e' }]}>
+          <Text style={styles.btnText}>Now</Text>
+        </TouchableOpacity>
+      </View>
+
       {/* Attachments */}
-      <Text style={[styles.label, { marginTop: 8 }]}>Upload PDF</Text>
-      <TouchableOpacity onPress={pickPdf} style={[styles.btn, styles.pdfBtn]}>
-        <Text style={styles.btnText}>{pdfUri ? 'Change PDF' : 'Choose PDF'}</Text>
+      <Text style={[styles.label, { marginTop: 12 }]}>Upload Work Order PDF</Text>
+      <TouchableOpacity onPress={pickWorkOrderPdf} style={[styles.btn, styles.pdfBtn]}>
+        <Text style={styles.btnText}>{workOrderPdfUri ? 'Change PDF' : 'Choose PDF'}</Text>
       </TouchableOpacity>
+
+      <Text style={[styles.label, { marginTop: 10 }]}>Upload Estimate PDF</Text>
+      <TouchableOpacity onPress={pickEstimatePdf} style={[styles.btn, styles.pdfBtn]}>
+        <Text style={styles.btnText}>{estimatePdfUri ? 'Change Estimate PDF' : 'Choose Estimate PDF'}</Text>
+      </TouchableOpacity>
+      <Text style={{ color: '#64748b', marginTop: 4 }}>
+        This will appear under <Text style={{ fontWeight: '700' }}>Estimates</Text> on the Work Order.
+      </Text>
 
       <Text style={[styles.label, { marginTop: 10 }]}>Upload Photo</Text>
       <TouchableOpacity onPress={pickPhoto} style={[styles.btn, styles.photoBtn]}>
@@ -282,7 +376,9 @@ function LabeledInput({ label, required, multiline, style, ...props }) {
 
 /**
  * Google Places Autocomplete Input
- * - v1 API first, legacy API as fallback
+ * - Uses Places v1, falls back to legacy.
+ * - FIX: keep form state (`onChangeValue`) in sync on each keystroke,
+ *   so validation sees the address even if the user doesn’t tap a suggestion.
  */
 function PlacesAutocompleteInput({ label, value, onChangeValue, googleKey, required }) {
   const [query, setQuery] = useState(value || '');
@@ -365,6 +461,7 @@ function PlacesAutocompleteInput({ label, value, onChangeValue, googleKey, requi
 
   const onChangeText = (text) => {
     setQuery(text);
+    onChangeValue?.(text); // ← keep parent state in sync while typing (fixes false "not filled out")
     setShowList(true);
     if (debounceRef.current) clearTimeout(debounceRef.current);
     debounceRef.current = setTimeout(() => runAutocomplete(text), 250);
@@ -399,7 +496,7 @@ function PlacesAutocompleteInput({ label, value, onChangeValue, googleKey, requi
       if (!formatted) formatted = await fetchDetailsLegacy(p.place_id);
       const addr = formatted || p.description || '';
       setQuery(addr);
-      onChangeValue?.(addr);
+      onChangeValue?.(addr); // also update parent state
     } catch {
       const addr = p.description || '';
       setQuery(addr);
@@ -410,7 +507,7 @@ function PlacesAutocompleteInput({ label, value, onChangeValue, googleKey, requi
   };
 
   return (
-    <View style={{ marginBottom: 14 }}>
+    <View style={{ marginBottom: 14, zIndex: Platform.OS === 'android' ? 10 : undefined }}>
       <Text style={styles.label}>
         {label} {required ? <Text style={{ color: '#ef4444' }}>*</Text> : null}
       </Text>
@@ -422,6 +519,11 @@ function PlacesAutocompleteInput({ label, value, onChangeValue, googleKey, requi
           onFocus={() => {
             setShowList(true);
             if (query && query.length >= 3) runAutocomplete(query);
+          }}
+          onBlur={() => {
+            // ensure parent value is in sync even if user never chose a suggestion
+            onChangeValue?.(query);
+            setShowList(false);
           }}
           placeholder="Start typing address…"
           autoCorrect={false}
