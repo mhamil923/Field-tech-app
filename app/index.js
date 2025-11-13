@@ -1,3 +1,4 @@
+// File: app/index.js
 import React, { useEffect, useMemo, useState, useCallback, useRef } from 'react';
 import {
   View,
@@ -33,6 +34,35 @@ export default function HomeScreen() {
   const [orders, setOrders] = useState([]);
   const [todayOrderIds, setTodayOrderIds] = useState([]);
 
+  const norm = (v) => (v ?? '').toString().trim();
+
+  // ----- Notes-notification local state (AsyncStorage-backed) -----
+  const DISMISSED_KEY = 'ftapp:dismissedNotes:v1';
+  const [dismissedKeys, setDismissedKeys] = useState(new Set());
+  const [notesRefreshTick, setNotesRefreshTick] = useState(0); // force recompute after write
+
+  const loadDismissed = useCallback(async () => {
+    try {
+      const raw = await AsyncStorage.getItem(DISMISSED_KEY);
+      const arr = raw ? JSON.parse(raw) : [];
+      setDismissedKeys(new Set(Array.isArray(arr) ? arr : []));
+    } catch {
+      setDismissedKeys(new Set());
+    }
+  }, []);
+
+  const writeDismissed = useCallback(async (nextSet) => {
+    try {
+      await AsyncStorage.setItem(DISMISSED_KEY, JSON.stringify(Array.from(nextSet)));
+      setDismissedKeys(new Set(nextSet));
+      setNotesRefreshTick((t) => t + 1);
+    } catch {}
+  }, []);
+
+  // more stable key: orderId + createdISO + text prefix
+  const makeNoteKey = (orderId, createdISO, text) =>
+    `${orderId}:${createdISO}:${(text || '').slice(0, 64)}`;
+
   // key shared with WorkOrdersScreen
   const todayKey = `woOrder:${moment().format('YYYY-MM-DD')}`;
 
@@ -64,43 +94,25 @@ export default function HomeScreen() {
   useEffect(() => {
     fetchOrders();
     loadTodayOrder();
-  }, [fetchOrders, loadTodayOrder]);
+    loadDismissed();
+  }, [fetchOrders, loadTodayOrder, loadDismissed]);
 
   // Refresh when returning to Home
   useFocusEffect(
     useCallback(() => {
       fetchOrders();
       loadTodayOrder();
-    }, [fetchOrders, loadTodayOrder])
+      loadDismissed();
+    }, [fetchOrders, loadTodayOrder, loadDismissed])
   );
 
-  // Helpers
-  const getLatestNote = (item) => {
-    try {
-      let arr = [];
-      if (Array.isArray(item?.notes)) arr = item.notes;
-      else if (typeof item?.notes === 'string') {
-        try { arr = JSON.parse(item.notes); } catch { arr = []; }
-      }
-      if (!arr.length) return null;
-      const sorted = [...arr].sort((a, b) => {
-        const ta = new Date(a?.createdAt || 0).getTime();
-        const tb = new Date(b?.createdAt || 0).getTime();
-        return tb - ta;
-      });
-      const n = sorted[0] || {};
-      const time = n?.createdAt ? moment(n.createdAt).format('YYYY-MM-DD HH:mm') : '';
-      const by = n?.by ? ` • ${n.by}` : '';
-      const text = String(n?.text || '').trim().replace(/\s+/g, ' ');
-      return { time, by, text };
-    } catch {
-      return null;
-    }
-  };
+  /* =========================
+     Helpers
+  ========================= */
 
   const orderBySavedIds = (list, idOrder) => {
     if (!idOrder?.length) return list;
-    const map = new Map(list.map(o => [String(o?.id ?? ''), o]));
+    const map = new Map(list.map((o) => [String(o?.id ?? ''), o]));
     const ordered = [];
     for (const id of idOrder) {
       if (map.has(id)) {
@@ -127,17 +139,188 @@ export default function HomeScreen() {
   }, [orders, todayOrderIds, startOfToday, endOfToday]);
 
   // Upcoming: next 7 days (tomorrow .. +7)
-  const upcomingOrders = useMemo(() => {
-    return orders
-      .filter((o) => {
-        if (!o?.scheduledDate) return false;
-        const d = moment(o.scheduledDate);
-        return d.isValid() && d.isAfter(endOfToday) && d.isSameOrBefore(endOf7Days);
-      })
-      .sort((a, b) => new Date(a.scheduledDate) - new Date(b.scheduledDate));
-  }, [orders, endOfToday, endOf7Days]);
+  const upcomingOrders = useMemo(
+    () =>
+      orders
+        .filter((o) => {
+          if (!o?.scheduledDate) return false;
+          const d = moment(o.scheduledDate);
+          return d.isValid() && d.isAfter(endOfToday) && d.isSameOrBefore(endOf7Days);
+        })
+        .sort((a, b) => new Date(a.scheduledDate) - new Date(b.scheduledDate)),
+    [orders, endOfToday, endOf7Days]
+  );
+
+  /* =========================
+     Notes helpers (robust)
+  ========================= */
+
+  // 1) Parse a notes-like field into an array of note objects/strings
+  const parseNotesField = (notesLike) => {
+    if (!notesLike) return [];
+    if (Array.isArray(notesLike)) return notesLike;
+
+    if (typeof notesLike === 'string') {
+      // Try JSON first
+      try {
+        const arr = JSON.parse(notesLike);
+        if (Array.isArray(arr)) return arr;
+      } catch {
+        // Not JSON; treat as plain text blob
+        const lines = notesLike
+          .split(/\r?\n\r?\n|\r?\n/g)
+          .map((s) => s.trim())
+          .filter(Boolean);
+        return lines.map((line) => ({ text: line }));
+      }
+      return [];
+    }
+
+    if (typeof notesLike === 'object') {
+      if (Array.isArray(notesLike.items)) return notesLike.items;
+      if (Array.isArray(notesLike.list)) return notesLike.list;
+      if (Array.isArray(notesLike.notes)) return notesLike.notes;
+    }
+
+    return [];
+  };
+
+  // 2) Gather all possible notes arrays on an order
+  const getAllNotesForOrder = (order) => {
+    const candidates = [
+      order?.notes,
+      order?.internalNotes,
+      order?.comments,
+      order?.noteLog,
+      order?.activity?.notes,
+      order?.latestNotes,
+    ];
+    const all = [];
+    for (const c of candidates) {
+      const arr = parseNotesField(c);
+      if (arr?.length) all.push(...arr);
+    }
+    return all;
+  };
+
+  // 3) Extract a moment() timestamp from a note & its order context
+  const extractNoteMoment = (note, order) => {
+    let raw =
+      note?.createdAt ??
+      note?.created_at ??
+      note?.date ??
+      note?.timestamp ??
+      note?.time ??
+      null;
+
+    // If missing, try to pull a date-like token from the note text
+    if (raw == null && typeof note?.text === 'string') {
+      const t = note.text;
+      const isoMatch =
+        t.match(/\b\d{4}-\d{2}-\d{2}[ T]\d{2}:\d{2}(?::\d{2})?(?:Z|[+\-]\d{2}:?\d{2})?\b/) ||
+        t.match(/\b\d{4}-\d{2}-\d{2}\b/);
+      const usMatch =
+        t.match(/\b\d{1,2}\/\d{1,2}\/\d{2,4}(?:[ T]\d{1,2}:\d{2}(?:\s?[AP]M)?)?\b/i);
+      raw = (isoMatch && isoMatch[0]) || (usMatch && usMatch[0]) || null;
+    }
+
+    // Fallbacks: order-level timestamps
+    if (raw == null) {
+      raw = order?.lastNoteAt || order?.updatedAt || order?.createdAt || null;
+    }
+
+    if (raw == null) return null;
+
+    if (typeof raw === 'number') {
+      if (raw < 10_000_000_000) raw = raw * 1000; // seconds -> ms
+      return moment(raw);
+    }
+
+    if (typeof raw === 'string') {
+      if (moment(raw, moment.ISO_8601, true).isValid()) return moment(raw);
+      const m = moment(raw, ['YYYY-MM-DD HH:mm:ss', 'YYYY-MM-DD', 'M/D/YYYY h:mm A', 'M/D/YYYY'], true);
+      return m.isValid() ? m : moment(raw);
+    }
+
+    return null;
+  };
+
+  // ===== Weekly Notes panel (last 7 days, inclusive) =====
+  const weeklyNotes = useMemo(() => {
+    const oneWeekAgo = moment().subtract(7, 'days');
+    const items = [];
+
+    for (const o of orders) {
+      const rawNotes = getAllNotesForOrder(o);
+      if (!rawNotes.length) continue;
+
+      for (const n of rawNotes) {
+        const created = extractNoteMoment(n, o);
+        if (!created || !created.isValid()) continue;
+        if (!created.isSameOrAfter(oneWeekAgo)) continue;
+
+        const createdISO = created.toISOString();
+        const text = n?.text || n?.note || n?.message || String(n || '');
+        const by = n?.by || n?.user || n?.author || '';
+
+        const key = makeNoteKey(o.id, createdISO, text);
+        if (dismissedKeys.has(key)) continue;
+
+        items.push({
+          key,
+          orderId: o.id,
+          workOrderNumber: o.workOrderNumber || null,
+          customer: o.customer || '—',
+          site: norm(o.siteLocation) || norm(o.siteName) || norm(o.siteLocationName) || '—',
+          text,
+          by,
+          createdAt: createdISO,
+        });
+      }
+    }
+
+    items.sort((a, b) => moment(b.createdAt).valueOf() - moment(a.createdAt).valueOf());
+    return items;
+  }, [orders, dismissedKeys, notesRefreshTick]);
+
+  const markNoteReadAndOpen = async (note) => {
+    const next = new Set(dismissedKeys);
+    next.add(note.key);
+    await writeDismissed(next);
+    navigateOnce(() => router.push(`/screens/ViewWorkOrder?id=${note.orderId}`));
+  };
+
+  const markAllWeeklyNotesRead = async () => {
+    if (!weeklyNotes.length) return;
+    const next = new Set(dismissedKeys);
+    for (const n of weeklyNotes) next.add(n.key);
+    await writeDismissed(next);
+  };
 
   const woNumber = (o) => (o?.workOrderNumber ? String(o.workOrderNumber) : '—');
+
+  // Same as before: card for agenda/upcoming
+  const getLatestNote = (item) => {
+    try {
+      const arr = getAllNotesForOrder(item);
+      if (!arr.length) return null;
+
+      const sorted = [...arr].sort((a, b) => {
+        const ta = extractNoteMoment(a, item);
+        const tb = extractNoteMoment(b, item);
+        return (tb ? tb.valueOf() : 0) - (ta ? ta.valueOf() : 0);
+      });
+      const n = sorted[0] || {};
+      const created = extractNoteMoment(n, item);
+      const time = created && created.isValid() ? created.format('YYYY-MM-DD HH:mm') : '';
+      const by = n?.by || n?.user || n?.author || '';
+      const bySuffix = by ? ` • ${by}` : '';
+      const text = String(n?.text || n?.note || n?.message || '').trim().replace(/\s+/g, ' ');
+      return { time, by: bySuffix, text };
+    } catch {
+      return null;
+    }
+  };
 
   const renderCard = (order) => {
     const latest = getLatestNote(order);
@@ -159,7 +342,8 @@ export default function HomeScreen() {
             {latest ? (
               <View style={styles.latestNoteBox}>
                 <Text style={styles.latestNoteMeta} numberOfLines={1}>
-                  {latest.time}{latest.by}
+                  {latest.time}
+                  {latest.by}
                 </Text>
                 <Text style={styles.latestNoteText} numberOfLines={3}>
                   {latest.text}
@@ -187,6 +371,45 @@ export default function HomeScreen() {
     <ScrollView contentContainerStyle={styles.container}>
       <Text style={styles.header}>Welcome to the CRM Dashboard</Text>
 
+      {/* ===== Notes (This Week) ===== */}
+      <View style={styles.section}>
+        <View style={styles.sectionHeaderRow}>
+          <Text style={styles.sectionTitle}>Notes (This Week)</Text>
+          {weeklyNotes.length > 0 && (
+            <TouchableOpacity onPress={markAllWeeklyNotesRead} style={styles.markAllBtn}>
+              <Text style={styles.markAllText}>Mark All Read</Text>
+            </TouchableOpacity>
+          )}
+        </View>
+
+        {weeklyNotes.length ? (
+          weeklyNotes.map((n) => (
+            <TouchableOpacity
+              key={n.key}
+              style={styles.noteCard}
+              onPress={() => markNoteReadAndOpen(n)}
+              activeOpacity={0.7}
+            >
+              <View style={styles.noteHeaderRow}>
+                <Text style={styles.noteWo}>WO: {n.workOrderNumber || n.orderId}</Text>
+                <Text style={styles.noteMeta}>
+                  {moment(n.createdAt).fromNow()} {n.by ? `• ${n.by}` : ''}
+                </Text>
+              </View>
+              <Text style={styles.noteSubMeta} numberOfLines={1}>
+                {n.customer} • {n.site}
+              </Text>
+              <Text style={styles.noteText} numberOfLines={3}>
+                {n.text}
+              </Text>
+            </TouchableOpacity>
+          ))
+        ) : (
+          <Text style={styles.noData}>No new notes from the past 7 days.</Text>
+        )}
+      </View>
+
+      {/* ===== Agenda for Today ===== */}
       <View style={styles.section}>
         <Text style={styles.sectionTitle}>
           Agenda for Today ({startOfToday.format('YYYY-MM-DD')})
@@ -198,6 +421,7 @@ export default function HomeScreen() {
         )}
       </View>
 
+      {/* ===== Upcoming (next 7 days) ===== */}
       <View style={styles.section}>
         <Text style={styles.sectionTitle}>Upcoming Work Orders (next 7 days)</Text>
         {upcomingOrders.length ? (
@@ -223,16 +447,53 @@ const styles = StyleSheet.create({
     textAlign: 'center',
     color: '#2B2D42',
   },
+
   section: {
     marginBottom: 24,
+  },
+  sectionHeaderRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    marginBottom: 8,
   },
   sectionTitle: {
     fontSize: 20,
     fontWeight: '600',
-    marginBottom: 8,
     color: '#3D5A80',
   },
+  markAllBtn: {
+    paddingHorizontal: 10,
+    paddingVertical: 6,
+    borderRadius: 16,
+    backgroundColor: '#E2E8F0',
+  },
+  markAllText: {
+    color: '#0F172A',
+    fontWeight: '600',
+    fontSize: 12,
+  },
 
+  // Note card styles
+  noteCard: {
+    backgroundColor: '#FFFFFF',
+    padding: 12,
+    borderRadius: 8,
+    borderWidth: 1,
+    borderColor: '#E2E8F0',
+    marginBottom: 10,
+  },
+  noteHeaderRow: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    marginBottom: 2,
+  },
+  noteWo: { fontWeight: '700', color: '#0F172A' },
+  noteMeta: { color: '#64748B', fontSize: 12 },
+  noteSubMeta: { color: '#64748B', fontSize: 12, marginBottom: 6 },
+  noteText: { color: '#0F172A', fontSize: 14 },
+
+  // Existing card list styles
   card: {
     backgroundColor: '#FFFFFF',
     padding: 16,
