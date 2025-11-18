@@ -124,7 +124,7 @@ const sortNotesDesc = (arr = []) =>
   });
 
 /**
- * Read-only multi-page PDF viewer using pdf.js (for lightbox)
+ * Read-only multi-page PDF viewer using pdf.js (for lightbox / attachments)
  */
 const PDF_VIEWER_HTML = `
 <!doctype html>
@@ -350,7 +350,7 @@ const ANNOTATOR_HTML = `
 const SKETCH_HTML = `
 <!doctype html>
 <html>
-<head>
+head>
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no" />
 <title>Draw Note</title>
@@ -426,7 +426,7 @@ export default function ViewWorkOrder() {
   const router = useRouter();
 
   const [workOrder, setWorkOrder] = useState(null);
-  const [photos, setPhotos] = useState([]);
+  const [photos, setPhotos] = useState([]); // image URLs only
   const [notes, setNotes] = useState([]);
 
   // Notes modal
@@ -454,11 +454,11 @@ export default function ViewWorkOrder() {
   const [viewerIndex, setViewerIndex] = useState(0);
   const [returnToAttachments, setReturnToAttachments] = useState(false);
 
-  // NEW: Lightbox for PDFs (tiles)
+  // Lightbox for PDFs (WO/EST/PO or Attachments)
   const [docModalVisible, setDocModalVisible] = useState(false);
-  const [docGroup, setDocGroup] = useState(null); // 'WO' | 'EST' | 'PO'
+  const [docGroup, setDocGroup] = useState(null); // 'WO' | 'EST' | 'PO' | 'ATTACH'
   const [docIndex, setDocIndex] = useState(0);
-  const [docItems, setDocItems] = useState([]);  // [{title, path, url}]
+  const [docItems, setDocItems] = useState([]);  // [{title, url}]
   const [docB64, setDocB64] = useState(null);
   const [docHeight, setDocHeight] = useState(Math.max(600, screenHeight * 0.85));
   const [docError, setDocError] = useState(null);
@@ -515,12 +515,24 @@ export default function ViewWorkOrder() {
       const parsed = parseNotesArrayOrText(data?.notes);
       setNotes(sortNotesDesc(parsed));
 
-      // Photos
-      const photoKeys = (data?.photoPath || '')
+      // Attachments: photoPath may contain images and PDFs (sign-off sheets)
+      const rawKeys = (data?.photoPath || '')
         .split(',')
         .map(s => s.trim())
         .filter(Boolean);
-      setPhotos(photoKeys.map(k => fileUrl(k)));
+
+      const allUrls = rawKeys.map(k => fileUrl(k));
+
+      // Only keep *image* URLs in `photos` for the image viewer
+      const imageUrls = allUrls.filter((u) => {
+        const lower = u.toLowerCase();
+        return !(
+          lower.endsWith('.pdf') ||
+          lower.includes('.pdf?') ||
+          lower.startsWith('data:application/pdf')
+        );
+      });
+      setPhotos(imageUrls);
     } catch (err) {
       Alert.alert('Error', err?.response?.data?.error || 'Failed to load work order.');
     }
@@ -702,10 +714,11 @@ export default function ViewWorkOrder() {
   };
 
   const handleDeletePhoto = (idx) => {
+    // idx is index in *attachment keys* (photoPath list) – used in Attachments modal
     const keys = (workOrder?.photoPath || '').split(',').map(s => s.trim()).filter(Boolean);
     if (idx < 0 || idx >= keys.length) return;
 
-    Alert.alert('Delete Photo?', 'This will permanently remove it.', [
+    Alert.alert('Delete Attachment?', 'This will permanently remove it.', [
       { text: 'Cancel, keep it', style: 'cancel' },
       {
         text: 'Delete',
@@ -879,6 +892,47 @@ export default function ViewWorkOrder() {
   };
   // -------------------------
 
+  // Open a PDF attachment from Attachments modal using the multi-page viewer
+  const openAttachmentPdf = (attachmentIndex) => {
+    const keys = (workOrder?.photoPath || '').split(',').map(s => s.trim()).filter(Boolean);
+    if (!keys.length) return;
+
+    const pdfItems = [];
+    let startDocIndex = 0;
+    let pdfCounter = 0;
+
+    keys.forEach((k, idx) => {
+      const url = fileUrl(k);
+      const lower = k.toLowerCase();
+      const isPdf =
+        lower.endsWith('.pdf') ||
+        lower.includes('.pdf?') ||
+        lower.startsWith('data:application/pdf');
+      if (isPdf) {
+        if (idx === attachmentIndex) {
+          startDocIndex = pdfCounter;
+        }
+        pdfItems.push({
+          title: `Attachment PDF ${pdfCounter + 1}`,
+          url,
+        });
+        pdfCounter += 1;
+      }
+    });
+
+    if (!pdfItems.length) {
+      Alert.alert('No PDF', 'No PDF attachments found.');
+      return;
+    }
+
+    setDocGroup('ATTACH');
+    setDocItems(pdfItems);
+    const safeIdx = Math.min(Math.max(0, startDocIndex), Math.max(0, pdfItems.length - 1));
+    setDocIndex(safeIdx);
+    setDocModalVisible(true);
+    loadDocIntoModal(pdfItems[safeIdx].url);
+  };
+
   return (
     <View style={styles.screen}>
       <ScrollView contentContainerStyle={styles.details} keyboardShouldPersistTaps="handled">
@@ -1033,7 +1087,7 @@ export default function ViewWorkOrder() {
         </View>
       </Modal>
 
-      {/* Attachments Gallery */}
+      {/* Attachments Gallery (photos + PDFs) */}
       <Modal
         visible={viewAttachmentsVisible}
         animationType="fade"
@@ -1044,33 +1098,86 @@ export default function ViewWorkOrder() {
       >
         <View style={styles.modal}>
           <Text style={styles.modalTitle}>Attachments</Text>
-          {photos.length === 0 ? (
-            <Text style={styles.noPhotosText}>No photos uploaded.</Text>
-          ) : (
-            <FlatList
-              data={photos}
-              keyExtractor={(_, i) => i.toString()}
-              numColumns={3}
-              contentContainerStyle={styles.galleryList}
-              renderItem={({ item, index }) => (
-                <View style={styles.thumbWrapper}>
-                  <TouchableOpacity
-                    onPress={() => {
-                      setReturnToAttachments(true);
-                      setViewerIndex(index);
-                      setPhotoViewerVisible(true);
-                      setViewAttachmentsVisible(false);
-                    }}
-                  >
-                    <Image source={{ uri: item }} style={styles.thumbnail} />
-                  </TouchableOpacity>
-                  <TouchableOpacity style={styles.deleteIcon} onPress={() => handleDeletePhoto(index)} hitSlop={{ top: 8, left: 8, right: 8, bottom: 8 }}>
-                    <Text style={styles.deleteText}>×</Text>
-                  </TouchableOpacity>
-                </View>
-              )}
-            />
-          )}
+
+          {(() => {
+            const keys = (workOrder?.photoPath || '')
+              .split(',')
+              .map(s => s.trim())
+              .filter(Boolean);
+
+            if (!keys.length) {
+              return <Text style={styles.noPhotosText}>No attachments uploaded.</Text>;
+            }
+
+            return (
+              <FlatList
+                data={keys}
+                keyExtractor={(item, i) => `${item}-${i}`}
+                numColumns={3}
+                contentContainerStyle={styles.galleryList}
+                renderItem={({ item, index }) => {
+                  const url = fileUrl(item);
+                  const lower = item.toLowerCase();
+                  const isPdf =
+                    lower.endsWith('.pdf') ||
+                    lower.includes('.pdf?') ||
+                    lower.startsWith('data:application/pdf');
+
+                  if (isPdf) {
+                    // PDF tile (tap to open multi-page pdf.js viewer)
+                    return (
+                      <View style={styles.thumbWrapper}>
+                        <TouchableOpacity
+                          style={styles.pdfTile}
+                          onPress={() => {
+                            setViewAttachmentsVisible(false);
+                            openAttachmentPdf(index);
+                          }}
+                        >
+                          <Text style={styles.pdfIcon}>📄</Text>
+                          <Text style={styles.pdfLabel} numberOfLines={2}>PDF Attachment</Text>
+                        </TouchableOpacity>
+                        <TouchableOpacity
+                          style={styles.deleteIcon}
+                          onPress={() => handleDeletePhoto(index)}
+                          hitSlop={{ top: 8, left: 8, right: 8, bottom: 8 }}
+                        >
+                          <Text style={styles.deleteText}>×</Text>
+                        </TouchableOpacity>
+                      </View>
+                    );
+                  }
+
+                  // Image thumbnail (tap to open image viewer)
+                  return (
+                    <View style={styles.thumbWrapper}>
+                      <TouchableOpacity
+                        onPress={() => {
+                          const viewerIdx = photos.findIndex(p => p === url);
+                          if (viewerIdx !== -1) {
+                            setReturnToAttachments(true);
+                            setViewerIndex(viewerIdx);
+                            setPhotoViewerVisible(true);
+                            setViewAttachmentsVisible(false);
+                          }
+                        }}
+                      >
+                        <Image source={{ uri: url }} style={styles.thumbnail} />
+                      </TouchableOpacity>
+                      <TouchableOpacity
+                        style={styles.deleteIcon}
+                        onPress={() => handleDeletePhoto(index)}
+                        hitSlop={{ top: 8, left: 8, right: 8, bottom: 8 }}
+                      >
+                        <Text style={styles.deleteText}>×</Text>
+                      </TouchableOpacity>
+                    </View>
+                  );
+                }}
+              />
+            );
+          })()}
+
           <TouchableOpacity style={styles.cancelBtn} onPress={() => setViewAttachmentsVisible(false)}>
             <Text style={styles.cancelText}>Close</Text>
           </TouchableOpacity>
@@ -1193,7 +1300,7 @@ export default function ViewWorkOrder() {
         </SafeAreaView>
       </Modal>
 
-      {/* Document Lightbox Modal (for WO/EST/PO) */}
+      {/* Document Lightbox Modal (for WO/EST/PO/ATTACH) */}
       <Modal visible={docModalVisible} animationType="slide" onRequestClose={() => setDocModalVisible(false)}>
         <SafeAreaView style={{ flex: 1, backgroundColor: '#000' }}>
           <View style={styles.docHeader}>
@@ -1201,7 +1308,17 @@ export default function ViewWorkOrder() {
               <Text style={styles.docHeaderBtnText}>Close</Text>
             </TouchableOpacity>
             <Text style={styles.docHeaderTitle}>
-              {docItems[docIndex]?.title || (docGroup === 'WO' ? 'Work Order' : docGroup === 'EST' ? 'Estimate' : 'PO')}
+              {docItems[docIndex]?.title || (
+                docGroup === 'WO'
+                  ? 'Work Order'
+                  : docGroup === 'EST'
+                  ? 'Estimate'
+                  : docGroup === 'PO'
+                  ? 'PO'
+                  : docGroup === 'ATTACH'
+                  ? 'Attachment'
+                  : 'Document'
+              )}
               {docItems.length > 1 ? `  (${docIndex + 1}/${docItems.length})` : ''}
             </Text>
             <View style={styles.docHeaderRight}>
@@ -1355,6 +1472,20 @@ const styles = StyleSheet.create({
   cancelBtn: { backgroundColor: '#dc3545', padding: 12, borderRadius: 8, alignItems: 'center', marginTop: 16 },
   cancelText: { color: '#fff', fontWeight: '700', fontSize: 16 },
 
+  // PDF tiles inside attachments
+  pdfTile: {
+    flex: 1,
+    borderRadius: 8,
+    borderWidth: 1,
+    borderColor: '#E5E7EB',
+    backgroundColor: '#F9FAFB',
+    alignItems: 'center',
+    justifyContent: 'center',
+    padding: 6,
+  },
+  pdfIcon: { fontSize: 24, marginBottom: 4 },
+  pdfLabel: { fontSize: 11, color: '#111827', textAlign: 'center' },
+
   // Transparent overlays
   addNoteOverlay: { flex: 1, backgroundColor: 'rgba(0,0,0,0.45)', justifyContent: 'center', padding: 16 },
   addNoteContainer: { backgroundColor: '#fff', borderRadius: 12, padding: 16 },
@@ -1386,3 +1517,4 @@ const styles = StyleSheet.create({
   signBtn: { backgroundColor: '#2563EB', borderRadius: 10 },
   signBtnText: { color: '#fff', fontWeight: '800' },
 });
+
