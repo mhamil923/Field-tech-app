@@ -56,11 +56,10 @@ const displayPO = (wo, po) => (isLegacyWoInPo(wo, po) ? '' : norm(po));
 export default function HistoryScreen() {
   const router = useRouter();
 
-  const [customer, setCustomer] = useState('');
-  const [poOrWo, setPoOrWo] = useState('');          // single input -> sends to both params
-  const [siteLocation, setSiteLocation] = useState('');
+  // Single combined search query
+  const [query, setQuery] = useState('');
 
-  const [statusFilter, setStatusFilter] = useState('Any'); // new status filter
+  const [statusFilter, setStatusFilter] = useState('Any'); // status filter
 
   const [results, setResults] = useState([]);
   const [refreshing, setRefreshing] = useState(false);
@@ -69,27 +68,43 @@ export default function HistoryScreen() {
   const runSearch = useCallback(async () => {
     setLoading(true);
     try {
-      const params = {
-        customer,
-        poNumber: poOrWo,         // server will LIKE-match PO
-        workOrderNumber: poOrWo,  // and also WO
-        siteLocation,
-      };
-      const { data } = await api.get('/work-orders/search', { params });
+      // Pull all work orders, then filter on device (matches web History page behavior)
+      const { data } = await api.get('/work-orders');
+      const listRaw = Array.isArray(data) ? data : [];
 
       // Canonicalize status consistently
-      const list = (Array.isArray(data) ? data : []).map((o) => ({
+      const list = listRaw.map((o) => ({
         ...o,
         status: toCanonicalStatus(o.status),
       }));
 
-      // Apply status filter client-side (server doesn't take status)
-      const filtered =
-        statusFilter === 'Any'
-          ? list
-          : list.filter((o) => statusKey(o.status) === statusKey(statusFilter));
+      const q = norm(query).toLowerCase();
 
-      setResults(filtered);
+      // Text search across Customer, WO, PO, Site Location
+      const textFiltered = q
+        ? list.filter((o) => {
+            const customer = (o.customer || '').toString().toLowerCase();
+            const wo = (o.workOrderNumber || '').toString().toLowerCase();
+            const po = (o.poNumber || '').toString().toLowerCase();
+            const site = (o.siteLocation || '').toString().toLowerCase();
+            return (
+              customer.includes(q) ||
+              wo.includes(q) ||
+              po.includes(q) ||
+              site.includes(q)
+            );
+          })
+        : list;
+
+      // Apply status filter client-side
+      const finalFiltered =
+        statusFilter === 'Any'
+          ? textFiltered
+          : textFiltered.filter(
+              (o) => statusKey(o.status) === statusKey(statusFilter)
+            );
+
+      setResults(finalFiltered);
     } catch (e) {
       console.error(e);
       Alert.alert('Search Error', 'Could not fetch results.');
@@ -97,9 +112,9 @@ export default function HistoryScreen() {
       setLoading(false);
       setRefreshing(false);
     }
-  }, [customer, poOrWo, siteLocation, statusFilter]);
+  }, [query, statusFilter]);
 
-  // initial load (empty params returns all)
+  // initial load (empty query returns all)
   useEffect(() => { runSearch(); }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
   const onRefresh = () => {
@@ -108,9 +123,7 @@ export default function HistoryScreen() {
   };
 
   const clearFilters = () => {
-    setCustomer('');
-    setPoOrWo('');
-    setSiteLocation('');
+    setQuery('');
     setStatusFilter('Any');
     setTimeout(runSearch, 0);
   };
@@ -132,7 +145,9 @@ export default function HistoryScreen() {
 
   const renderItem = ({ item }) => {
     const wo = norm(item.workOrderNumber) || 'N/A';
-    const po = displayPO(item.workOrderNumber, item.poNumber) || (norm(item.poNumber) ? item.poNumber : 'N/A');
+    const po =
+      displayPO(item.workOrderNumber, item.poNumber) ||
+      (norm(item.poNumber) ? item.poNumber : 'N/A');
     return (
       <View style={styles.card}>
         <Text style={styles.title}>WO: {wo}   •   PO: {po}</Text>
@@ -192,26 +207,13 @@ export default function HistoryScreen() {
       <Text style={styles.header}>History Report</Text>
 
       <View style={styles.filters}>
+        {/* Single combined search box */}
         <TextInput
-          placeholder="Customer name"
-          value={customer}
-          onChangeText={setCustomer}
+          placeholder="Search by Customer, WO #, PO #, or Site Location"
+          value={query}
+          onChangeText={setQuery}
           style={styles.input}
-          autoCapitalize="words"
-        />
-        <TextInput
-          placeholder="WO # or PO #"
-          value={poOrWo}
-          onChangeText={setPoOrWo}
-          style={styles.input}
-          autoCapitalize="characters"
-        />
-        <TextInput
-          placeholder="Site location"
-          value={siteLocation}
-          onChangeText={setSiteLocation}
-          style={styles.input}
-          autoCapitalize="words"
+          autoCapitalize="none"
         />
 
         <Text style={styles.subLabel}>Status</Text>
@@ -220,10 +222,18 @@ export default function HistoryScreen() {
         </ScrollView>
 
         <View style={styles.filterButtons}>
-          <TouchableOpacity style={[styles.button, styles.searchBtn]} onPress={runSearch} disabled={loading}>
+          <TouchableOpacity
+            style={[styles.button, styles.searchBtn]}
+            onPress={runSearch}
+            disabled={loading}
+          >
             <Text style={styles.searchBtnText}>{loading ? 'Searching…' : 'Search'}</Text>
           </TouchableOpacity>
-          <TouchableOpacity style={[styles.button, styles.clearBtn]} onPress={clearFilters} disabled={loading}>
+          <TouchableOpacity
+            style={[styles.button, styles.clearBtn]}
+            onPress={clearFilters}
+            disabled={loading}
+          >
             <Text style={styles.clearBtnText}>Clear</Text>
           </TouchableOpacity>
         </View>
