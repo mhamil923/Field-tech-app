@@ -130,7 +130,7 @@ export default function WorkOrdersScreen() {
     [todayKey]
   );
 
-  // current user (Add button)
+  // current user (Add button + jeffsr restriction)
   useEffect(() => {
     (async () => {
       try {
@@ -139,6 +139,9 @@ export default function WorkOrdersScreen() {
       } catch {}
     })();
   }, []);
+
+  // 🔒 special flag for user "jeffsr"
+  const isJeffSr = me?.username && me.username.toLowerCase() === 'jeffsr';
 
   const fetchWorkOrders = useCallback(async () => {
     try {
@@ -165,16 +168,23 @@ export default function WorkOrdersScreen() {
     loadTodayOrder();
   }, [loadTodayOrder, workOrders.length]);
 
+  // counts: for jeffsr, only count his assigned work orders
   const counts = useMemo(() => {
     const map = Object.fromEntries(STATUSES.map((s) => [s, 0]));
     let today = 0;
-    for (const o of workOrders) {
+
+    let base = workOrders;
+    if (isJeffSr && me?.id != null) {
+      base = base.filter((o) => o.assignedTo === me.id);
+    }
+
+    for (const o of base) {
       const label = toCanonicalStatus(o?.status);
       if (map[label] !== undefined) map[label] += 1;
       if (o?.scheduledDate && moment(o.scheduledDate).isSame(moment(), 'day')) today += 1;
     }
     return { byStatus: map, today };
-  }, [workOrders]);
+  }, [workOrders, isJeffSr, me]);
 
   const openInGoogleMaps = async (query) => {
     const q = encodeURIComponent(query || '');
@@ -188,15 +198,24 @@ export default function WorkOrdersScreen() {
     }
   };
 
+  // filteredOrders: for jeffsr, only show work orders assigned to him AND only Today tab is available
   const filteredOrders = useMemo(() => {
+    let base = workOrders;
+
+    if (isJeffSr && me?.id != null) {
+      base = base.filter((o) => o.assignedTo === me.id);
+    }
+
     if (selectedStatus === 'Today') {
       const today = moment().format('YYYY-MM-DD');
-      return workOrders.filter(
+      return base.filter(
         (o) => o.scheduledDate && moment(o.scheduledDate).format('YYYY-MM-DD') === today
       );
     }
-    return workOrders.filter((o) => normStatus(o.status) === normStatus(selectedStatus));
-  }, [workOrders, selectedStatus]);
+
+    // Non-jeffsr users can use status tabs
+    return base.filter((o) => normStatus(o.status) === normStatus(selectedStatus));
+  }, [workOrders, selectedStatus, isJeffSr, me]);
 
   const orderedToday = useMemo(() => {
     if (selectedStatus !== 'Today') return filteredOrders;
@@ -272,14 +291,18 @@ export default function WorkOrdersScreen() {
           { headers: { 'Content-Type': 'application/json', ...authHeaders() } }
         );
       } catch (e2) {
-        console.error('Failed to add note:', e2?.response?.data?.error || e2?.message || e1?.message);
+        console.error(
+          'Failed to add note:',
+          e2?.response?.data?.error || e2?.message || e1?.message
+        );
       }
     }
   };
 
   // ----- BULK "Parts In" helpers -----
   const waitingOrders = useMemo(
-    () => workOrders.filter((o) => normStatus(o.status) === normStatus(PARTS_WAITING)),
+    () =>
+      workOrders.filter((o) => normStatus(o.status) === normStatus(PARTS_WAITING)),
     [workOrders]
   );
 
@@ -350,60 +373,137 @@ export default function WorkOrdersScreen() {
           }
         } catch (e) {
           // continue others but surface one error at end
-          console.error('Bulk status error for id', id, e?.response?.data?.error || e?.message);
+          console.error(
+            'Bulk status error for id',
+            id,
+            e?.response?.data?.error || e?.message
+          );
         }
       }
       Alert.alert('Success', `Marked parts in for ${ids.length} work order(s).`);
       closeBulkModal();
       fetchWorkOrders();
     } catch (e) {
-      Alert.alert('Error', e?.response?.data?.error || e?.message || 'Failed to apply updates.');
+      Alert.alert(
+        'Error',
+        e?.response?.data?.error || e?.message || 'Failed to apply updates.'
+      );
     } finally {
       setBulkWorking(false);
     }
   };
 
-  const renderChips = () => (
-    <View style={styles.chipsWrap}>
-      <TouchableOpacity
-        onPress={() => setSelectedStatus('Today')}
-        style={[styles.chip, selectedStatus === 'Today' && styles.chipActive]}
-      >
-        <Text style={[styles.chipText, selectedStatus === 'Today' && styles.chipTextActive]}>
-          Today
-        </Text>
-        <View style={[styles.badge, selectedStatus === 'Today' && styles.badgeActive]}>
-          <Text style={[styles.badgeText, selectedStatus === 'Today' && styles.badgeTextActive]}>
-            {counts.today}
-          </Text>
+  // 🔹 Chips: if jeffsr, only show Today tab
+  const renderChips = () => {
+    if (isJeffSr) {
+      return (
+        <View style={styles.chipsWrap}>
+          <TouchableOpacity
+            onPress={() => setSelectedStatus('Today')}
+            style={[styles.chip, selectedStatus === 'Today' && styles.chipActive]}
+          >
+            <Text
+              style={[
+                styles.chipText,
+                selectedStatus === 'Today' && styles.chipTextActive,
+              ]}
+            >
+              Today
+            </Text>
+            <View
+              style={[
+                styles.badge,
+                selectedStatus === 'Today' && styles.badgeActive,
+              ]}
+            >
+              <Text
+                style={[
+                  styles.badgeText,
+                  selectedStatus === 'Today' && styles.badgeTextActive,
+                ]}
+              >
+                {counts.today}
+              </Text>
+            </View>
+          </TouchableOpacity>
         </View>
-      </TouchableOpacity>
+      );
+    }
 
-      {STATUSES.map((s) => (
+    // Default: Today + all statuses
+    return (
+      <View style={styles.chipsWrap}>
         <TouchableOpacity
-          key={s}
-          onPress={() => setSelectedStatus(s)}
-          style={[styles.chip, selectedStatus === s && styles.chipActive]}
+          onPress={() => setSelectedStatus('Today')}
+          style={[styles.chip, selectedStatus === 'Today' && styles.chipActive]}
         >
-          <Text style={[styles.chipText, selectedStatus === s && styles.chipTextActive]}>
-            {s}
+          <Text
+            style={[
+              styles.chipText,
+              selectedStatus === 'Today' && styles.chipTextActive,
+            ]}
+          >
+            Today
           </Text>
-          <View style={[styles.badge, selectedStatus === s && styles.badgeActive]}>
-            <Text style={[styles.badgeText, selectedStatus === s && styles.badgeTextActive]}>
-              {counts.byStatus[s]}
+          <View
+            style={[
+              styles.badge,
+              selectedStatus === 'Today' && styles.badgeActive,
+            ]}
+          >
+            <Text
+              style={[
+                styles.badgeText,
+                selectedStatus === 'Today' && styles.badgeTextActive,
+              ]}
+            >
+              {counts.today}
             </Text>
           </View>
         </TouchableOpacity>
-      ))}
-    </View>
-  );
+
+        {STATUSES.map((s) => (
+          <TouchableOpacity
+            key={s}
+            onPress={() => setSelectedStatus(s)}
+            style={[styles.chip, selectedStatus === s && styles.chipActive]}
+          >
+            <Text
+              style={[
+                styles.chipText,
+                selectedStatus === s && styles.chipTextActive,
+              ]}
+            >
+              {s}
+            </Text>
+            <View
+              style={[
+                styles.badge,
+                selectedStatus === s && styles.badgeActive,
+              ]}
+            >
+              <Text
+                style={[
+                  styles.badgeText,
+                  selectedStatus === s && styles.badgeTextActive,
+                ]}
+              >
+                {counts.byStatus[s]}
+              </Text>
+            </View>
+          </TouchableOpacity>
+        ))}
+      </View>
+    );
+  };
 
   const Card = ({ item, drag }) => {
     // Legacy-safe Site Location / Address handling
     const rawLoc = norm(item.siteLocation);
     const explicitName = norm(item.siteName) || norm(item.siteLocationName);
     let siteLocationName = explicitName;
-    let siteAddress = norm(item.siteAddress) || norm(item.serviceAddress) || norm(item.address);
+    let siteAddress =
+      norm(item.siteAddress) || norm(item.serviceAddress) || norm(item.address);
 
     if (!siteAddress && rawLoc) {
       siteAddress = rawLoc;
@@ -418,27 +518,42 @@ export default function WorkOrdersScreen() {
       <View style={styles.card}>
         <View style={styles.cardHeaderRow}>
           <Text style={styles.cardTitle}>
-            WO: {item.workOrderNumber || '—'} • PO: {displayPO(item.workOrderNumber, item.poNumber)}
+            WO: {item.workOrderNumber || '—'} • PO:{' '}
+            {displayPO(item.workOrderNumber, item.poNumber)}
           </Text>
           {selectedStatus === 'Today' && (
-            <TouchableOpacity onLongPress={drag} delayLongPress={120} style={styles.dragHandle}>
+            <TouchableOpacity
+              onLongPress={drag}
+              delayLongPress={120}
+              style={styles.dragHandle}
+            >
               <Text style={styles.dragGlyph}>≡</Text>
             </TouchableOpacity>
           )}
         </View>
 
-        <Text style={styles.cardText}>Customer: {item.customer || 'N/A'}</Text>
-        <Text style={styles.cardText}>Site Location: {siteLocationName || '—'}</Text>
+        <Text style={styles.cardText}>
+          Customer: {item.customer || 'N/A'}
+        </Text>
+        <Text style={styles.cardText}>
+          Site Location: {siteLocationName || '—'}
+        </Text>
 
         {hasAddress ? (
-          <TouchableOpacity onPress={() => openInGoogleMaps(siteAddress || siteLocationName)}>
+          <TouchableOpacity
+            onPress={() =>
+              openInGoogleMaps(siteAddress || siteLocationName)
+            }
+          >
             <Text style={styles.linkText}>Site Address: {siteAddress}</Text>
           </TouchableOpacity>
         ) : (
           <Text style={styles.cardText}>Site Address: N/A</Text>
         )}
 
-        <Text style={styles.cardText}>Problem: {item.problemDescription || 'N/A'}</Text>
+        <Text style={styles.cardText}>
+          Problem: {item.problemDescription || 'N/A'}
+        </Text>
         {!!latest && (
           <Text numberOfLines={2} style={styles.noteLine}>
             Latest Note: {latest}
@@ -446,21 +561,30 @@ export default function WorkOrdersScreen() {
         )}
         <Text style={styles.cardText}>
           Scheduled:{' '}
-          {item.scheduledDate ? moment(item.scheduledDate).format('YYYY-MM-DD HH:mm') : 'Not Scheduled'}
+          {item.scheduledDate
+            ? moment(item.scheduledDate).format('YYYY-MM-DD HH:mm')
+            : 'Not Scheduled'}
         </Text>
         <Text style={styles.cardText}>Status: {item.status}</Text>
 
         <View style={styles.actionsRow}>
           <TouchableOpacity
             style={styles.statusBtn}
-            onPress={() => setStatusModal({ id: item.id, value: item.status || STATUSES[0] })}
+            onPress={() =>
+              setStatusModal({
+                id: item.id,
+                value: item.status || STATUSES[0],
+              })
+            }
           >
             <Text style={styles.statusBtnText}>Status</Text>
           </TouchableOpacity>
 
           <TouchableOpacity
             style={styles.viewButton}
-            onPress={() => router.push(`/screens/ViewWorkOrder?id=${item.id}`)}
+            onPress={() =>
+              router.push(`/screens/ViewWorkOrder?id=${item.id}`)
+            }
           >
             <Text style={styles.viewButtonText}>View Details</Text>
           </TouchableOpacity>
@@ -477,11 +601,20 @@ export default function WorkOrdersScreen() {
           data={orderedToday}
           keyExtractor={(it) => String(it.id)}
           activationDistance={12}
-          onDragEnd={({ data }) => saveTodayOrder(data.map((d) => String(d.id)))}
+          onDragEnd={({ data }) =>
+            saveTodayOrder(data.map((d) => String(d.id)))
+          }
           renderItem={({ item, drag }) => <Card item={item} drag={drag} />}
-          contentContainerStyle={[styles.list, { paddingBottom: insets.bottom + 120 }]}
-          refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} />}
-          ListFooterComponent={<View style={{ height: insets.bottom + 40 }} />}
+          contentContainerStyle={[
+            styles.list,
+            { paddingBottom: insets.bottom + 120 },
+          ]}
+          refreshControl={
+            <RefreshControl refreshing={refreshing} onRefresh={onRefresh} />
+          }
+          ListFooterComponent={
+            <View style={{ height: insets.bottom + 40 }} />
+          }
         />
       </>
     ) : (
@@ -490,7 +623,9 @@ export default function WorkOrdersScreen() {
         keyExtractor={(it) => String(it.id)}
         renderItem={({ item }) => <Card item={item} />}
         contentContainerStyle={styles.list}
-        refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} />}
+        refreshControl={
+          <RefreshControl refreshing={refreshing} onRefresh={onRefresh} />
+        }
         ListFooterComponent={<View style={styles.bottomSpacer} />}
         ListEmptyComponent={
           !loadingFirst ? (
@@ -559,13 +694,19 @@ export default function WorkOrdersScreen() {
             {STATUSES.map((s) => (
               <TouchableOpacity
                 key={s}
-                style={[styles.statusOption, statusModal.value === s && styles.statusOptionActive]}
-                onPress={() => setStatusModal({ ...statusModal, value: s })}
+                style={[
+                  styles.statusOption,
+                  statusModal.value === s && styles.statusOptionActive,
+                ]}
+                onPress={() =>
+                  setStatusModal({ ...statusModal, value: s })
+                }
               >
                 <Text
                   style={[
                     styles.statusOptionText,
-                    statusModal.value === s && styles.statusOptionTextActive,
+                    statusModal.value === s &&
+                      styles.statusOptionTextActive,
                   ]}
                 >
                   {s}
@@ -573,10 +714,16 @@ export default function WorkOrdersScreen() {
               </TouchableOpacity>
             ))}
             <View style={styles.modalButtonsRow}>
-              <TouchableOpacity style={styles.modalBtnCancel} onPress={closeStatusModal}>
+              <TouchableOpacity
+                style={styles.modalBtnCancel}
+                onPress={closeStatusModal}
+              >
                 <Text style={styles.modalBtnText}>Cancel</Text>
               </TouchableOpacity>
-              <TouchableOpacity style={styles.modalBtnApply} onPress={applyStatusModal}>
+              <TouchableOpacity
+                style={styles.modalBtnApply}
+                onPress={applyStatusModal}
+              >
                 <Text style={styles.modalBtnText}>Apply</Text>
               </TouchableOpacity>
             </View>
@@ -599,14 +746,20 @@ export default function WorkOrdersScreen() {
             <View style={styles.bulkTopRow}>
               <TextInput
                 style={styles.searchInput}
-                placeholder='Search WO #, PO #, customer, or site...'
+                placeholder="Search WO #, PO #, customer, or site..."
                 value={bulkSearch}
                 onChangeText={setBulkSearch}
               />
-              <TouchableOpacity style={styles.bulkTopBtn} onPress={selectAll}>
+              <TouchableOpacity
+                style={styles.bulkTopBtn}
+                onPress={selectAll}
+              >
                 <Text style={styles.bulkTopBtnText}>Select All</Text>
               </TouchableOpacity>
-              <TouchableOpacity style={styles.bulkTopBtn} onPress={selectNone}>
+              <TouchableOpacity
+                style={styles.bulkTopBtn}
+                onPress={selectNone}
+              >
                 <Text style={styles.bulkTopBtnText}>Select None</Text>
               </TouchableOpacity>
             </View>
@@ -616,7 +769,9 @@ export default function WorkOrdersScreen() {
               data={filteredWaitingForModal}
               keyExtractor={(it) => String(it.id)}
               style={{ maxHeight: 380 }}
-              ItemSeparatorComponent={() => <View style={styles.rowDivider} />}
+              ItemSeparatorComponent={() => (
+                <View style={styles.rowDivider} />
+              )}
               extraData={bulkDefaultSeed}
               renderItem={({ item }) => {
                 const checked = bulkSelected.has(item.id);
@@ -631,22 +786,44 @@ export default function WorkOrdersScreen() {
                     onPress={() => toggleBulkSelect(item.id)}
                     style={styles.partsRow}
                   >
-                    <View style={[styles.checkbox, checked && styles.checkboxChecked]}>
-                      {checked ? <Text style={styles.checkboxGlyph}>✓</Text> : null}
+                    <View
+                      style={[
+                        styles.checkbox,
+                        checked && styles.checkboxChecked,
+                      ]}
+                    >
+                      {checked ? (
+                        <Text style={styles.checkboxGlyph}>✓</Text>
+                      ) : null}
                     </View>
                     <View style={{ flex: 1 }}>
                       <Text style={styles.partsRowTitle}>
-                        WO: {item.workOrderNumber || '—'} {item.poNumber ? ` • PO: ${item.poNumber}` : ''}
+                        WO: {item.workOrderNumber || '—'}{' '}
+                        {item.poNumber ? ` • PO: ${item.poNumber}` : ''}
                       </Text>
-                      <Text style={styles.partsRowSub}>{item.customer || '—'}</Text>
-                      {!!site && <Text style={styles.partsRowSub} numberOfLines={1}>{site}</Text>}
+                      <Text style={styles.partsRowSub}>
+                        {item.customer || '—'}
+                      </Text>
+                      {!!site && (
+                        <Text
+                          style={styles.partsRowSub}
+                          numberOfLines={1}
+                        >
+                          {site}
+                        </Text>
+                      )}
                     </View>
                   </TouchableOpacity>
                 );
               }}
               ListEmptyComponent={
                 <View style={{ paddingVertical: 12 }}>
-                  <Text style={{ textAlign: 'center', color: '#64748b' }}>
+                  <Text
+                    style={{
+                      textAlign: 'center',
+                      color: '#64748b',
+                    }}
+                  >
                     No matching work orders.
                   </Text>
                 </View>
@@ -654,7 +831,11 @@ export default function WorkOrdersScreen() {
             />
 
             {/* Optional note */}
-            <Text style={[styles.inputLabel, { marginTop: 10 }]}>Optional note</Text>
+            <Text
+              style={[styles.inputLabel, { marginTop: 10 }]}
+            >
+              Optional note
+            </Text>
             <TextInput
               value={bulkNote}
               onChangeText={setBulkNote}
@@ -666,7 +847,10 @@ export default function WorkOrdersScreen() {
             {/* Action buttons */}
             <View style={styles.modalButtonsRow}>
               <TouchableOpacity
-                style={[styles.modalBtnCancel, bulkWorking && { opacity: 0.7 }]}
+                style={[
+                  styles.modalBtnCancel,
+                  bulkWorking && { opacity: 0.7 },
+                ]}
                 onPress={closeBulkModal}
                 disabled={bulkWorking}
               >
@@ -675,13 +859,17 @@ export default function WorkOrdersScreen() {
               <TouchableOpacity
                 style={[
                   styles.modalBtnApply,
-                  !bulkSelected.size && { backgroundColor: '#94a3b8' },
+                  !bulkSelected.size && {
+                    backgroundColor: '#94a3b8',
+                  },
                 ]}
                 onPress={applyBulkPartsIn}
                 disabled={!bulkSelected.size || bulkWorking}
               >
                 <Text style={styles.modalBtnText}>
-                  {bulkWorking ? 'Updating…' : `Mark Parts In (${bulkSelected.size})`}
+                  {bulkWorking
+                    ? 'Updating…'
+                    : `Mark Parts In (${bulkSelected.size})`}
                 </Text>
               </TouchableOpacity>
             </View>
