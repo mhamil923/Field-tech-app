@@ -429,6 +429,9 @@ export default function ViewWorkOrder() {
   const [photos, setPhotos] = useState([]); // image URLs only
   const [notes, setNotes] = useState([]);
 
+  // NEW: pending camera photos (local, not uploaded yet)
+  const [pendingCameraPhotos, setPendingCameraPhotos] = useState([]); // [{id, uri}]
+
   // Notes modal
   const [showAddNoteModal, setShowAddNoteModal] = useState(false);
   const [newNoteText, setNewNoteText] = useState('');
@@ -660,33 +663,75 @@ export default function ViewWorkOrder() {
     }
   };
 
-  // Camera capture
+  /**
+   * CAMERA CAPTURE FLOW (UPDATED):
+   * - Take photo(s) with native camera
+   * - Each shot is added to pendingCameraPhotos
+   * - User can quickly delete bad ones
+   * - Upload all pending camera photos in one batch
+   */
   const takePhoto = async () => {
     const { status } = await ImagePicker.requestCameraPermissionsAsync();
-    if (status !== 'granted') return Alert.alert('Permission required', 'Need camera access.');
+    if (status !== 'granted') {
+      return Alert.alert('Permission required', 'Need camera access.');
+    }
+
     const result = await ImagePicker.launchCameraAsync({
       mediaTypes: ImagePicker.MediaTypeOptions.Images,
       quality: 1,
     });
-    if (result.canceled) return;
+
+    if (result.canceled || !result.assets || !result.assets.length) return;
+
+    const newShots = result.assets.map((asset) => ({
+      id: `${Date.now()}-${Math.random().toString(16).slice(2)}`,
+      uri: asset.uri,
+    }));
+
+    setPendingCameraPhotos((prev) => [...prev, ...newShots]);
+  };
+
+  const removePendingCameraPhoto = (id) => {
+    setPendingCameraPhotos((prev) => prev.filter((p) => p.id !== id));
+  };
+
+  const clearPendingCameraPhotos = () => {
+    if (!pendingCameraPhotos.length) return;
+    Alert.alert('Discard All?', 'This will remove all pending camera photos that have not been uploaded yet.', [
+      { text: 'Cancel', style: 'cancel' },
+      {
+        text: 'Discard',
+        style: 'destructive',
+        onPress: () => setPendingCameraPhotos([]),
+      },
+    ]);
+  };
+
+  const uploadPendingCameraPhotos = async () => {
+    if (!pendingCameraPhotos.length) return;
 
     const form = new FormData();
-    for (let i = 0; i < result.assets.length; i++) {
-      const processedUri = await processImageForUpload(result.assets[i].uri);
-      const name = `photo-${Date.now()}-${i}.jpg`;
-      form.append('photoFile', { uri: processedUri, name, type: 'image/jpeg' });
-    }
-
     try {
-      await api.put(`/work-orders/${workOrderId}/edit`, form, { headers: { 'Content-Type': 'multipart/form-data', ...authHeaders() } });
-      fetchWorkOrder();
-      Alert.alert('Success', 'Photo taken!');
+      for (let i = 0; i < pendingCameraPhotos.length; i++) {
+        const p = pendingCameraPhotos[i];
+        const processedUri = await processImageForUpload(p.uri);
+        const name = `photo-${Date.now()}-${i}.jpg`;
+        form.append('photoFile', { uri: processedUri, name, type: 'image/jpeg' });
+      }
+
+      await api.put(`/work-orders/${workOrderId}/edit`, form, {
+        headers: { 'Content-Type': 'multipart/form-data', ...authHeaders() },
+      });
+
+      setPendingCameraPhotos([]);
+      await fetchWorkOrder();
+      Alert.alert('Success', 'Camera photos uploaded!');
     } catch (err) {
       Alert.alert('Upload Error', err?.response?.data?.error || err.message);
     }
   };
 
-  // Library multi-select
+  // Library multi-select (unchanged – already supports multi-upload in one call)
   const uploadPhotos = async () => {
     const { status } = await ImagePicker.requestMediaLibraryPermissionsAsync();
     if (status !== 'granted') return Alert.alert('Permission required', 'Need photo library access.');
@@ -695,7 +740,7 @@ export default function ViewWorkOrder() {
       allowsMultipleSelection: true,
       quality: 1,
     });
-    if (result.canceled) return;
+    if (result.canceled || !result.assets?.length) return;
 
     const form = new FormData();
     for (let i = 0; i < result.assets.length; i++) {
@@ -1026,10 +1071,10 @@ export default function ViewWorkOrder() {
           </TouchableOpacity>
 
           <TouchableOpacity style={[styles.buttonBase, styles.photoBtn]} onPress={takePhoto}>
-            <Text style={styles.photoText}>Take Photo</Text>
+            <Text style={styles.photoText}>Take Photo (Camera)</Text>
           </TouchableOpacity>
           <TouchableOpacity style={[styles.buttonBase, styles.photoBtn]} onPress={uploadPhotos}>
-            <Text style={styles.photoText}>Upload Photo(s)</Text>
+            <Text style={styles.photoText}>Upload Photo(s) from Library</Text>
           </TouchableOpacity>
           <TouchableOpacity style={[styles.buttonBase, styles.attachBtn]} onPress={() => setViewAttachmentsVisible(true)}>
             <Text style={styles.attachText}>View Attachments</Text>
@@ -1041,6 +1086,55 @@ export default function ViewWorkOrder() {
             <Text style={styles.drawText}>Draw Note</Text>
           </TouchableOpacity>
         </View>
+
+        {/* PENDING CAMERA PHOTOS (multi-shot, delete, batch upload) */}
+        {pendingCameraPhotos.length > 0 && (
+          <View style={styles.pendingSection}>
+            <View style={styles.pendingHeaderRow}>
+              <Text style={styles.pendingTitle}>Pending Camera Photos</Text>
+              <Text style={styles.pendingCount}>
+                {pendingCameraPhotos.length} ready
+              </Text>
+            </View>
+
+            <FlatList
+              data={pendingCameraPhotos}
+              keyExtractor={(item) => item.id}
+              horizontal
+              showsHorizontalScrollIndicator={false}
+              contentContainerStyle={styles.pendingList}
+              renderItem={({ item }) => (
+                <View style={styles.pendingThumbWrapper}>
+                  <Image source={{ uri: item.uri }} style={styles.pendingThumb} />
+                  <TouchableOpacity
+                    style={styles.pendingDeleteIcon}
+                    onPress={() => removePendingCameraPhoto(item.id)}
+                    hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+                  >
+                    <Text style={styles.pendingDeleteText}>×</Text>
+                  </TouchableOpacity>
+                </View>
+              )}
+            />
+
+            <View style={styles.pendingActionsRow}>
+              <TouchableOpacity
+                style={[styles.buttonBase, styles.pendingUploadBtn]}
+                onPress={uploadPendingCameraPhotos}
+              >
+                <Text style={styles.pendingUploadText}>
+                  Upload {pendingCameraPhotos.length} Photo{pendingCameraPhotos.length > 1 ? 's' : ''}
+                </Text>
+              </TouchableOpacity>
+              <TouchableOpacity
+                style={[styles.buttonBase, styles.pendingDiscardBtn]}
+                onPress={clearPendingCameraPhotos}
+              >
+                <Text style={styles.pendingDiscardText}>Discard All</Text>
+              </TouchableOpacity>
+            </View>
+          </View>
+        )}
 
         {/* Notes list */}
         {notes.length > 0 && (
@@ -1516,5 +1610,82 @@ const styles = StyleSheet.create({
 
   signBtn: { backgroundColor: '#2563EB', borderRadius: 10 },
   signBtnText: { color: '#fff', fontWeight: '800' },
+
+  // NEW: pending camera photos styles
+  pendingSection: {
+    marginTop: 12,
+    marginBottom: 8,
+    padding: 12,
+    backgroundColor: '#FFFFFF',
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: '#E5E7EB',
+  },
+  pendingHeaderRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    marginBottom: 8,
+  },
+  pendingTitle: {
+    fontSize: 16,
+    fontWeight: '700',
+    color: '#111827',
+  },
+  pendingCount: {
+    fontSize: 13,
+    fontWeight: '600',
+    color: '#4B5563',
+  },
+  pendingList: {
+    paddingVertical: 4,
+  },
+  pendingThumbWrapper: {
+    width: 90,
+    height: 90,
+    marginRight: 8,
+  },
+  pendingThumb: {
+    width: '100%',
+    height: '100%',
+    borderRadius: 8,
+    backgroundColor: '#E5E7EB',
+  },
+  pendingDeleteIcon: {
+    position: 'absolute',
+    top: 4,
+    right: 4,
+    width: 22,
+    height: 22,
+    borderRadius: 11,
+    backgroundColor: 'rgba(0,0,0,0.7)',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  pendingDeleteText: {
+    color: '#fff',
+    fontSize: 14,
+    lineHeight: 18,
+  },
+  pendingActionsRow: {
+    marginTop: 10,
+  },
+  pendingUploadBtn: {
+    backgroundColor: '#15803D',
+  },
+  pendingUploadText: {
+    color: '#FFFFFF',
+    fontWeight: '700',
+    fontSize: 15,
+  },
+  pendingDiscardBtn: {
+    backgroundColor: '#DC2626',
+    marginTop: 6,
+  },
+  pendingDiscardText: {
+    color: '#FFFFFF',
+    fontWeight: '700',
+    fontSize: 15,
+  },
 });
 
