@@ -140,8 +140,10 @@ export default function WorkOrdersScreen() {
     })();
   }, []);
 
-  // 🔒 special flag for user "jeffsr"
+  // 🔒 special flags
   const isJeffSr = me?.username && me.username.toLowerCase() === 'jeffsr';
+  const isJeff =
+    me?.username && me.username.toLowerCase() === 'jeff';
 
   const fetchWorkOrders = useCallback(async () => {
     try {
@@ -198,24 +200,34 @@ export default function WorkOrdersScreen() {
     }
   };
 
-  // filteredOrders: for jeffsr, only show work orders assigned to him AND only Today tab is available
+  // filteredOrders:
+  // - jeffsr: only orders assigned to him (all views)
+  // - Jeff: Today tab ONLY shows orders assigned to Jeff; other tabs see everything
   const filteredOrders = useMemo(() => {
     let base = workOrders;
 
+    // jeffsr only ever sees his own orders
     if (isJeffSr && me?.id != null) {
       base = base.filter((o) => o.assignedTo === me.id);
     }
 
     if (selectedStatus === 'Today') {
       const today = moment().format('YYYY-MM-DD');
-      return base.filter(
+      let todayOrders = base.filter(
         (o) => o.scheduledDate && moment(o.scheduledDate).format('YYYY-MM-DD') === today
       );
+
+      // 🔸 NEW: for Jeff, Today tab only shows orders assigned to Jeff
+      if (isJeff && me?.id != null) {
+        todayOrders = todayOrders.filter((o) => o.assignedTo === me.id);
+      }
+
+      return todayOrders;
     }
 
     // Non-jeffsr users can use status tabs
     return base.filter((o) => normStatus(o.status) === normStatus(selectedStatus));
-  }, [workOrders, selectedStatus, isJeffSr, me]);
+  }, [workOrders, selectedStatus, isJeffSr, isJeff, me]);
 
   const orderedToday = useMemo(() => {
     if (selectedStatus !== 'Today') return filteredOrders;
