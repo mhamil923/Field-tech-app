@@ -669,9 +669,9 @@ export default function ViewWorkOrder() {
 
   /**
    * CAMERA FLOW (without expo-camera):
-   * - openCamera uses ImagePicker.launchCameraAsync
-   * - each capture is added to pendingCameraPhotos
-   * - user uploads/discards from the Pending section
+   * - openCamera uses ImagePicker.launchCameraAsync in a loop
+   * - user keeps snapping / using photos
+   * - loop ends when they hit "Cancel" in the native camera UI
    */
   const openCamera = async () => {
     const { status } = await ImagePicker.requestCameraPermissionsAsync();
@@ -679,22 +679,33 @@ export default function ViewWorkOrder() {
       return Alert.alert('Permission required', 'Need camera access.');
     }
 
-    const result = await ImagePicker.launchCameraAsync({
-      quality: 1,
-      allowsEditing: false,
-    });
+    let keepCapturing = true;
 
-    if (result.canceled || !result.assets?.length) return;
+    while (keepCapturing) {
+      const result = await ImagePicker.launchCameraAsync({
+        quality: 1,
+        allowsEditing: false,
+      });
 
-    const asset = result.assets[0];
-    if (asset?.uri) {
-      setPendingCameraPhotos((prev) => [
-        ...prev,
-        {
-          id: `${Date.now()}-${Math.random().toString(16).slice(2)}`,
-          uri: asset.uri,
-        },
-      ]);
+      // If user cancels from camera, stop the session
+      if (result.canceled || !result.assets?.length) {
+        keepCapturing = false;
+        break;
+      }
+
+      const asset = result.assets[0];
+      if (asset?.uri) {
+        setPendingCameraPhotos((prev) => [
+          ...prev,
+          {
+            id: `${Date.now()}-${Math.random().toString(16).slice(2)}`,
+            uri: asset.uri,
+          },
+        ]);
+      }
+
+      // At this point, the loop will immediately re-launch the camera
+      // so they can snap the next photo; they exit by pressing Cancel.
     }
   };
 
