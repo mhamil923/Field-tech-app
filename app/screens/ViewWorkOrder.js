@@ -22,7 +22,6 @@ import { WebView } from 'react-native-webview';
 import * as FileSystem from 'expo-file-system';
 import * as ImagePicker from 'expo-image-picker';
 import * as ImageManipulator from 'expo-image-manipulator';
-import { Camera } from 'expo-camera';
 import moment from 'moment';
 import { useLocalSearchParams, useRouter } from 'expo-router';
 
@@ -351,7 +350,7 @@ const ANNOTATOR_HTML = `
 const SKETCH_HTML = `
 <!doctype html>
 <html>
-head>
+<head>
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no" />
 <title>Draw Note</title>
@@ -430,13 +429,8 @@ export default function ViewWorkOrder() {
   const [photos, setPhotos] = useState([]); // image URLs only
   const [notes, setNotes] = useState([]);
 
-  // NEW: pending camera photos (local, not uploaded yet)
+  // PENDING camera photos (local, not uploaded yet)
   const [pendingCameraPhotos, setPendingCameraPhotos] = useState([]); // [{id, uri}]
-
-  // New: camera modal state
-  const [cameraVisible, setCameraVisible] = useState(false);
-  const cameraRef = useRef(null);
-  const [isCapturing, setIsCapturing] = useState(false);
 
   // Full-screen viewer for pending camera photos
   const [pendingViewerVisible, setPendingViewerVisible] = useState(false);
@@ -674,45 +668,33 @@ export default function ViewWorkOrder() {
   };
 
   /**
-   * NEW CAMERA FLOW:
-   * - openCamera asks for permission and shows Camera modal
-   * - capturePhoto takes pictures and pushes to pendingCameraPhotos
-   * - user can discard / upload from Pending section
+   * CAMERA FLOW (without expo-camera):
+   * - openCamera uses ImagePicker.launchCameraAsync
+   * - each capture is added to pendingCameraPhotos
+   * - user uploads/discards from the Pending section
    */
   const openCamera = async () => {
-    const { status } = await Camera.requestCameraPermissionsAsync();
+    const { status } = await ImagePicker.requestCameraPermissionsAsync();
     if (status !== 'granted') {
       return Alert.alert('Permission required', 'Need camera access.');
     }
-    setCameraVisible(true);
-  };
 
-  const closeCamera = () => {
-    setCameraVisible(false);
-  };
+    const result = await ImagePicker.launchCameraAsync({
+      quality: 1,
+      allowsEditing: false,
+    });
 
-  const capturePhoto = async () => {
-    if (!cameraRef.current || isCapturing) return;
-    try {
-      setIsCapturing(true);
-      const photo = await cameraRef.current.takePictureAsync({
-        quality: 1,
-        skipProcessing: true,
-      });
+    if (result.canceled || !result.assets?.length) return;
 
-      if (photo?.uri) {
-        setPendingCameraPhotos((prev) => [
-          ...prev,
-          {
-            id: `${Date.now()}-${Math.random().toString(16).slice(2)}`,
-            uri: photo.uri,
-          },
-        ]);
-      }
-    } catch (e) {
-      Alert.alert('Camera Error', 'Failed to capture photo.');
-    } finally {
-      setIsCapturing(false);
+    const asset = result.assets[0];
+    if (asset?.uri) {
+      setPendingCameraPhotos((prev) => [
+        ...prev,
+        {
+          id: `${Date.now()}-${Math.random().toString(16).slice(2)}`,
+          uri: asset.uri,
+        },
+      ]);
     }
   };
 
@@ -722,14 +704,18 @@ export default function ViewWorkOrder() {
 
   const clearPendingCameraPhotos = () => {
     if (!pendingCameraPhotos.length) return;
-    Alert.alert('Discard All?', 'This will remove all pending camera photos that have not been uploaded yet.', [
-      { text: 'Cancel', style: 'cancel' },
-      {
-        text: 'Discard',
-        style: 'destructive',
-        onPress: () => setPendingCameraPhotos([]),
-      },
-    ]);
+    Alert.alert(
+      'Discard All?',
+      'This will remove all pending camera photos that have not been uploaded yet.',
+      [
+        { text: 'Cancel', style: 'cancel' },
+        {
+          text: 'Discard',
+          style: 'destructive',
+          onPress: () => setPendingCameraPhotos([]),
+        },
+      ]
+    );
   };
 
   const uploadPendingCameraPhotos = async () => {
@@ -775,7 +761,9 @@ export default function ViewWorkOrder() {
     }
 
     try {
-      await api.put(`/work-orders/${workOrderId}/edit`, form, { headers: { 'Content-Type': 'multipart/form-data', ...authHeaders() } });
+      await api.put(`/work-orders/${workOrderId}/edit`, form, {
+        headers: { 'Content-Type': 'multipart/form-data', ...authHeaders() },
+      });
       fetchWorkOrder();
       Alert.alert('Success', 'Photos uploaded!');
     } catch (err) {
@@ -795,7 +783,10 @@ export default function ViewWorkOrder() {
         style: 'destructive',
         onPress: async () => {
           try {
-            await api.delete(`/work-orders/${workOrderId}/attachment`, { data: { photoPath: keys[idx] }, headers: authHeaders() });
+            await api.delete(`/work-orders/${workOrderId}/attachment`, {
+              data: { photoPath: keys[idx] },
+              headers: authHeaders(),
+            });
             fetchWorkOrder();
             Alert.alert('Deleted');
           } catch (err) {
@@ -861,7 +852,9 @@ export default function ViewWorkOrder() {
         const form = new FormData();
         const name = `WO-${workOrder?.poNumber || workOrderId}-signed.pdf`;
         form.append('pdfFile', { uri: signedUri, name, type: 'application/pdf' });
-        await api.put(`/work-orders/${workOrderId}/edit`, form, { headers: { 'Content-Type': 'multipart/form-data', ...authHeaders() } });
+        await api.put(`/work-orders/${workOrderId}/edit`, form, {
+          headers: { 'Content-Type': 'multipart/form-data', ...authHeaders() },
+        });
         setAnnotateVisible(false);
         fetchWorkOrder();
         Alert.alert('Success', 'Signed PDF uploaded.');
@@ -883,8 +876,14 @@ export default function ViewWorkOrder() {
         await FileSystem.writeAsStringAsync(jpgPath, b64, { encoding: FileSystem.EncodingType.Base64 });
         const processed = await processImageForUpload(jpgPath);
         const form = new FormData();
-        form.append('photoFile', { uri: processed, name: `drawing-note-${Date.now()}.jpg`, type: 'image/jpeg' });
-        await api.put(`/work-orders/${workOrderId}/edit`, form, { headers: { 'Content-Type': 'multipart/form-data', ...authHeaders() } });
+        form.append('photoFile', {
+          uri: processed,
+          name: `drawing-note-${Date.now()}.jpg`,
+          type: 'image/jpeg',
+        });
+        await api.put(`/work-orders/${workOrderId}/edit`, form, {
+          headers: { 'Content-Type': 'multipart/form-data', ...authHeaders() },
+        });
         setSketchVisible(false);
         fetchWorkOrder();
         Alert.alert('Uploaded', 'Drawing note uploaded as photo.');
@@ -1048,7 +1047,11 @@ export default function ViewWorkOrder() {
           <View style={[styles.row, { alignItems: 'center' }]}>
             <Text style={styles.label}>Status:</Text>
             <Text style={[styles.value, { flex: 0 }]}>{status}{isStatusSaving ? ' …' : ''}</Text>
-            <TouchableOpacity style={[styles.smallBtn, isStatusSaving && { opacity: 0.6 }]} onPress={openStatusModal} disabled={isStatusSaving}>
+            <TouchableOpacity
+              style={[styles.smallBtn, isStatusSaving && { opacity: 0.6 }]}
+              onPress={openStatusModal}
+              disabled={isStatusSaving}
+            >
               <Text style={styles.smallBtnText}>{isStatusSaving ? 'Saving…' : 'Change'}</Text>
             </TouchableOpacity>
           </View>
@@ -1184,56 +1187,6 @@ export default function ViewWorkOrder() {
           </>
         )}
       </ScrollView>
-
-      {/* CAMERA MODAL (multi-shot) */}
-      <Modal
-        visible={cameraVisible}
-        animationType="slide"
-        onRequestClose={closeCamera}
-      >
-        <SafeAreaView style={styles.cameraContainer}>
-          <View style={styles.cameraHeader}>
-            <TouchableOpacity style={styles.cameraHeaderBtn} onPress={closeCamera}>
-              <Text style={styles.cameraHeaderBtnText}>Close</Text>
-            </TouchableOpacity>
-            <Text style={styles.cameraHeaderTitle}>Camera</Text>
-            <View style={styles.cameraHeaderRight} />
-          </View>
-
-          <View style={styles.cameraPreviewWrapper}>
-            <Camera
-              ref={cameraRef}
-              style={styles.camera}
-              type={Camera.Constants.Type.back}
-              ratio="16:9"
-            />
-          </View>
-
-          <View style={styles.cameraBottomArea}>
-            <View style={styles.cameraMiniStrip}>
-              {pendingCameraPhotos.slice(-5).map((p) => (
-                <Image
-                  key={p.id}
-                  source={{ uri: p.uri }}
-                  style={styles.cameraMiniThumb}
-                />
-              ))}
-            </View>
-            <View style={styles.cameraControlsRow}>
-              <TouchableOpacity
-                style={[styles.cameraShutterOuter, isCapturing && { opacity: 0.7 }]}
-                onPress={capturePhoto}
-                disabled={isCapturing}
-              >
-                <View style={styles.cameraShutterInner} />
-              </TouchableOpacity>
-            </View>
-            <Text style={styles.cameraHint}>
-              Tap the shutter multiple times to capture multiple photos.
-            </Text>
-          </View>
-        </SafeAreaView>
-      </Modal>
 
       {/* Photo Viewer for uploaded attachments */}
       <Modal visible={photoViewerVisible} animationType="fade" onRequestClose={closePhotoViewer}>
@@ -1533,7 +1486,10 @@ export default function ViewWorkOrder() {
             </Text>
             <View style={styles.docHeaderRight}>
               {!!docItems.length && (
-                <TouchableOpacity onPress={() => Linking.openURL(docItems[docIndex].url)} style={styles.docHeaderBtn}>
+                <TouchableOpacity
+                  onPress={() => Linking.openURL(docItems[docIndex].url)}
+                  style={styles.docHeaderBtn}
+                >
                   <Text style={styles.docHeaderBtnText}>Open</Text>
                 </TouchableOpacity>
               )}
@@ -1549,7 +1505,9 @@ export default function ViewWorkOrder() {
 
             {!!docError && (
               <View style={[styles.center, { padding: 16 }]}>
-                <Text style={{ color: '#ff6b6b', textAlign: 'center' }}>Couldn’t load document: {docError}</Text>
+                <Text style={{ color: '#ff6b6b', textAlign: 'center' }}>
+                  Couldn’t load document: {docError}
+                </Text>
               </View>
             )}
 
@@ -1590,7 +1548,10 @@ export default function ViewWorkOrder() {
 
           {docGroup === 'WO' && woPdfUrl && (
             <View style={{ padding: 12 }}>
-              <TouchableOpacity style={[styles.buttonBase, styles.signBtn]} onPress={openAnnotatorFromLightbox}>
+              <TouchableOpacity
+                style={[styles.buttonBase, styles.signBtn]}
+                onPress={openAnnotatorFromLightbox}
+              >
                 <Text style={styles.signBtnText}>Annotate & Sign This Work Order</Text>
               </TouchableOpacity>
             </View>
@@ -1645,15 +1606,25 @@ const styles = StyleSheet.create({
     alignItems: 'center',
   },
   tileIconCircle: {
-    width: 44, height: 44, borderRadius: 22,
-    backgroundColor: '#0ea5e9', alignItems: 'center', justifyContent: 'center', marginBottom: 8,
+    width: 44,
+    height: 44,
+    borderRadius: 22,
+    backgroundColor: '#0ea5e9',
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginBottom: 8,
   },
   tileIconText: { color: '#fff', fontWeight: '800' },
   tileTitle: { fontWeight: '700', color: '#1f2937', marginBottom: 2 },
   tileSub: { color: '#6b7280', fontSize: 12 },
   tileBadge: {
-    marginTop: 6, paddingHorizontal: 8, paddingVertical: 2, borderRadius: 999,
-    backgroundColor: '#e5f3ff', color: '#0369a1', overflow: 'hidden',
+    marginTop: 6,
+    paddingHorizontal: 8,
+    paddingVertical: 2,
+    borderRadius: 999,
+    backgroundColor: '#e5f3ff',
+    color: '#0369a1',
+    overflow: 'hidden',
   },
 
   noteCard: { backgroundColor: '#FFF', borderRadius: 10, padding: 12, marginBottom: 8, borderWidth: 1, borderColor: '#E2E8F0' },
@@ -1802,93 +1773,5 @@ const styles = StyleSheet.create({
     color: '#FFFFFF',
     fontWeight: '700',
     fontSize: 15,
-  },
-
-  // CAMERA MODAL STYLES
-  cameraContainer: {
-    flex: 1,
-    backgroundColor: '#000',
-  },
-  cameraHeader: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    paddingHorizontal: 12,
-    paddingTop: 8,
-    paddingBottom: 4,
-  },
-  cameraHeaderBtn: {
-    paddingHorizontal: 10,
-    paddingVertical: 6,
-    borderRadius: 8,
-    backgroundColor: 'rgba(15,23,42,0.85)',
-  },
-  cameraHeaderBtnText: {
-    color: '#fff',
-    fontWeight: '600',
-  },
-  cameraHeaderTitle: {
-    flex: 1,
-    textAlign: 'center',
-    color: '#E5E7EB',
-    fontWeight: '700',
-    fontSize: 16,
-  },
-  cameraHeaderRight: {
-    width: 72,
-  },
-  cameraPreviewWrapper: {
-    flex: 1,
-    marginHorizontal: 10,
-    marginTop: 6,
-    borderRadius: 16,
-    overflow: 'hidden',
-    backgroundColor: '#000',
-  },
-  camera: {
-    flex: 1,
-  },
-  cameraBottomArea: {
-    paddingHorizontal: 12,
-    paddingBottom: 24,
-    paddingTop: 10,
-  },
-  cameraMiniStrip: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    marginBottom: 10,
-    height: 60,
-  },
-  cameraMiniThumb: {
-    width: 50,
-    height: 50,
-    borderRadius: 8,
-    marginRight: 6,
-    backgroundColor: '#1F2933',
-  },
-  cameraControlsRow: {
-    alignItems: 'center',
-    justifyContent: 'center',
-    marginBottom: 6,
-  },
-  cameraShutterOuter: {
-    width: 74,
-    height: 74,
-    borderRadius: 37,
-    borderWidth: 4,
-    borderColor: '#F9FAFB',
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  cameraShutterInner: {
-    width: 56,
-    height: 56,
-    borderRadius: 28,
-    backgroundColor: '#F9FAFB',
-  },
-  cameraHint: {
-    textAlign: 'center',
-    color: '#E5E7EB',
-    fontSize: 13,
-    marginTop: 4,
   },
 });
