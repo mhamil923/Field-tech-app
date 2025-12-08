@@ -39,7 +39,10 @@ const PARTS_NEXT = 'Needs to be Scheduled';
 /* ---------------- auth header (safe no-op if axios already injects) ---------------- */
 const authHeaders = () => {
   try {
-    const token = typeof localStorage !== 'undefined' ? localStorage.getItem('jwt') : null;
+    const token =
+      typeof localStorage !== 'undefined'
+        ? localStorage.getItem('jwt')
+        : null;
     return token ? { Authorization: `Bearer ${token}` } : {};
   } catch {
     return {};
@@ -130,7 +133,7 @@ export default function WorkOrdersScreen() {
     [todayKey]
   );
 
-  // current user (Add button + jeffsr restriction)
+  // current user (Add button + Today behavior)
   useEffect(() => {
     (async () => {
       try {
@@ -140,9 +143,12 @@ export default function WorkOrdersScreen() {
     })();
   }, []);
 
-  // 🔒 special flag for user "jeffsr"
-  const isJeffSr =
-    me?.username && me.username.toLowerCase() === 'jeffsr';
+  // 🔒 special flags for Jeff accounts
+  const usernameLower = (me?.username || '').toLowerCase();
+  const isJeff = usernameLower === 'jeff';
+  const isJeffSr = usernameLower === 'jeffsr';
+  // Any of these should have their Today tab scoped to *their* assigned work orders
+  const isTodayScopedUser = isJeff || isJeffSr;
 
   const fetchWorkOrders = useCallback(async () => {
     try {
@@ -169,13 +175,13 @@ export default function WorkOrdersScreen() {
     loadTodayOrder();
   }, [loadTodayOrder, workOrders.length]);
 
-  // counts: for jeffsr, only count his assigned work orders (for statuses & today)
+  // counts: for Today-scoped users, counts (including today) are only for their assigned work orders
   const counts = useMemo(() => {
     const map = Object.fromEntries(STATUSES.map((s) => [s, 0]));
     let today = 0;
 
     let base = workOrders;
-    if (isJeffSr && me?.id != null) {
+    if (isTodayScopedUser && me?.id != null) {
       base = base.filter((o) => o.assignedTo === me.id);
     }
 
@@ -185,11 +191,12 @@ export default function WorkOrdersScreen() {
       if (
         o?.scheduledDate &&
         moment(o.scheduledDate).isSame(moment(), 'day')
-      )
+      ) {
         today += 1;
+      }
     }
     return { byStatus: map, today };
-  }, [workOrders, isJeffSr, me]);
+  }, [workOrders, isTodayScopedUser, me]);
 
   const openInGoogleMaps = async (query) => {
     const q = encodeURIComponent(query || '');
@@ -203,28 +210,32 @@ export default function WorkOrdersScreen() {
     }
   };
 
-  // filteredOrders: for jeffsr, only show work orders assigned to him AND only Today tab is available
+  // filteredOrders:
+  // - For Today-scoped users (Jeff/JeffSr): only work orders assigned to them
+  // - For others: Today = all WOs scheduled for today; status tabs = by status
   const filteredOrders = useMemo(() => {
     let base = workOrders;
 
-    if (isJeffSr && me?.id != null) {
+    if (isTodayScopedUser && me?.id != null) {
+      // 🔑 This is the key filter so Jeff only sees his own WOs
       base = base.filter((o) => o.assignedTo === me.id);
     }
 
     if (selectedStatus === 'Today') {
-      const today = moment().format('YYYY-MM-DD');
+      const todayStr = moment().format('YYYY-MM-DD');
       return base.filter(
         (o) =>
           o.scheduledDate &&
-          moment(o.scheduledDate).format('YYYY-MM-DD') === today
+          moment(o.scheduledDate).format('YYYY-MM-DD') === todayStr
       );
     }
 
-    // Non-jeffsr users can use status tabs
+    // Non-Today tabs: for non-scoped users, normal status filtering;
+    // for scoped users, it's still filtered by assignedTo above.
     return base.filter(
       (o) => normStatus(o.status) === normStatus(selectedStatus)
     );
-  }, [workOrders, selectedStatus, isJeffSr, me]);
+  }, [workOrders, selectedStatus, isTodayScopedUser, me]);
 
   const orderedToday = useMemo(() => {
     if (selectedStatus !== 'Today') return filteredOrders;
@@ -438,13 +449,11 @@ export default function WorkOrdersScreen() {
     }
   };
 
-  // 🔹 Chips: if jeffsr, only show Today tab
+  // 🔹 Chips: for Today-scoped users, only show Today tab; others see Today + status chips
   const renderChips = () => {
-    if (isJeffSr) {
-      // 🔴 IMPORTANT CHANGE:
-      // For Jeff's Today tab, use filteredOrders.length for the badge
-      // so the number matches exactly the list, and only includes
-      // work orders assigned to Jeff.
+    if (isTodayScopedUser) {
+      // For Jeff/JeffSr, the Today badge matches exactly the filtered list,
+      // which is already scoped to their assigned work orders.
       return (
         <View style={styles.chipsWrap}>
           <TouchableOpacity
@@ -471,7 +480,8 @@ export default function WorkOrdersScreen() {
               <Text
                 style={[
                   styles.badgeText,
-                  selectedStatus === 'Today' && styles.badgeTextActive,
+                  selectedStatus === 'Today' &&
+                    styles.badgeTextActive,
                 ]}
               >
                 {filteredOrders.length}
@@ -509,7 +519,8 @@ export default function WorkOrdersScreen() {
             <Text
               style={[
                 styles.badgeText,
-                selectedStatus === 'Today' && styles.badgeTextActive,
+                selectedStatus === 'Today' &&
+                  styles.badgeTextActive,
               ]}
             >
               {counts.today}
@@ -652,7 +663,9 @@ export default function WorkOrdersScreen() {
               router.push(`/screens/ViewWorkOrder?id=${item.id}`)
             }
           >
-            <Text style={styles.viewButtonText}>View Details</Text>
+            <Text style={styles.viewButtonText}>
+              View Details
+            </Text>
           </TouchableOpacity>
         </View>
       </View>
