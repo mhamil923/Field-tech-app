@@ -147,8 +147,9 @@ export default function WorkOrdersScreen() {
   const usernameLower = (me?.username || '').toLowerCase();
   const isJeff = usernameLower === 'jeff';
   const isJeffSr = usernameLower === 'jeffsr';
-  // Any of these should have their Today tab scoped to *their* assigned work orders
-  const isTodayScopedUser = isJeff || isJeffSr;
+
+  // 👉 ONLY jeffsr should be restricted to the "Today-only / assigned-to-me" view
+  const isTodayScopedUser = isJeffSr;
 
   const fetchWorkOrders = useCallback(async () => {
     try {
@@ -211,13 +212,13 @@ export default function WorkOrdersScreen() {
   };
 
   // filteredOrders:
-  // - For Today-scoped users (Jeff/JeffSr): only work orders assigned to them
-  // - For others: Today = all WOs scheduled for today; status tabs = by status
+  // - For Today-scoped users (jeffsr): only work orders assigned to them
+  // - For others (including Jeff): Today = all WOs scheduled for today; status tabs = by status
   const filteredOrders = useMemo(() => {
     let base = workOrders;
 
     if (isTodayScopedUser && me?.id != null) {
-      // 🔑 This is the key filter so Jeff only sees his own WOs
+      // 🔑 Scoped user (jeffsr) only sees WOs assigned to them
       base = base.filter((o) => o.assignedTo === me.id);
     }
 
@@ -449,11 +450,11 @@ export default function WorkOrdersScreen() {
     }
   };
 
-  // 🔹 Chips: for Today-scoped users, only show Today tab; others see Today + status chips
+  // 🔹 Chips:
+  // - For jeffsr: ONLY show Today tab (scoped to assigned-to-me)
+  // - For everyone else (including Jeff): show Today + all statuses
   const renderChips = () => {
     if (isTodayScopedUser) {
-      // For Jeff/JeffSr, the Today badge matches exactly the filtered list,
-      // which is already scoped to their assigned work orders.
       return (
         <View style={styles.chipsWrap}>
           <TouchableOpacity
