@@ -140,10 +140,9 @@ export default function WorkOrdersScreen() {
     })();
   }, []);
 
-  // 🔒 special flags
-  const isJeffSr = me?.username && me.username.toLowerCase() === 'jeffsr';
-  const isJeff =
-    me?.username && me.username.toLowerCase() === 'jeff';
+  // 🔒 special flag for user "jeffsr"
+  const isJeffSr =
+    me?.username && me.username.toLowerCase() === 'jeffsr';
 
   const fetchWorkOrders = useCallback(async () => {
     try {
@@ -170,7 +169,7 @@ export default function WorkOrdersScreen() {
     loadTodayOrder();
   }, [loadTodayOrder, workOrders.length]);
 
-  // counts: for jeffsr, only count his assigned work orders
+  // counts: for jeffsr, only count his assigned work orders (for statuses & today)
   const counts = useMemo(() => {
     const map = Object.fromEntries(STATUSES.map((s) => [s, 0]));
     let today = 0;
@@ -183,7 +182,11 @@ export default function WorkOrdersScreen() {
     for (const o of base) {
       const label = toCanonicalStatus(o?.status);
       if (map[label] !== undefined) map[label] += 1;
-      if (o?.scheduledDate && moment(o.scheduledDate).isSame(moment(), 'day')) today += 1;
+      if (
+        o?.scheduledDate &&
+        moment(o.scheduledDate).isSame(moment(), 'day')
+      )
+        today += 1;
     }
     return { byStatus: map, today };
   }, [workOrders, isJeffSr, me]);
@@ -200,34 +203,28 @@ export default function WorkOrdersScreen() {
     }
   };
 
-  // filteredOrders:
-  // - jeffsr: only orders assigned to him (all views)
-  // - Jeff: Today tab ONLY shows orders assigned to Jeff; other tabs see everything
+  // filteredOrders: for jeffsr, only show work orders assigned to him AND only Today tab is available
   const filteredOrders = useMemo(() => {
     let base = workOrders;
 
-    // jeffsr only ever sees his own orders
     if (isJeffSr && me?.id != null) {
       base = base.filter((o) => o.assignedTo === me.id);
     }
 
     if (selectedStatus === 'Today') {
       const today = moment().format('YYYY-MM-DD');
-      let todayOrders = base.filter(
-        (o) => o.scheduledDate && moment(o.scheduledDate).format('YYYY-MM-DD') === today
+      return base.filter(
+        (o) =>
+          o.scheduledDate &&
+          moment(o.scheduledDate).format('YYYY-MM-DD') === today
       );
-
-      // 🔸 NEW: for Jeff, Today tab only shows orders assigned to Jeff
-      if (isJeff && me?.id != null) {
-        todayOrders = todayOrders.filter((o) => o.assignedTo === me.id);
-      }
-
-      return todayOrders;
     }
 
     // Non-jeffsr users can use status tabs
-    return base.filter((o) => normStatus(o.status) === normStatus(selectedStatus));
-  }, [workOrders, selectedStatus, isJeffSr, isJeff, me]);
+    return base.filter(
+      (o) => normStatus(o.status) === normStatus(selectedStatus)
+    );
+  }, [workOrders, selectedStatus, isJeffSr, me]);
 
   const orderedToday = useMemo(() => {
     if (selectedStatus !== 'Today') return filteredOrders;
@@ -254,7 +251,10 @@ export default function WorkOrdersScreen() {
       const form = new FormData();
       form.append('status', newStatus);
       await api.put(`/work-orders/${id}/edit`, form, {
-        headers: { 'Content-Type': 'multipart/form-data', ...authHeaders() },
+        headers: {
+          'Content-Type': 'multipart/form-data',
+          ...authHeaders(),
+        },
       });
       return;
     } catch (err) {
@@ -262,14 +262,21 @@ export default function WorkOrdersScreen() {
       await api.put(
         `/work-orders/${id}`,
         { status: newStatus },
-        { headers: { 'Content-Type': 'application/json', ...authHeaders() } }
+        {
+          headers: {
+            'Content-Type': 'application/json',
+            ...authHeaders(),
+          },
+        }
       );
     }
   };
 
   const handleUpdateStatus = async (id, newStatus) => {
     const prev = workOrders;
-    setWorkOrders(prev.map((o) => (o.id === id ? { ...o, status: newStatus } : o)));
+    setWorkOrders(
+      prev.map((o) => (o.id === id ? { ...o, status: newStatus } : o))
+    );
 
     try {
       await putStatus(id, newStatus);
@@ -277,7 +284,10 @@ export default function WorkOrdersScreen() {
     } catch (err) {
       console.error(err);
       setWorkOrders(prev);
-      const msg = err?.response?.data?.error || err?.message || 'Failed to update status.';
+      const msg =
+        err?.response?.data?.error ||
+        err?.message ||
+        'Failed to update status.';
       Alert.alert('Error', msg);
     }
   };
@@ -292,7 +302,12 @@ export default function WorkOrdersScreen() {
       await api.put(
         `/work-orders/${id}/notes`,
         { notes: trimmed, append: true },
-        { headers: { 'Content-Type': 'application/json', ...authHeaders() } }
+        {
+          headers: {
+            'Content-Type': 'application/json',
+            ...authHeaders(),
+          },
+        }
       );
     } catch (e1) {
       try {
@@ -300,12 +315,19 @@ export default function WorkOrdersScreen() {
         await api.put(
           `/work-orders/${id}/notes`,
           { text: trimmed, append: true },
-          { headers: { 'Content-Type': 'application/json', ...authHeaders() } }
+          {
+            headers: {
+              'Content-Type': 'application/json',
+              ...authHeaders(),
+            },
+          }
         );
       } catch (e2) {
         console.error(
           'Failed to add note:',
-          e2?.response?.data?.error || e2?.message || e1?.message
+          e2?.response?.data?.error ||
+            e2?.message ||
+            e1?.message
         );
       }
     }
@@ -314,7 +336,9 @@ export default function WorkOrdersScreen() {
   // ----- BULK "Parts In" helpers -----
   const waitingOrders = useMemo(
     () =>
-      workOrders.filter((o) => normStatus(o.status) === normStatus(PARTS_WAITING)),
+      workOrders.filter(
+        (o) => normStatus(o.status) === normStatus(PARTS_WAITING)
+      ),
     [workOrders]
   );
 
@@ -351,7 +375,8 @@ export default function WorkOrdersScreen() {
       return next;
     });
   };
-  const selectAll = () => setBulkSelected(new Set(filteredWaitingForModal.map((o) => o.id)));
+  const selectAll = () =>
+    setBulkSelected(new Set(filteredWaitingForModal.map((o) => o.id)));
   const selectNone = () => setBulkSelected(new Set());
 
   const openBulkModal = () => {
@@ -372,7 +397,10 @@ export default function WorkOrdersScreen() {
   const applyBulkPartsIn = async () => {
     const ids = Array.from(bulkSelected);
     if (!ids.length) {
-      Alert.alert('Nothing selected', 'Choose at least one work order.');
+      Alert.alert(
+        'Nothing selected',
+        'Choose at least one work order.'
+      );
       return;
     }
     try {
@@ -392,13 +420,18 @@ export default function WorkOrdersScreen() {
           );
         }
       }
-      Alert.alert('Success', `Marked parts in for ${ids.length} work order(s).`);
+      Alert.alert(
+        'Success',
+        `Marked parts in for ${ids.length} work order(s).`
+      );
       closeBulkModal();
       fetchWorkOrders();
     } catch (e) {
       Alert.alert(
         'Error',
-        e?.response?.data?.error || e?.message || 'Failed to apply updates.'
+        e?.response?.data?.error ||
+          e?.message ||
+          'Failed to apply updates.'
       );
     } finally {
       setBulkWorking(false);
@@ -408,11 +441,18 @@ export default function WorkOrdersScreen() {
   // 🔹 Chips: if jeffsr, only show Today tab
   const renderChips = () => {
     if (isJeffSr) {
+      // 🔴 IMPORTANT CHANGE:
+      // For Jeff's Today tab, use filteredOrders.length for the badge
+      // so the number matches exactly the list, and only includes
+      // work orders assigned to Jeff.
       return (
         <View style={styles.chipsWrap}>
           <TouchableOpacity
             onPress={() => setSelectedStatus('Today')}
-            style={[styles.chip, selectedStatus === 'Today' && styles.chipActive]}
+            style={[
+              styles.chip,
+              selectedStatus === 'Today' && styles.chipActive,
+            ]}
           >
             <Text
               style={[
@@ -434,7 +474,7 @@ export default function WorkOrdersScreen() {
                   selectedStatus === 'Today' && styles.badgeTextActive,
                 ]}
               >
-                {counts.today}
+                {filteredOrders.length}
               </Text>
             </View>
           </TouchableOpacity>
@@ -442,12 +482,15 @@ export default function WorkOrdersScreen() {
       );
     }
 
-    // Default: Today + all statuses
+    // Default: Today + all statuses (counts are global)
     return (
       <View style={styles.chipsWrap}>
         <TouchableOpacity
           onPress={() => setSelectedStatus('Today')}
-          style={[styles.chip, selectedStatus === 'Today' && styles.chipActive]}
+          style={[
+            styles.chip,
+            selectedStatus === 'Today' && styles.chipActive,
+          ]}
         >
           <Text
             style={[
@@ -478,7 +521,10 @@ export default function WorkOrdersScreen() {
           <TouchableOpacity
             key={s}
             onPress={() => setSelectedStatus(s)}
-            style={[styles.chip, selectedStatus === s && styles.chipActive]}
+            style={[
+              styles.chip,
+              selectedStatus === s && styles.chipActive,
+            ]}
           >
             <Text
               style={[
@@ -497,7 +543,8 @@ export default function WorkOrdersScreen() {
               <Text
                 style={[
                   styles.badgeText,
-                  selectedStatus === s && styles.badgeTextActive,
+                  selectedStatus === s &&
+                    styles.badgeTextActive,
                 ]}
               >
                 {counts.byStatus[s]}
@@ -512,10 +559,13 @@ export default function WorkOrdersScreen() {
   const Card = ({ item, drag }) => {
     // Legacy-safe Site Location / Address handling
     const rawLoc = norm(item.siteLocation);
-    const explicitName = norm(item.siteName) || norm(item.siteLocationName);
+    const explicitName =
+      norm(item.siteName) || norm(item.siteLocationName);
     let siteLocationName = explicitName;
     let siteAddress =
-      norm(item.siteAddress) || norm(item.serviceAddress) || norm(item.address);
+      norm(item.siteAddress) ||
+      norm(item.serviceAddress) ||
+      norm(item.address);
 
     if (!siteAddress && rawLoc) {
       siteAddress = rawLoc;
@@ -557,7 +607,9 @@ export default function WorkOrdersScreen() {
               openInGoogleMaps(siteAddress || siteLocationName)
             }
           >
-            <Text style={styles.linkText}>Site Address: {siteAddress}</Text>
+            <Text style={styles.linkText}>
+              Site Address: {siteAddress}
+            </Text>
           </TouchableOpacity>
         ) : (
           <Text style={styles.cardText}>Site Address: N/A</Text>
@@ -574,7 +626,9 @@ export default function WorkOrdersScreen() {
         <Text style={styles.cardText}>
           Scheduled:{' '}
           {item.scheduledDate
-            ? moment(item.scheduledDate).format('YYYY-MM-DD HH:mm')
+            ? moment(item.scheduledDate).format(
+                'YYYY-MM-DD HH:mm'
+              )
             : 'Not Scheduled'}
         </Text>
         <Text style={styles.cardText}>Status: {item.status}</Text>
@@ -608,7 +662,9 @@ export default function WorkOrdersScreen() {
   const ListComponent =
     selectedStatus === 'Today' ? (
       <>
-        <Text style={styles.dragBanner}>Long-press to drag order.</Text>
+        <Text style={styles.dragBanner}>
+          Long-press to drag order.
+        </Text>
         <DraggableFlatList
           data={orderedToday}
           keyExtractor={(it) => String(it.id)}
@@ -616,13 +672,18 @@ export default function WorkOrdersScreen() {
           onDragEnd={({ data }) =>
             saveTodayOrder(data.map((d) => String(d.id)))
           }
-          renderItem={({ item, drag }) => <Card item={item} drag={drag} />}
+          renderItem={({ item, drag }) => (
+            <Card item={item} drag={drag} />
+          )}
           contentContainerStyle={[
             styles.list,
             { paddingBottom: insets.bottom + 120 },
           ]}
           refreshControl={
-            <RefreshControl refreshing={refreshing} onRefresh={onRefresh} />
+            <RefreshControl
+              refreshing={refreshing}
+              onRefresh={onRefresh}
+            />
           }
           ListFooterComponent={
             <View style={{ height: insets.bottom + 40 }} />
@@ -636,20 +697,26 @@ export default function WorkOrdersScreen() {
         renderItem={({ item }) => <Card item={item} />}
         contentContainerStyle={styles.list}
         refreshControl={
-          <RefreshControl refreshing={refreshing} onRefresh={onRefresh} />
+          <RefreshControl
+            refreshing={refreshing}
+            onRefresh={onRefresh}
+          />
         }
         ListFooterComponent={<View style={styles.bottomSpacer} />}
         ListEmptyComponent={
           !loadingFirst ? (
             <View style={styles.center}>
-              <Text style={styles.noData}>No work orders to display.</Text>
+              <Text style={styles.noData}>
+                No work orders to display.
+              </Text>
             </View>
           ) : null
         }
       />
     );
 
-  const closeStatusModal = () => setStatusModal({ id: null, value: null });
+  const closeStatusModal = () =>
+    setStatusModal({ id: null, value: null });
   const applyStatusModal = () => {
     if (statusModal.id && statusModal.value) {
       handleUpdateStatus(statusModal.id, statusModal.value);
@@ -658,10 +725,16 @@ export default function WorkOrdersScreen() {
   };
 
   const HeaderActions = () => {
-    if (normStatus(selectedStatus) !== normStatus(PARTS_WAITING)) return null;
+    if (
+      normStatus(selectedStatus) !== normStatus(PARTS_WAITING)
+    )
+      return null;
     return (
       <View style={styles.partsHeaderRow}>
-        <TouchableOpacity onPress={openBulkModal} style={styles.partsHeaderBtn}>
+        <TouchableOpacity
+          onPress={openBulkModal}
+          style={styles.partsHeaderBtn}
+        >
           <Text style={styles.partsHeaderBtnText}>
             Mark Parts In ({waitingOrders.length})
           </Text>
@@ -680,7 +753,9 @@ export default function WorkOrdersScreen() {
               onPress={() => router.push('/screens/AddWorkOrder')}
               style={styles.addBtn}
             >
-              <Text style={styles.addBtnText}>+ Add Work Order</Text>
+              <Text style={styles.addBtnText}>
+                + Add Work Order
+              </Text>
             </TouchableOpacity>
           )}
         </View>
@@ -700,7 +775,10 @@ export default function WorkOrdersScreen() {
         animationType="fade"
         onRequestClose={closeStatusModal}
       >
-        <Pressable style={styles.modalOverlay} onPress={closeStatusModal}>
+        <Pressable
+          style={styles.modalOverlay}
+          onPress={closeStatusModal}
+        >
           <Pressable style={styles.modalCard}>
             <Text style={styles.modalTitle}>Change Status</Text>
             {STATUSES.map((s) => (
@@ -708,7 +786,8 @@ export default function WorkOrdersScreen() {
                 key={s}
                 style={[
                   styles.statusOption,
-                  statusModal.value === s && styles.statusOptionActive,
+                  statusModal.value === s &&
+                    styles.statusOptionActive,
                 ]}
                 onPress={() =>
                   setStatusModal({ ...statusModal, value: s })
@@ -730,13 +809,17 @@ export default function WorkOrdersScreen() {
                 style={styles.modalBtnCancel}
                 onPress={closeStatusModal}
               >
-                <Text style={styles.modalBtnText}>Cancel</Text>
+                <Text style={styles.modalBtnText}>
+                  Cancel
+                </Text>
               </TouchableOpacity>
               <TouchableOpacity
                 style={styles.modalBtnApply}
                 onPress={applyStatusModal}
               >
-                <Text style={styles.modalBtnText}>Apply</Text>
+                <Text style={styles.modalBtnText}>
+                  Apply
+                </Text>
               </TouchableOpacity>
             </View>
           </Pressable>
@@ -750,9 +833,17 @@ export default function WorkOrdersScreen() {
         animationType="fade"
         onRequestClose={closeBulkModal}
       >
-        <Pressable style={styles.modalOverlay} onPress={closeBulkModal}>
-          <Pressable style={styles.partsModalCard} onPress={() => {}}>
-            <Text style={styles.modalTitle}>Mark Parts as Received</Text>
+        <Pressable
+          style={styles.modalOverlay}
+          onPress={closeBulkModal}
+        >
+          <Pressable
+            style={styles.partsModalCard}
+            onPress={() => {}}
+          >
+            <Text style={styles.modalTitle}>
+              Mark Parts as Received
+            </Text>
 
             {/* Search + Select all/none */}
             <View style={styles.bulkTopRow}>
@@ -766,13 +857,17 @@ export default function WorkOrdersScreen() {
                 style={styles.bulkTopBtn}
                 onPress={selectAll}
               >
-                <Text style={styles.bulkTopBtnText}>Select All</Text>
+                <Text style={styles.bulkTopBtnText}>
+                  Select All
+                </Text>
               </TouchableOpacity>
               <TouchableOpacity
                 style={styles.bulkTopBtn}
                 onPress={selectNone}
               >
-                <Text style={styles.bulkTopBtnText}>Select None</Text>
+                <Text style={styles.bulkTopBtnText}>
+                  Select None
+                </Text>
               </TouchableOpacity>
             </View>
 
@@ -805,13 +900,17 @@ export default function WorkOrdersScreen() {
                       ]}
                     >
                       {checked ? (
-                        <Text style={styles.checkboxGlyph}>✓</Text>
+                        <Text style={styles.checkboxGlyph}>
+                          ✓
+                        </Text>
                       ) : null}
                     </View>
                     <View style={{ flex: 1 }}>
                       <Text style={styles.partsRowTitle}>
                         WO: {item.workOrderNumber || '—'}{' '}
-                        {item.poNumber ? ` • PO: ${item.poNumber}` : ''}
+                        {item.poNumber
+                          ? ` • PO: ${item.poNumber}`
+                          : ''}
                       </Text>
                       <Text style={styles.partsRowSub}>
                         {item.customer || '—'}
@@ -844,7 +943,10 @@ export default function WorkOrdersScreen() {
 
             {/* Optional note */}
             <Text
-              style={[styles.inputLabel, { marginTop: 10 }]}
+              style={[
+                styles.inputLabel,
+                { marginTop: 10 },
+              ]}
             >
               Optional note
             </Text>
@@ -866,7 +968,9 @@ export default function WorkOrdersScreen() {
                 onPress={closeBulkModal}
                 disabled={bulkWorking}
               >
-                <Text style={styles.modalBtnText}>Cancel</Text>
+                <Text style={styles.modalBtnText}>
+                  Cancel
+                </Text>
               </TouchableOpacity>
               <TouchableOpacity
                 style={[
@@ -954,7 +1058,11 @@ const styles = StyleSheet.create({
     backgroundColor: '#fff',
   },
   badgeActive: { backgroundColor: '#0f6a79', borderColor: '#0f6a79' },
-  badgeText: { color: '#17a2b8', fontSize: 12, fontWeight: '700' },
+  badgeText: {
+    color: '#17a2b8',
+    fontSize: 12,
+    fontWeight: '700',
+  },
   badgeTextActive: { color: '#fff' },
 
   // waiting tab header action
@@ -995,7 +1103,11 @@ const styles = StyleSheet.create({
 
   cardTitle: { fontSize: 18, fontWeight: '600', color: '#2B2D42' },
   cardText: { fontSize: 14, color: '#2B2D42', marginBottom: 4 },
-  linkText: { color: '#17a2b8', textDecorationLine: 'underline', marginBottom: 4 },
+  linkText: {
+    color: '#17a2b8',
+    textDecorationLine: 'underline',
+    marginBottom: 4,
+  },
 
   noteLine: {
     fontSize: 13,
@@ -1030,7 +1142,11 @@ const styles = StyleSheet.create({
   center: { alignItems: 'center', marginTop: 24 },
   noData: { fontStyle: 'italic', color: '#8D99AE' },
 
-  dragBanner: { textAlign: 'center', color: '#64748b', marginVertical: 6 },
+  dragBanner: {
+    textAlign: 'center',
+    color: '#64748b',
+    marginVertical: 6,
+  },
 
   // Shared modal styles
   modalOverlay: {
@@ -1088,9 +1204,15 @@ const styles = StyleSheet.create({
     marginBottom: 8,
     backgroundColor: '#FFFFFF',
   },
-  statusOptionActive: { backgroundColor: '#17a2b8', borderColor: '#17a2b8' },
+  statusOptionActive: {
+    backgroundColor: '#17a2b8',
+    borderColor: '#17a2b8',
+  },
   statusOptionText: { color: '#0F172A', fontWeight: '600' },
-  statusOptionTextActive: { color: '#FFFFFF', fontWeight: '700' },
+  statusOptionTextActive: {
+    color: '#FFFFFF',
+    fontWeight: '700',
+  },
   modalButtonsRow: {
     flexDirection: 'row',
     justifyContent: 'space-between',
@@ -1143,7 +1265,10 @@ const styles = StyleSheet.create({
     paddingVertical: 10,
     gap: 10,
   },
-  rowDivider: { height: StyleSheet.hairlineWidth, backgroundColor: '#e5e7eb' },
+  rowDivider: {
+    height: StyleSheet.hairlineWidth,
+    backgroundColor: '#e5e7eb',
+  },
   checkbox: {
     width: 20,
     height: 20,
@@ -1153,8 +1278,15 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
   },
-  checkboxChecked: { backgroundColor: '#22c55e', borderColor: '#22c55e' },
-  checkboxGlyph: { color: '#fff', fontWeight: '900', fontSize: 13 },
+  checkboxChecked: {
+    backgroundColor: '#22c55e',
+    borderColor: '#22c55e',
+  },
+  checkboxGlyph: {
+    color: '#fff',
+    fontWeight: '900',
+    fontSize: 13,
+  },
   partsRowTitle: { fontWeight: '700', color: '#111827' },
   partsRowSub: { color: '#475569', fontSize: 12 },
 });
