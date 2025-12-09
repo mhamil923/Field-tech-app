@@ -93,6 +93,55 @@ const latestNoteText = (notesLike) => {
   return top.text || '';
 };
 
+/**
+ * Helper: determine if a work order is assigned to the current user.
+ * Tries ID match and several possible "assigned to" fields / names.
+ */
+const isAssignedToMe = (order, me) => {
+  if (!me) return false;
+
+  const myId = me.id;
+  const myName = (me.username || me.name || '')
+    .toString()
+    .trim()
+    .toLowerCase();
+
+  const assignedId =
+    order.assignedTo ??
+    order.assignedToId ??
+    order.assignedUserId ??
+    null;
+
+  const assignedName = (
+    order.assignedToName ||
+    order.assignedToUsername ||
+    order.assignedToUser ||
+    order.assignedTech ||
+    ''
+  )
+    .toString()
+    .trim()
+    .toLowerCase();
+
+  // Match IDs if we have them
+  if (myId != null) {
+    if (assignedId === myId) return true;
+    if (
+      assignedId != null &&
+      String(assignedId) === String(myId)
+    ) {
+      return true;
+    }
+  }
+
+  // Fallback to matching names
+  if (myName && assignedName && myName === assignedName) {
+    return true;
+  }
+
+  return false;
+};
+
 export default function WorkOrdersScreen() {
   const router = useRouter();
   const insets = useSafeAreaInsets();
@@ -143,12 +192,12 @@ export default function WorkOrdersScreen() {
     })();
   }, []);
 
-  // 🔒 special flags for Jeff accounts (still here in case you want them)
+  // 🔒 special flags for Jeff accounts
   const usernameLower = (me?.username || '').toLowerCase();
   const isJeff = usernameLower === 'jeff';
   const isJeffSr = usernameLower === 'jeffsr';
 
-  // 👉 ONLY jeffsr should be restricted to the "Today-only / assigned-to-me" view
+  // 👉 ONLY jeffsr should be restricted to the "Today-only / assigned-to-me" view (chip layout)
   const isTodayScopedUser = isJeffSr;
 
   const fetchWorkOrders = useCallback(async () => {
@@ -171,7 +220,15 @@ export default function WorkOrdersScreen() {
   useEffect(() => {
     fetchWorkOrders();
   }, [fetchWorkOrders]);
-  useFocusEffect(useCallback(() => fetchWorkOrders(), [fetchWorkOrders]));
+
+  // ✅ FIX: useFocusEffect must NOT return a Promise.
+  useFocusEffect(
+    useCallback(() => {
+      fetchWorkOrders(); // fire and forget; no return
+      return undefined; // explicit no-cleanup
+    }, [fetchWorkOrders])
+  );
+
   useEffect(() => {
     loadTodayOrder();
   }, [loadTodayOrder, workOrders.length]);
@@ -187,8 +244,8 @@ export default function WorkOrdersScreen() {
       if (byStatus[label] !== undefined) byStatus[label] += 1;
     }
 
-    const todayBase = me?.id
-      ? workOrders.filter((o) => o.assignedTo === me.id)
+    const todayBase = me
+      ? workOrders.filter((o) => isAssignedToMe(o, me))
       : workOrders;
 
     today = todayBase.filter(
@@ -224,14 +281,11 @@ export default function WorkOrdersScreen() {
         const isToday =
           o.scheduledDate &&
           moment(o.scheduledDate).format('YYYY-MM-DD') === todayStr;
-        const isMine =
-          !me?.id || o.assignedTo === me.id; // if we know who "me" is, require match
+        const isMine = me ? isAssignedToMe(o, me) : true;
         return isToday && isMine;
       });
     }
 
-    // Non-Today tabs: for non-scoped users, normal status filtering;
-    // for scoped users, you can still see all statuses (global) here.
     return base.filter(
       (o) => normStatus(o.status) === normStatus(selectedStatus)
     );
