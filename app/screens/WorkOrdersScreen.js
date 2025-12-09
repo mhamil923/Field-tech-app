@@ -143,7 +143,7 @@ export default function WorkOrdersScreen() {
     })();
   }, []);
 
-  // 🔒 special flags for Jeff accounts
+  // 🔒 special flags for Jeff accounts (still here in case you want them)
   const usernameLower = (me?.username || '').toLowerCase();
   const isJeff = usernameLower === 'jeff';
   const isJeffSr = usernameLower === 'jeffsr';
@@ -176,28 +176,29 @@ export default function WorkOrdersScreen() {
     loadTodayOrder();
   }, [loadTodayOrder, workOrders.length]);
 
-  // counts: for Today-scoped users, counts (including today) are only for their assigned work orders
+  // ---------- COUNTS ----------
+  // Status counts are global; "Today" count is ONLY "assignedTo me" + scheduled today.
   const counts = useMemo(() => {
-    const map = Object.fromEntries(STATUSES.map((s) => [s, 0]));
+    const byStatus = Object.fromEntries(STATUSES.map((s) => [s, 0]));
     let today = 0;
 
-    let base = workOrders;
-    if (isTodayScopedUser && me?.id != null) {
-      base = base.filter((o) => o.assignedTo === me.id);
+    for (const o of workOrders) {
+      const label = toCanonicalStatus(o?.status);
+      if (byStatus[label] !== undefined) byStatus[label] += 1;
     }
 
-    for (const o of base) {
-      const label = toCanonicalStatus(o?.status);
-      if (map[label] !== undefined) map[label] += 1;
-      if (
+    const todayBase = me?.id
+      ? workOrders.filter((o) => o.assignedTo === me.id)
+      : workOrders;
+
+    today = todayBase.filter(
+      (o) =>
         o?.scheduledDate &&
         moment(o.scheduledDate).isSame(moment(), 'day')
-      ) {
-        today += 1;
-      }
-    }
-    return { byStatus: map, today };
-  }, [workOrders, isTodayScopedUser, me]);
+    ).length;
+
+    return { byStatus, today };
+  }, [workOrders, me]);
 
   const openInGoogleMaps = async (query) => {
     const q = encodeURIComponent(query || '');
@@ -211,32 +212,30 @@ export default function WorkOrdersScreen() {
     }
   };
 
-  // filteredOrders:
-  // - For Today-scoped users (jeffsr): only work orders assigned to them
-  // - For others (including Jeff): Today = all WOs scheduled for today; status tabs = by status
+  // ---------- FILTERED ORDERS ----------
+  // Today tab: ONLY work orders assigned to the logged-in user, scheduled for today.
+  // Other tabs: status-based, global (same as before).
   const filteredOrders = useMemo(() => {
     let base = workOrders;
 
-    if (isTodayScopedUser && me?.id != null) {
-      // 🔑 Scoped user (jeffsr) only sees WOs assigned to them
-      base = base.filter((o) => o.assignedTo === me.id);
-    }
-
     if (selectedStatus === 'Today') {
       const todayStr = moment().format('YYYY-MM-DD');
-      return base.filter(
-        (o) =>
+      return base.filter((o) => {
+        const isToday =
           o.scheduledDate &&
-          moment(o.scheduledDate).format('YYYY-MM-DD') === todayStr
-      );
+          moment(o.scheduledDate).format('YYYY-MM-DD') === todayStr;
+        const isMine =
+          !me?.id || o.assignedTo === me.id; // if we know who "me" is, require match
+        return isToday && isMine;
+      });
     }
 
     // Non-Today tabs: for non-scoped users, normal status filtering;
-    // for scoped users, it's still filtered by assignedTo above.
+    // for scoped users, you can still see all statuses (global) here.
     return base.filter(
       (o) => normStatus(o.status) === normStatus(selectedStatus)
     );
-  }, [workOrders, selectedStatus, isTodayScopedUser, me]);
+  }, [workOrders, selectedStatus, me]);
 
   const orderedToday = useMemo(() => {
     if (selectedStatus !== 'Today') return filteredOrders;
@@ -493,7 +492,7 @@ export default function WorkOrdersScreen() {
       );
     }
 
-    // Default: Today + all statuses (counts are global)
+    // Default: Today + all statuses
     return (
       <View style={styles.chipsWrap}>
         <TouchableOpacity
