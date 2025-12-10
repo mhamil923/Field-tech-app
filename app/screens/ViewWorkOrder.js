@@ -317,7 +317,7 @@ const ANNOTATOR_HTML = `
         const pdfBytes=b64ToUint8(b64);
         const pdfDoc=await PDFLib.PDFDocument.load(pdfBytes);
         const pages=pdfDoc.getPages();
-        for(let i=0;i<Math.min(pages.length,state.pages.length);i++){
+        for(let i=0; i<Math.min(pages.length,state.pages.length); i++){
           const p=pages[i], view=state.pages[i];
           const dataUrl=view.overlayCanvas.toDataURL('image/png');
           const pngBytes=await (await fetch(dataUrl)).arrayBuffer();
@@ -354,7 +354,7 @@ const SKETCH_HTML = `
 <html>
 <head>
 <meta charset="utf-8" />
-<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable-no" />
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no" />
 <title>Draw Note</title>
 <style>
   html,body { margin:0; padding:0; background:#000; font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Arial,sans-serif; height:100%; overflow-y:auto; -webkit-overflow-scrolling:touch; }
