@@ -24,7 +24,7 @@ import * as ImagePicker from 'expo-image-picker';
 import * as ImageManipulator from 'expo-image-manipulator';
 import { Camera, CameraType } from 'expo-camera';
 import moment from 'moment';
-import { useNavigation } from '@react-navigation/native';
+import { useRouter, useLocalSearchParams } from 'expo-router';
 
 import api, { fileUrl } from '../../constants/api';
 
