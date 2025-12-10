@@ -674,13 +674,13 @@ export default function ViewWorkOrder() {
     loadDocIntoModal(docItems[pi].url);
   };
 
-  /* ---------- ADD NOTE (FIXED like web) ---------- */
+  /* ---------- ADD NOTE ---------- */
   const addNote = async () => {
     const text = newNoteText.trim();
     if (!text) return;
 
     try {
-      // Primary: EXACT match to working curl
+      // Primary
       await api.put(
         `/work-orders/${workOrderId}/notes`,
         { notes: text, append: true },
@@ -692,7 +692,7 @@ export default function ViewWorkOrder() {
         }
       );
     } catch (err1) {
-      // Fallback: some deployments accept "text" instead of "notes"
+      // Fallback: "text"
       try {
         await api.put(
           `/work-orders/${workOrderId}/notes`,
@@ -2232,9 +2232,7 @@ export default function ViewWorkOrder() {
                         opacity: 0.6,
                       },
                     ]}
-                    onPress={async () => {
-                      await uploadPendingCameraPhotos();
-                    }}
+                    onPress={uploadPendingCameraPhotos}
                     disabled={
                       !pendingCameraPhotos.length
                     }
