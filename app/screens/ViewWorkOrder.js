@@ -354,7 +354,7 @@ const SKETCH_HTML = `
 <html>
 <head>
 <meta charset="utf-8" />
-<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no" />
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable-no" />
 <title>Draw Note</title>
 <style>
   html,body { margin:0; padding:0; background:#000; font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Arial,sans-serif; height:100%; overflow-y:auto; -webkit-overflow-scrolling:touch; }
@@ -423,13 +423,15 @@ const SKETCH_HTML = `
 `;
 
 export default function ViewWorkOrder() {
-const navigation = useNavigation();
-const route = useRoute();
+  // Expo Router hooks
+  const router = useRouter();
+  const params = useLocalSearchParams();
 
-const workOrderId =
-  route?.params?.id ??
-  route?.params?.workOrderId ??
-  null;
+  const workOrderId = params?.id
+    ? Array.isArray(params.id)
+      ? params.id[0]
+      : params.id
+    : null;
 
   const [workOrder, setWorkOrder] = useState(null);
   const [photos, setPhotos] = useState([]); // image URLs only
@@ -1288,7 +1290,7 @@ const workOrderId =
         {/* Actions */}
         <TouchableOpacity
           style={[styles.buttonBase, styles.backBtn]}
-          onPress={() => navigation.goBack()}
+          onPress={() => router.back()}
         >
           <Text style={styles.backText}>Back to List</Text>
         </TouchableOpacity>
