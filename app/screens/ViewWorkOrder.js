@@ -423,14 +423,13 @@ const SKETCH_HTML = `
 `;
 
 export default function ViewWorkOrder() {
-  const params = useLocalSearchParams();
-  const navigation = useNavigation();
+const navigation = useNavigation();
+const route = useRoute();
 
-  const workOrderId = params?.id
-    ? Array.isArray(params.id)
-      ? params.id[0]
-      : params.id
-    : null;
+const workOrderId =
+  route?.params?.id ??
+  route?.params?.workOrderId ??
+  null;
 
   const [workOrder, setWorkOrder] = useState(null);
   const [photos, setPhotos] = useState([]); // image URLs only
