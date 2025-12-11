@@ -192,13 +192,14 @@ export default function WorkOrdersScreen() {
     })();
   }, []);
 
-  // 🔒 special flags for Jeff accounts
+  // 🔒 special flags for Jeff accounts + Adin
   const usernameLower = (me?.username || '').toLowerCase();
   const isJeff = usernameLower === 'jeff';
   const isJeffSr = usernameLower === 'jeffsr';
+  const isAdin = usernameLower === 'adin';
 
-  // 👉 ONLY jeffsr should be restricted to the "Today-only / assigned-to-me" view (chip layout)
-  const isTodayScopedUser = isJeffSr;
+  // 👉 jeffsr and Adin are restricted to the "Today-only / assigned-to-me" view (chip layout)
+  const isTodayScopedUser = isJeffSr || isAdin;
 
   const fetchWorkOrders = useCallback(async () => {
     try {
@@ -221,7 +222,7 @@ export default function WorkOrdersScreen() {
     fetchWorkOrders();
   }, [fetchWorkOrders]);
 
-  // ✅ FIX: useFocusEffect must NOT return a Promise.
+  // useFocusEffect must NOT return a Promise.
   useFocusEffect(
     useCallback(() => {
       fetchWorkOrders(); // fire and forget; no return
@@ -504,7 +505,7 @@ export default function WorkOrdersScreen() {
   };
 
   // 🔹 Chips:
-  // - For jeffsr: ONLY show Today tab (scoped to assigned-to-me)
+  // - For jeffsr & Adin: ONLY show Today tab (scoped to assigned-to-me)
   // - For everyone else (including Jeff): show Today + all statuses
   const renderChips = () => {
     if (isTodayScopedUser) {
