@@ -24,7 +24,8 @@ import * as ImagePicker from 'expo-image-picker';
 import * as ImageManipulator from 'expo-image-manipulator';
 import { Camera, CameraType } from 'expo-camera';
 import moment from 'moment';
-import { useRouter, useLocalSearchParams } from 'expo-router';
+import { useRouter } from 'expo-router';
+import { useRoute } from '@react-navigation/native';
 
 import api, { fileUrl } from '../../constants/api';
 
@@ -423,15 +424,16 @@ const SKETCH_HTML = `
 `;
 
 export default function ViewWorkOrder() {
-  // Expo Router hooks
+  // Router (for back navigation) + React Navigation route (for params)
   const router = useRouter();
-  const params = useLocalSearchParams();
+  const route = useRoute();
 
-  const workOrderId = params?.id
-    ? Array.isArray(params.id)
-      ? params.id[0]
-      : params.id
-    : null;
+  // Get workOrderId from route params (covers several possible keys)
+  const workOrderId =
+    route?.params?.id ??
+    route?.params?.workOrderId ??
+    route?.params?.orderId ??
+    null;
 
   const [workOrder, setWorkOrder] = useState(null);
   const [photos, setPhotos] = useState([]); // image URLs only
