@@ -22,7 +22,6 @@ import { WebView } from 'react-native-webview';
 import * as FileSystem from 'expo-file-system';
 import * as ImagePicker from 'expo-image-picker';
 import * as ImageManipulator from 'expo-image-manipulator';
-import { Camera, CameraType } from 'expo-camera';
 import moment from 'moment';
 import { useLocalSearchParams } from 'expo-router';
 import { useNavigation } from '@react-navigation/native';
@@ -49,8 +48,7 @@ const STATUS_OPTIONS = [
 /* ---------- auth header (match web) ---------- */
 const authHeaders = () => {
   try {
-    const token =
-      typeof localStorage !== 'undefined' ? localStorage.getItem('jwt') : null;
+    const token = typeof localStorage !== 'undefined' ? localStorage.getItem('jwt') : null;
     // React Native doesn't have localStorage; try AsyncStorage-like shim if you added one to api.
     // If your axios instance already attaches the token, this just harmlessly adds it again.
     return token ? { Authorization: `Bearer ${token}` } : {};
@@ -444,13 +442,6 @@ export default function ViewWorkOrder() {
   const [pendingViewerVisible, setPendingViewerVisible] = useState(false);
   const [pendingViewerIndex, setPendingViewerIndex] = useState(0);
 
-  // expo-camera state (continuous capture UI)
-  const [cameraVisible, setCameraVisible] = useState(false);
-  const [cameraType, setCameraType] = useState(CameraType.back);
-  const [isCapturing, setIsCapturing] = useState(false);
-  const [hasCameraPermission, setHasCameraPermission] = useState(null);
-  const cameraRef = useRef(null);
-
   // Notes modal
   const [showAddNoteModal, setShowAddNoteModal] = useState(false);
   const [newNoteText, setNewNoteText] = useState('');
@@ -480,11 +471,9 @@ export default function ViewWorkOrder() {
   const [docModalVisible, setDocModalVisible] = useState(false);
   const [docGroup, setDocGroup] = useState(null); // 'WO' | 'EST' | 'PO' | 'ATTACH'
   const [docIndex, setDocIndex] = useState(0);
-  const [docItems, setDocItems] = useState([]); // [{title, url}]
+  const [docItems, setDocItems] = useState([]);  // [{title, url}]
   const [docB64, setDocB64] = useState(null);
-  const [docHeight, setDocHeight] = useState(
-    Math.max(600, screenHeight * 0.85)
-  );
+  const [docHeight, setDocHeight] = useState(Math.max(600, screenHeight * 0.85));
   const [docError, setDocError] = useState(null);
   const [docLoading, setDocLoading] = useState(false);
 
@@ -493,16 +482,12 @@ export default function ViewWorkOrder() {
   const callNumber = (p) => {
     const n = normPhone(p);
     if (!n) return;
-    Linking.openURL(`tel:${n}`).catch(() =>
-      Alert.alert('Error', 'Unable to open Phone app.')
-    );
+    Linking.openURL(`tel:${n}`).catch(() => Alert.alert('Error', 'Unable to open Phone app.'));
   };
   const emailTo = (e) => {
     const addr = String(e || '').trim();
     if (!addr) return;
-    Linking.openURL(`mailto:${addr}`).catch(() =>
-      Alert.alert('Error', 'Unable to open Mail app.')
-    );
+    Linking.openURL(`mailto:${addr}`).catch(() => Alert.alert('Error', 'Unable to open Mail app.'));
   };
   const openMap = (loc) => {
     const q = encodeURIComponent(loc || '');
@@ -514,9 +499,7 @@ export default function ViewWorkOrder() {
     });
     const googleWebUrl = `https://www.google.com/maps/search/?api=1&query=${q}`;
     Linking.canOpenURL(googleAppUrl)
-      .then((supported) =>
-        supported ? Linking.openURL(googleAppUrl) : Linking.openURL(googleWebUrl)
-      )
+      .then(supported => (supported ? Linking.openURL(googleAppUrl) : Linking.openURL(googleWebUrl)))
       .catch(() => Alert.alert('Error', 'Unable to open Google Maps.'));
   };
   // -------------------------------------------------------
@@ -528,7 +511,7 @@ export default function ViewWorkOrder() {
     if (typeof val === 'string') {
       return val
         .split(',')
-        .map((s) => s.trim())
+        .map(s => s.trim())
         .filter(Boolean)
         .map(fileUrl);
     }
@@ -538,9 +521,7 @@ export default function ViewWorkOrder() {
   const fetchWorkOrder = useCallback(async () => {
     if (!workOrderId) return;
     try {
-      const { data } = await api.get(`/work-orders/${workOrderId}`, {
-        headers: authHeaders(),
-      });
+      const { data } = await api.get(`/work-orders/${workOrderId}`, { headers: authHeaders() });
       setWorkOrder(data);
 
       // Notes (supports array or legacy TEXT)
@@ -550,10 +531,10 @@ export default function ViewWorkOrder() {
       // Attachments: photoPath may contain images and PDFs (sign-off sheets)
       const rawKeys = (data?.photoPath || '')
         .split(',')
-        .map((s) => s.trim())
+        .map(s => s.trim())
         .filter(Boolean);
 
-      const allUrls = rawKeys.map((k) => fileUrl(k));
+      const allUrls = rawKeys.map(k => fileUrl(k));
 
       // Only keep *image* URLs in `photos` for the image viewer
       const imageUrls = allUrls.filter((u) => {
@@ -566,16 +547,11 @@ export default function ViewWorkOrder() {
       });
       setPhotos(imageUrls);
     } catch (err) {
-      Alert.alert(
-        'Error',
-        err?.response?.data?.error || 'Failed to load work order.'
-      );
+      Alert.alert('Error', err?.response?.data?.error || 'Failed to load work order.');
     }
   }, [workOrderId]);
 
-  useEffect(() => {
-    fetchWorkOrder();
-  }, [fetchWorkOrder]);
+  useEffect(() => { fetchWorkOrder(); }, [fetchWorkOrder]);
 
   // Derivations for tiles
   const woPdfUrl = workOrder?.pdfPath ? fileUrl(workOrder.pdfPath) : null;
@@ -596,19 +572,14 @@ export default function ViewWorkOrder() {
 
   // Lightbox loader
   const loadDocIntoModal = useCallback(async (url) => {
-    if (!url) {
-      setDocError('Missing file URL');
-      return;
-    }
+    if (!url) { setDocError('Missing file URL'); return; }
     try {
       setDocLoading(true);
       setDocError(null);
       setDocB64(null);
       const target = FileSystem.cacheDirectory + `doc_${Date.now()}.pdf`;
       await FileSystem.downloadAsync(url, target);
-      const b64 = await FileSystem.readAsStringAsync(target, {
-        encoding: FileSystem.EncodingType.Base64,
-      });
+      const b64 = await FileSystem.readAsStringAsync(target, { encoding: FileSystem.EncodingType.Base64 });
       setDocB64(b64);
     } catch (e) {
       setDocError(e?.message || 'Failed to load document.');
@@ -620,42 +591,19 @@ export default function ViewWorkOrder() {
   const openDocGroup = (group, startIndex = 0) => {
     let items = [];
     if (group === 'WO') {
-      if (!woPdfUrl) {
-        Alert.alert(
-          'No PDF',
-          'This work order does not have a PDF attached.'
-        );
-        return;
-      }
-      items = [
-        {
-          title: `Work Order ${workOrder?.workOrderNumber || workOrderId}`,
-          url: woPdfUrl,
-        },
-      ];
+      if (!woPdfUrl) { Alert.alert('No PDF', 'This work order does not have a PDF attached.'); return; }
+      items = [{ title: `Work Order ${workOrder?.workOrderNumber || workOrderId}`, url: woPdfUrl }];
     } else if (group === 'EST') {
-      if (!estimateUrls.length) {
-        Alert.alert('No Estimates', 'No Estimate PDFs found for this job.');
-        return;
-      }
-      items = estimateUrls.map((u, i) => ({
-        title: `Estimate ${i + 1}`,
-        url: u,
-      }));
+      if (!estimateUrls.length) { Alert.alert('No Estimates', 'No Estimate PDFs found for this job.'); return; }
+      items = estimateUrls.map((u, i) => ({ title: `Estimate ${i + 1}`, url: u }));
     } else if (group === 'PO') {
-      if (!poUrls.length) {
-        Alert.alert('No POs', 'No PO PDFs found for this job.');
-        return;
-      }
+      if (!poUrls.length) { Alert.alert('No POs', 'No PO PDFs found for this job.'); return; }
       items = poUrls.map((u, i) => ({ title: `PO ${i + 1}`, url: u }));
     }
 
     setDocGroup(group);
     setDocItems(items);
-    const safeIdx = Math.min(
-      Math.max(0, startIndex),
-      Math.max(0, items.length - 1)
-    );
+    const safeIdx = Math.min(Math.max(0, startIndex), Math.max(0, items.length - 1));
     setDocIndex(safeIdx);
     setDocModalVisible(true);
     loadDocIntoModal(items[safeIdx].url);
@@ -684,12 +632,7 @@ export default function ViewWorkOrder() {
       await api.put(
         `/work-orders/${workOrderId}/notes`,
         { notes: text, append: true },
-        {
-          headers: {
-            'Content-Type': 'application/json',
-            ...authHeaders(),
-          },
-        }
+        { headers: { 'Content-Type': 'application/json', ...authHeaders() } }
       );
     } catch (err1) {
       // Fallback: some deployments accept "text" instead of "notes"
@@ -697,12 +640,7 @@ export default function ViewWorkOrder() {
         await api.put(
           `/work-orders/${workOrderId}/notes`,
           { text, append: true },
-          {
-            headers: {
-              'Content-Type': 'application/json',
-              ...authHeaders(),
-            },
-          }
+          { headers: { 'Content-Type': 'application/json', ...authHeaders() } }
         );
       } catch (err2) {
         const msg =
@@ -736,51 +674,45 @@ export default function ViewWorkOrder() {
   };
 
   /**
-   * CAMERA FLOW (expo-camera, custom continuous UI):
-   * - Tap "Take Photo (Camera)" → opens fullscreen camera modal
-   * - Tap shutter as many times as you want; each shot is added to pendingCameraPhotos
-   * - Camera stays open until you press Close
-   * - Thumbnails + delete live inside the camera UI
+   * CAMERA FLOW (ImagePicker, multi-shot):
+   * - openCamera launches camera
+   * - user keeps snapping / using photos
+   * - after each accepted photo, we add it to pending list
+   * - camera keeps re-opening until they hit "Cancel" in the native camera UI
+   *   then they can decide what to upload from the Pending section.
    */
   const openCamera = async () => {
-    const { status } = await Camera.requestCameraPermissionsAsync();
+    const { status } = await ImagePicker.requestCameraPermissionsAsync();
     if (status !== 'granted') {
-      setHasCameraPermission(false);
-      Alert.alert('Permission required', 'Need camera access to take photos.');
-      return;
+      return Alert.alert('Permission required', 'Need camera access.');
     }
-    setHasCameraPermission(true);
-    setCameraVisible(true);
-  };
 
-  const capturePhoto = async () => {
-    if (!cameraRef.current || isCapturing) return;
-    try {
-      setIsCapturing(true);
-      const photo = await cameraRef.current.takePictureAsync({
+    let keepCapturing = true;
+
+    while (keepCapturing) {
+      const result = await ImagePicker.launchCameraAsync({
         quality: 1,
-        skipProcessing: true,
+        allowsEditing: false,
       });
-      if (photo?.uri) {
+
+      // If user cancels from camera, stop the session
+      if (result.canceled || !result.assets?.length) {
+        keepCapturing = false;
+        break;
+      }
+
+      const asset = result.assets[0];
+      if (asset?.uri) {
         setPendingCameraPhotos((prev) => [
           ...prev,
           {
             id: `${Date.now()}-${Math.random().toString(16).slice(2)}`,
-            uri: photo.uri,
+            uri: asset.uri,
           },
         ]);
       }
-    } catch (e) {
-      console.warn('capturePhoto error', e?.message || e);
-    } finally {
-      setIsCapturing(false);
+      // Loop continues; user taps "Use Photo" to add another, or Cancel to exit
     }
-  };
-
-  const toggleCameraType = () => {
-    setCameraType((prev) =>
-      prev === CameraType.back ? CameraType.front : CameraType.back
-    );
   };
 
   const removePendingCameraPhoto = (id) => {
@@ -812,11 +744,7 @@ export default function ViewWorkOrder() {
         const p = pendingCameraPhotos[i];
         const processedUri = await processImageForUpload(p.uri);
         const name = `photo-${Date.now()}-${i}.jpg`;
-        form.append('photoFile', {
-          uri: processedUri,
-          name,
-          type: 'image/jpeg',
-        });
+        form.append('photoFile', { uri: processedUri, name, type: 'image/jpeg' });
       }
 
       await api.put(`/work-orders/${workOrderId}/edit`, form, {
@@ -827,22 +755,14 @@ export default function ViewWorkOrder() {
       await fetchWorkOrder();
       Alert.alert('Success', 'Camera photos uploaded!');
     } catch (err) {
-      Alert.alert(
-        'Upload Error',
-        err?.response?.data?.error || err.message || 'Failed to upload photos.'
-      );
+      Alert.alert('Upload Error', err?.response?.data?.error || err.message);
     }
   };
 
-  // Library multi-select (kept as ImagePicker)
+  // Library multi-select
   const uploadPhotos = async () => {
-    const { status } =
-      await ImagePicker.requestMediaLibraryPermissionsAsync();
-    if (status !== 'granted')
-      return Alert.alert(
-        'Permission required',
-        'Need photo library access.'
-      );
+    const { status } = await ImagePicker.requestMediaLibraryPermissionsAsync();
+    if (status !== 'granted') return Alert.alert('Permission required', 'Need photo library access.');
     const result = await ImagePicker.launchImageLibraryAsync({
       mediaTypes: ImagePicker.MediaTypeOptions.Images,
       allowsMultipleSelection: true,
@@ -854,11 +774,7 @@ export default function ViewWorkOrder() {
     for (let i = 0; i < result.assets.length; i++) {
       const processedUri = await processImageForUpload(result.assets[i].uri);
       const name = `photo-${Date.now()}-${i}.jpg`;
-      form.append('photoFile', {
-        uri: processedUri,
-        name,
-        type: 'image/jpeg',
-      });
+      form.append('photoFile', { uri: processedUri, name, type: 'image/jpeg' });
     }
 
     try {
@@ -868,19 +784,13 @@ export default function ViewWorkOrder() {
       fetchWorkOrder();
       Alert.alert('Success', 'Photos uploaded!');
     } catch (err) {
-      Alert.alert(
-        'Upload Error',
-        err?.response?.data?.error || err.message || 'Failed to upload photos.'
-      );
+      Alert.alert('Upload Error', err?.response?.data?.error || err.message);
     }
   };
 
   const handleDeletePhoto = (idx) => {
     // idx is index in *attachment keys* (photoPath list) – used in Attachments modal
-    const keys = (workOrder?.photoPath || '')
-      .split(',')
-      .map((s) => s.trim())
-      .filter(Boolean);
+    const keys = (workOrder?.photoPath || '').split(',').map(s => s.trim()).filter(Boolean);
     if (idx < 0 || idx >= keys.length) return;
 
     Alert.alert('Delete Attachment?', 'This will permanently remove it.', [
@@ -897,10 +807,7 @@ export default function ViewWorkOrder() {
             fetchWorkOrder();
             Alert.alert('Deleted');
           } catch (err) {
-            Alert.alert(
-              'Error',
-              err?.response?.data?.error || err.message || 'Failed to delete.'
-            );
+            Alert.alert('Error', err?.response?.data?.error || err.message);
           }
         },
       },
@@ -909,14 +816,9 @@ export default function ViewWorkOrder() {
 
   const handleShare = async () => {
     if (!photos.length) return;
-    const safeIndex = Math.min(
-      Math.max(0, viewerIndex),
-      Math.max(0, photos.length - 1)
-    );
+    const safeIndex = Math.min(Math.max(0, viewerIndex), Math.max(0, photos.length - 1));
     const url = photos[safeIndex];
-    try {
-      await Share.share({ url, message: url });
-    } catch {}
+    try { await Share.share({ url, message: url }); } catch {}
   };
 
   const closePhotoViewer = () => {
@@ -931,18 +833,12 @@ export default function ViewWorkOrder() {
 
   // Core: open annotator safely (always on top of any other modal)
   const openAnnotator = async () => {
-    if (!pdfURL)
-      return Alert.alert(
-        'No PDF',
-        'This work order does not have a PDF attached.'
-      );
+    if (!pdfURL) return Alert.alert('No PDF', 'This work order does not have a PDF attached.');
     try {
       // Preload the PDF before showing, so it appears ready
       const tmp = FileSystem.cacheDirectory + `wo_${workOrderId}.pdf`;
       await FileSystem.downloadAsync(pdfURL, tmp);
-      const b64 = await FileSystem.readAsStringAsync(tmp, {
-        encoding: FileSystem.EncodingType.Base64,
-      });
+      const b64 = await FileSystem.readAsStringAsync(tmp, { encoding: FileSystem.EncodingType.Base64 });
       setPdfBase64(b64);
       setAnnotateVisible(true);
     } catch {
@@ -954,9 +850,7 @@ export default function ViewWorkOrder() {
   // If the user taps "Annotate" from inside the Lightbox, close it first then open annotator
   const openAnnotatorFromLightbox = async () => {
     setDocModalVisible(false);
-    setTimeout(() => {
-      openAnnotator();
-    }, 250);
+    setTimeout(() => { openAnnotator(); }, 250);
   };
 
   const openSketch = () => setSketchVisible(true);
@@ -965,43 +859,24 @@ export default function ViewWorkOrder() {
   const onAnnotatorMessage = async (ev) => {
     const msg = ev?.nativeEvent?.data || '';
     if (typeof msg !== 'string') return;
-    if (msg.startsWith('ERROR:')) {
-      Alert.alert('Annotator Error', msg.slice(6));
-      return;
-    }
-    if (msg === 'CLOSE') {
-      setAnnotateVisible(false);
-      return;
-    }
+    if (msg.startsWith('ERROR:')) { Alert.alert('Annotator Error', msg.slice(6)); return; }
+    if (msg === 'CLOSE') { setAnnotateVisible(false); return; }
     if (msg.startsWith('SIGNED:')) {
       const b64 = msg.slice(7);
       try {
-        const signedUri =
-          FileSystem.cacheDirectory + `signed_${Date.now()}.pdf`;
-        await FileSystem.writeAsStringAsync(signedUri, b64, {
-          encoding: FileSystem.EncodingType.Base64,
-        });
+        const signedUri = FileSystem.cacheDirectory + `signed_${Date.now()}.pdf`;
+        await FileSystem.writeAsStringAsync(signedUri, b64, { encoding: FileSystem.EncodingType.Base64 });
         const form = new FormData();
         const name = `WO-${workOrder?.poNumber || workOrderId}-signed.pdf`;
-        form.append('pdfFile', {
-          uri: signedUri,
-          name,
-          type: 'application/pdf',
-        });
+        form.append('pdfFile', { uri: signedUri, name, type: 'application/pdf' });
         await api.put(`/work-orders/${workOrderId}/edit`, form, {
-          headers: {
-            'Content-Type': 'multipart/form-data',
-            ...authHeaders(),
-          },
+          headers: { 'Content-Type': 'multipart/form-data', ...authHeaders() },
         });
         setAnnotateVisible(false);
         fetchWorkOrder();
         Alert.alert('Success', 'Signed PDF uploaded.');
       } catch (e) {
-        Alert.alert(
-          'Upload Error',
-          e?.message || 'Failed to upload signed PDF.'
-        );
+        Alert.alert('Upload Error', e?.message || 'Failed to upload signed PDF.');
       }
     }
   };
@@ -1009,22 +884,13 @@ export default function ViewWorkOrder() {
   const onSketchMessage = async (ev) => {
     const msg = ev?.nativeEvent?.data || '';
     if (typeof msg !== 'string') return;
-    if (msg.startsWith('ERROR:')) {
-      Alert.alert('Draw Notes Error', msg.slice(6));
-      return;
-    }
-    if (msg === 'CLOSE') {
-      setSketchVisible(false);
-      return;
-    }
+    if (msg.startsWith('ERROR:')) { Alert.alert('Draw Notes Error', msg.slice(6)); return; }
+    if (msg === 'CLOSE') { setSketchVisible(false); return; }
     if (msg.startsWith('IMAGE:')) {
       const b64 = msg.slice(6);
       try {
-        const jpgPath =
-          FileSystem.cacheDirectory + `drawing_${Date.now()}.jpg`;
-        await FileSystem.writeAsStringAsync(jpgPath, b64, {
-          encoding: FileSystem.EncodingType.Base64,
-        });
+        const jpgPath = FileSystem.cacheDirectory + `drawing_${Date.now()}.jpg`;
+        await FileSystem.writeAsStringAsync(jpgPath, b64, { encoding: FileSystem.EncodingType.Base64 });
         const processed = await processImageForUpload(jpgPath);
         const form = new FormData();
         form.append('photoFile', {
@@ -1033,19 +899,13 @@ export default function ViewWorkOrder() {
           type: 'image/jpeg',
         });
         await api.put(`/work-orders/${workOrderId}/edit`, form, {
-          headers: {
-            'Content-Type': 'multipart/form-data',
-            ...authHeaders(),
-          },
+          headers: { 'Content-Type': 'multipart/form-data', ...authHeaders() },
         });
         setSketchVisible(false);
         fetchWorkOrder();
         Alert.alert('Uploaded', 'Drawing note uploaded as photo.');
       } catch (e) {
-        Alert.alert(
-          'Upload Error',
-          e?.message || 'Failed to upload drawing note.'
-        );
+        Alert.alert('Upload Error', e?.message || 'Failed to upload drawing note.');
       }
     }
   };
@@ -1067,10 +927,8 @@ export default function ViewWorkOrder() {
   const poNumber = workOrder?.poNumber || '—';
   const workOrderNumber = workOrder?.workOrderNumber || '—';
 
-  const customer =
-    workOrder?.customer || workOrder?.customerName || '—';
-  const problem =
-    workOrder?.problemDescription || workOrder?.problem || '—';
+  const customer = workOrder?.customer || workOrder?.customerName || '—';
+  const problem = workOrder?.problemDescription || workOrder?.problem || '—';
   const status = workOrder?.status || '—';
   const scheduled = workOrder?.scheduledDate
     ? moment(workOrder.scheduledDate).format('YYYY-MM-DD HH:mm')
@@ -1083,17 +941,13 @@ export default function ViewWorkOrder() {
     '';
 
   const customerEmail =
-    workOrder?.customerEmail || workOrder?.email || '';
+    workOrder?.customerEmail ||
+    workOrder?.email ||
+    '';
 
   const billingAddress =
     workOrder?.billingAddress ||
-    [
-      workOrder?.billingAddress1,
-      workOrder?.billingAddress2,
-      workOrder?.billingCity,
-      workOrder?.billingState,
-      workOrder?.billingZip,
-    ]
+    [workOrder?.billingAddress1, workOrder?.billingAddress2, workOrder?.billingCity, workOrder?.billingState, workOrder?.billingZip]
       .filter(Boolean)
       .join(', ') ||
     '';
@@ -1107,24 +961,17 @@ export default function ViewWorkOrder() {
   const applyStatus = async () => {
     const next = pendingStatus || STATUS_OPTIONS[0];
     const prev = workOrder?.status;
-    setWorkOrder((w) => (w ? { ...w, status: next } : w));
+    setWorkOrder(w => (w ? { ...w, status: next } : w));
     setShowStatusModal(false);
     setIsStatusSaving(true);
     try {
       const form = new FormData();
       form.append('status', next);
-      await api.put(`/work-orders/${workOrderId}/edit`, form, {
-        headers: authHeaders(),
-      });
+      await api.put(`/work-orders/${workOrderId}/edit`, form, { headers: authHeaders() });
       await fetchWorkOrder();
     } catch (e) {
-      setWorkOrder((w) => (w ? { ...w, status: prev } : w));
-      Alert.alert(
-        'Error',
-        e?.response?.data?.error ||
-          e?.message ||
-          'Failed to update status.'
-      );
+      setWorkOrder(w => (w ? { ...w, status: prev } : w));
+      Alert.alert('Error', e?.response?.data?.error || e?.message || 'Failed to update status.');
     } finally {
       setIsStatusSaving(false);
     }
@@ -1133,10 +980,7 @@ export default function ViewWorkOrder() {
 
   // Open a PDF attachment from Attachments modal using the multi-page viewer
   const openAttachmentPdf = (attachmentIndex) => {
-    const keys = (workOrder?.photoPath || '')
-      .split(',')
-      .map((s) => s.trim())
-      .filter(Boolean);
+    const keys = (workOrder?.photoPath || '').split(',').map(s => s.trim()).filter(Boolean);
     if (!keys.length) return;
 
     const pdfItems = [];
@@ -1169,10 +1013,7 @@ export default function ViewWorkOrder() {
 
     setDocGroup('ATTACH');
     setDocItems(pdfItems);
-    const safeIdx = Math.min(
-      Math.max(0, startDocIndex),
-      Math.max(0, pdfItems.length - 1)
-    );
+    const safeIdx = Math.min(Math.max(0, startDocIndex), Math.max(0, pdfItems.length - 1));
     setDocIndex(safeIdx);
     setDocModalVisible(true);
     loadDocIntoModal(pdfItems[safeIdx].url);
@@ -1180,111 +1021,59 @@ export default function ViewWorkOrder() {
 
   return (
     <View style={styles.screen}>
-      <ScrollView
-        contentContainerStyle={styles.details}
-        keyboardShouldPersistTaps="handled"
-      >
+      <ScrollView contentContainerStyle={styles.details} keyboardShouldPersistTaps="handled">
         <Text style={styles.title}>Work Order Details</Text>
 
         <View style={styles.card}>
-          <View style={styles.row}>
-            <Text style={styles.label}>Work Order #:</Text>
-            <Text style={styles.value}>{workOrderNumber}</Text>
-          </View>
-          <View style={styles.row}>
-            <Text style={styles.label}>PO #:</Text>
-            <Text style={styles.value}>{poNumber}</Text>
-          </View>
-          <View style={styles.row}>
-            <Text style={styles.label}>Customer:</Text>
-            <Text style={styles.value}>{customer}</Text>
-          </View>
+          <View style={styles.row}><Text style={styles.label}>Work Order #:</Text><Text style={styles.value}>{workOrderNumber}</Text></View>
+          <View style={styles.row}><Text style={styles.label}>PO #:</Text><Text style={styles.value}>{poNumber}</Text></View>
+          <View style={styles.row}><Text style={styles.label}>Customer:</Text><Text style={styles.value}>{customer}</Text></View>
 
           <View style={styles.row}>
             <Text style={styles.label}>Customer Phone:</Text>
             {customerPhone ? (
-              <TouchableOpacity
-                onPress={() => callNumber(customerPhone)}
-              >
-                <Text style={[styles.value, styles.linkText]}>
-                  {customerPhone}
-                </Text>
+              <TouchableOpacity onPress={() => callNumber(customerPhone)}>
+                <Text style={[styles.value, styles.linkText]}>{customerPhone}</Text>
               </TouchableOpacity>
-            ) : (
-              <Text style={styles.value}>—</Text>
-            )}
+            ) : <Text style={styles.value}>—</Text>}
           </View>
 
           <View style={styles.row}>
             <Text style={styles.label}>Customer Email:</Text>
             {customerEmail ? (
-              <TouchableOpacity
-                onPress={() => emailTo(customerEmail)}
-              >
-                <Text style={[styles.value, styles.linkText]}>
-                  {customerEmail}
-                </Text>
+              <TouchableOpacity onPress={() => emailTo(customerEmail)}>
+                <Text style={[styles.value, styles.linkText]}>{customerEmail}</Text>
               </TouchableOpacity>
-            ) : (
-              <Text style={styles.value}>—</Text>
-            )}
+            ) : <Text style={styles.value}>—</Text>}
           </View>
 
-          <View style={styles.row}>
-            <Text style={styles.label}>Site Location:</Text>
-            <Text style={styles.value}>{siteName || '—'}</Text>
-          </View>
+          <View style={styles.row}><Text style={styles.label}>Site Location:</Text><Text style={styles.value}>{siteName || '—'}</Text></View>
 
           <View style={styles.row}>
             <Text style={styles.label}>Site Address:</Text>
             {siteAddress ? (
               <TouchableOpacity onPress={() => openMap(siteAddress)}>
-                <Text style={[styles.value, styles.linkText]}>
-                  {siteAddress}
-                </Text>
+                <Text style={[styles.value, styles.linkText]}>{siteAddress}</Text>
               </TouchableOpacity>
-            ) : (
-              <Text style={styles.value}>—</Text>
-            )}
+            ) : <Text style={styles.value}>—</Text>}
           </View>
 
-          <View style={styles.row}>
-            <Text style={styles.label}>Billing Address:</Text>
-            <Text style={styles.value}>
-              {billingAddress || '—'}
-            </Text>
-          </View>
-          <View style={styles.row}>
-            <Text style={styles.label}>Problem Description:</Text>
-            <Text style={styles.value}>{problem}</Text>
-          </View>
+          <View style={styles.row}><Text style={styles.label}>Billing Address:</Text><Text style={styles.value}>{billingAddress || '—'}</Text></View>
+          <View style={styles.row}><Text style={styles.label}>Problem Description:</Text><Text style={styles.value}>{problem}</Text></View>
 
-          <View
-            style={[styles.row, { alignItems: 'center' }]}
-          >
+          <View style={[styles.row, { alignItems: 'center' }]}>
             <Text style={styles.label}>Status:</Text>
-            <Text style={[styles.value, { flex: 0 }]}>
-              {status}
-              {isStatusSaving ? ' …' : ''}
-            </Text>
+            <Text style={[styles.value, { flex: 0 }]}>{status}{isStatusSaving ? ' …' : ''}</Text>
             <TouchableOpacity
-              style={[
-                styles.smallBtn,
-                isStatusSaving && { opacity: 0.6 },
-              ]}
+              style={[styles.smallBtn, isStatusSaving && { opacity: 0.6 }]}
               onPress={openStatusModal}
               disabled={isStatusSaving}
             >
-              <Text style={styles.smallBtnText}>
-                {isStatusSaving ? 'Saving…' : 'Change'}
-              </Text>
+              <Text style={styles.smallBtnText}>{isStatusSaving ? 'Saving…' : 'Change'}</Text>
             </TouchableOpacity>
           </View>
 
-          <View style={styles.row}>
-            <Text style={styles.label}>Scheduled Date:</Text>
-            <Text style={styles.value}>{scheduled}</Text>
-          </View>
+          <View style={styles.row}><Text style={styles.label}>Scheduled Date:</Text><Text style={styles.value}>{scheduled}</Text></View>
         </View>
 
         {/* Actions */}
@@ -1298,60 +1087,25 @@ export default function ViewWorkOrder() {
         {/* Tiles (like web CRM) */}
         <Text style={styles.sectionHeader}>Documents</Text>
         <View style={styles.tilesGrid}>
-          <TouchableOpacity
-            style={styles.tile}
-            onPress={() => openDocGroup('WO', 0)}
-          >
-            <View style={styles.tileIconCircle}>
-              <Text style={styles.tileIconText}>WO</Text>
-            </View>
+          <TouchableOpacity style={styles.tile} onPress={() => openDocGroup('WO', 0)}>
+            <View style={styles.tileIconCircle}><Text style={styles.tileIconText}>WO</Text></View>
             <Text style={styles.tileTitle}>Work Order</Text>
-            <Text style={styles.tileSub}>
-              {woPdfUrl ? 'Tap to view' : 'No file'}
-            </Text>
-            {woPdfUrl && (
-              <Text style={styles.tileBadge}>PDF</Text>
-            )}
+            <Text style={styles.tileSub}>{woPdfUrl ? 'Tap to view' : 'No file'}</Text>
+            {woPdfUrl && <Text style={styles.tileBadge}>PDF</Text>}
           </TouchableOpacity>
 
-          <TouchableOpacity
-            style={styles.tile}
-            onPress={() => openDocGroup('EST', 0)}
-          >
-            <View style={styles.tileIconCircle}>
-              <Text style={styles.tileIconText}>EST</Text>
-            </View>
+          <TouchableOpacity style={styles.tile} onPress={() => openDocGroup('EST', 0)}>
+            <View style={styles.tileIconCircle}><Text style={styles.tileIconText}>EST</Text></View>
             <Text style={styles.tileTitle}>Estimates</Text>
-            <Text style={styles.tileSub}>
-              {estimateUrls.length
-                ? `${estimateUrls.length} file${
-                    estimateUrls.length > 1 ? 's' : ''
-                  }`
-                : 'None'}
-            </Text>
-            {!!estimateUrls.length && (
-              <Text style={styles.tileBadge}>PDF</Text>
-            )}
+            <Text style={styles.tileSub}>{estimateUrls.length ? `${estimateUrls.length} file${estimateUrls.length>1?'s':''}` : 'None'}</Text>
+            {!!estimateUrls.length && <Text style={styles.tileBadge}>PDF</Text>}
           </TouchableOpacity>
 
-          <TouchableOpacity
-            style={styles.tile}
-            onPress={() => openDocGroup('PO', 0)}
-          >
-            <View style={styles.tileIconCircle}>
-              <Text style={styles.tileIconText}>PO</Text>
-            </View>
+          <TouchableOpacity style={styles.tile} onPress={() => openDocGroup('PO', 0)}>
+            <View style={styles.tileIconCircle}><Text style={styles.tileIconText}>PO</Text></View>
             <Text style={styles.tileTitle}>POs</Text>
-            <Text style={styles.tileSub}>
-              {poUrls.length
-                ? `${poUrls.length} file${
-                    poUrls.length > 1 ? 's' : ''
-                  }`
-                : 'None'}
-            </Text>
-            {!!poUrls.length && (
-              <Text style={styles.tileBadge}>PDF</Text>
-            )}
+            <Text style={styles.tileSub}>{poUrls.length ? `${poUrls.length} file${poUrls.length>1?'s':''}` : 'None'}</Text>
+            {!!poUrls.length && <Text style={styles.tileBadge}>PDF</Text>}
           </TouchableOpacity>
         </View>
 
@@ -1359,51 +1113,24 @@ export default function ViewWorkOrder() {
         <View style={{ marginTop: 8 }}>
           <TouchableOpacity
             style={[styles.buttonBase, styles.attachBtn]}
-            onPress={() =>
-              docModalVisible
-                ? openAnnotatorFromLightbox()
-                : openAnnotator()
-            }
+            onPress={() => (docModalVisible ? openAnnotatorFromLightbox() : openAnnotator())}
           >
-            <Text style={styles.attachText}>
-              Annotate & Sign PDF
-            </Text>
+            <Text style={styles.attachText}>Annotate & Sign PDF</Text>
           </TouchableOpacity>
 
-          <TouchableOpacity
-            style={[styles.buttonBase, styles.photoBtn]}
-            onPress={openCamera}
-          >
-            <Text style={styles.photoText}>
-              Take Photo (Camera)
-            </Text>
+          <TouchableOpacity style={[styles.buttonBase, styles.photoBtn]} onPress={openCamera}>
+            <Text style={styles.photoText}>Take Photo (Camera)</Text>
           </TouchableOpacity>
-          <TouchableOpacity
-            style={[styles.buttonBase, styles.photoBtn]}
-            onPress={uploadPhotos}
-          >
-            <Text style={styles.photoText}>
-              Upload Photo(s) from Library
-            </Text>
+          <TouchableOpacity style={[styles.buttonBase, styles.photoBtn]} onPress={uploadPhotos}>
+            <Text style={styles.photoText}>Upload Photo(s) from Library</Text>
           </TouchableOpacity>
-          <TouchableOpacity
-            style={[styles.buttonBase, styles.attachBtn]}
-            onPress={() => setViewAttachmentsVisible(true)}
-          >
-            <Text style={styles.attachText}>
-              View Attachments
-            </Text>
+          <TouchableOpacity style={[styles.buttonBase, styles.attachBtn]} onPress={() => setViewAttachmentsVisible(true)}>
+            <Text style={styles.attachText}>View Attachments</Text>
           </TouchableOpacity>
-          <TouchableOpacity
-            style={[styles.buttonBase, styles.noteBtn]}
-            onPress={() => setShowAddNoteModal(true)}
-          >
+          <TouchableOpacity style={[styles.buttonBase, styles.noteBtn]} onPress={() => setShowAddNoteModal(true)}>
             <Text style={styles.noteText}>Add Note</Text>
           </TouchableOpacity>
-          <TouchableOpacity
-            style={[styles.buttonBase, styles.drawBtn]}
-            onPress={() => setSketchVisible(true)}
-          >
+          <TouchableOpacity style={[styles.buttonBase, styles.drawBtn]} onPress={() => setSketchVisible(true)}>
             <Text style={styles.drawText}>Draw Note</Text>
           </TouchableOpacity>
         </View>
@@ -1412,9 +1139,7 @@ export default function ViewWorkOrder() {
         {pendingCameraPhotos.length > 0 && (
           <View style={styles.pendingSection}>
             <View style={styles.pendingHeaderRow}>
-              <Text style={styles.pendingTitle}>
-                Pending Camera Photos
-              </Text>
+              <Text style={styles.pendingTitle}>Pending Camera Photos</Text>
               <Text style={styles.pendingCount}>
                 {pendingCameraPhotos.length} ready
               </Text>
@@ -1434,26 +1159,14 @@ export default function ViewWorkOrder() {
                       setPendingViewerVisible(true);
                     }}
                   >
-                    <Image
-                      source={{ uri: item.uri }}
-                      style={styles.pendingThumb}
-                    />
+                    <Image source={{ uri: item.uri }} style={styles.pendingThumb} />
                   </TouchableOpacity>
                   <TouchableOpacity
                     style={styles.pendingDeleteIcon}
-                    onPress={() =>
-                      removePendingCameraPhoto(item.id)
-                    }
-                    hitSlop={{
-                      top: 8,
-                      bottom: 8,
-                      left: 8,
-                      right: 8,
-                    }}
+                    onPress={() => removePendingCameraPhoto(item.id)}
+                    hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
                   >
-                    <Text style={styles.pendingDeleteText}>
-                      ×
-                    </Text>
+                    <Text style={styles.pendingDeleteText}>×</Text>
                   </TouchableOpacity>
                 </View>
               )}
@@ -1461,27 +1174,18 @@ export default function ViewWorkOrder() {
 
             <View style={styles.pendingActionsRow}>
               <TouchableOpacity
-                style={[
-                  styles.buttonBase,
-                  styles.pendingUploadBtn,
-                ]}
+                style={[styles.buttonBase, styles.pendingUploadBtn]}
                 onPress={uploadPendingCameraPhotos}
               >
                 <Text style={styles.pendingUploadText}>
-                  Upload {pendingCameraPhotos.length} Photo
-                  {pendingCameraPhotos.length > 1 ? 's' : ''}
+                  Upload {pendingCameraPhotos.length} Photo{pendingCameraPhotos.length > 1 ? 's' : ''}
                 </Text>
               </TouchableOpacity>
               <TouchableOpacity
-                style={[
-                  styles.buttonBase,
-                  styles.pendingDiscardBtn,
-                ]}
+                style={[styles.buttonBase, styles.pendingDiscardBtn]}
                 onPress={clearPendingCameraPhotos}
               >
-                <Text style={styles.pendingDiscardText}>
-                  Discard All
-                </Text>
+                <Text style={styles.pendingDiscardText}>Discard All</Text>
               </TouchableOpacity>
             </View>
           </View>
@@ -1494,16 +1198,10 @@ export default function ViewWorkOrder() {
             {notes.map((n, i) => (
               <View key={i} style={styles.noteCard}>
                 <Text style={styles.noteTimestamp}>
-                  {n?.createdAt
-                    ? moment(n.createdAt).format(
-                        'YYYY-MM-DD HH:mm'
-                      )
-                    : ''}
+                  {n?.createdAt ? moment(n.createdAt).format('YYYY-MM-DD HH:mm') : ''}
                   {n?.by ? `  •  ${n.by}` : ''}
                 </Text>
-                <Text style={styles.noteBody}>
-                  {n?.text || ''}
-                </Text>
+                <Text style={styles.noteBody}>{n?.text || ''}</Text>
               </View>
             ))}
           </>
@@ -1511,11 +1209,7 @@ export default function ViewWorkOrder() {
       </ScrollView>
 
       {/* Photo Viewer for uploaded attachments */}
-      <Modal
-        visible={photoViewerVisible}
-        animationType="fade"
-        onRequestClose={closePhotoViewer}
-      >
+      <Modal visible={photoViewerVisible} animationType="fade" onRequestClose={closePhotoViewer}>
         <View style={styles.viewerContainer}>
           <FlatList
             data={photos}
@@ -1523,37 +1217,19 @@ export default function ViewWorkOrder() {
             horizontal
             pagingEnabled
             initialScrollIndex={viewerIndex}
-            getItemLayout={(_, idx) => ({
-              length: screenWidth,
-              offset: screenWidth * idx,
-              index: idx,
-            })}
-            onMomentumScrollEnd={(ev) => {
-              const x =
-                ev?.nativeEvent?.contentOffset?.x ?? 0;
+            getItemLayout={(_, idx) => ({ length: screenWidth, offset: screenWidth * idx, index: idx })}
+            onMomentumScrollEnd={ev => {
+              const x = ev?.nativeEvent?.contentOffset?.x ?? 0;
               const idx = Math.round(x / screenWidth);
-              setViewerIndex(
-                Number.isFinite(idx) ? idx : 0
-              );
+              setViewerIndex(Number.isFinite(idx) ? idx : 0);
             }}
-            renderItem={({ item }) => (
-              <Image
-                source={{ uri: item }}
-                style={styles.fullScreenImage}
-              />
-            )}
+            renderItem={({ item }) => <Image source={{ uri: item }} style={styles.fullScreenImage} />}
           />
           <View style={styles.viewerButtons}>
-            <TouchableOpacity
-              style={[styles.viewerButton, styles.shareBtn]}
-              onPress={handleShare}
-            >
+            <TouchableOpacity style={[styles.viewerButton, styles.shareBtn]} onPress={handleShare}>
               <Text style={styles.shareText}>Share</Text>
             </TouchableOpacity>
-            <TouchableOpacity
-              style={[styles.viewerButton, styles.exitBtn]}
-              onPress={closePhotoViewer}
-            >
+            <TouchableOpacity style={[styles.viewerButton, styles.exitBtn]} onPress={closePhotoViewer}>
               <Text style={styles.exitText}>Exit</Text>
             </TouchableOpacity>
           </View>
@@ -1573,23 +1249,14 @@ export default function ViewWorkOrder() {
             horizontal
             pagingEnabled
             initialScrollIndex={pendingViewerIndex}
-            getItemLayout={(_, idx) => ({
-              length: screenWidth,
-              offset: screenWidth * idx,
-              index: idx,
-            })}
-            onMomentumScrollEnd={(ev) => {
-              const x =
-                ev?.nativeEvent?.contentOffset?.x ?? 0;
+            getItemLayout={(_, idx) => ({ length: screenWidth, offset: screenWidth * idx, index: idx })}
+            onMomentumScrollEnd={ev => {
+              const x = ev?.nativeEvent?.contentOffset?.x ?? 0;
               const idx = Math.round(x / screenWidth);
-              if (Number.isFinite(idx))
-                setPendingViewerIndex(idx);
+              if (Number.isFinite(idx)) setPendingViewerIndex(idx);
             }}
             renderItem={({ item }) => (
-              <Image
-                source={{ uri: item.uri }}
-                style={styles.fullScreenImage}
-              />
+              <Image source={{ uri: item.uri }} style={styles.fullScreenImage} />
             )}
           />
           <View style={styles.viewerButtons}>
@@ -1618,15 +1285,11 @@ export default function ViewWorkOrder() {
           {(() => {
             const keys = (workOrder?.photoPath || '')
               .split(',')
-              .map((s) => s.trim())
+              .map(s => s.trim())
               .filter(Boolean);
 
             if (!keys.length) {
-              return (
-                <Text style={styles.noPhotosText}>
-                  No attachments uploaded.
-                </Text>
-              );
+              return <Text style={styles.noPhotosText}>No attachments uploaded.</Text>;
             }
 
             return (
@@ -1641,9 +1304,7 @@ export default function ViewWorkOrder() {
                   const isPdf =
                     lower.endsWith('.pdf') ||
                     lower.includes('.pdf?') ||
-                    lower.startsWith(
-                      'data:application/pdf'
-                    );
+                    lower.startsWith('data:application/pdf');
 
                   if (isPdf) {
                     // PDF tile (tap to open multi-page pdf.js viewer)
@@ -1652,39 +1313,19 @@ export default function ViewWorkOrder() {
                         <TouchableOpacity
                           style={styles.pdfTile}
                           onPress={() => {
-                            setViewAttachmentsVisible(
-                              false
-                            );
+                            setViewAttachmentsVisible(false);
                             openAttachmentPdf(index);
                           }}
                         >
-                          <Text style={styles.pdfIcon}>
-                            📄
-                          </Text>
-                          <Text
-                            style={styles.pdfLabel}
-                            numberOfLines={2}
-                          >
-                            PDF Attachment
-                          </Text>
+                          <Text style={styles.pdfIcon}>📄</Text>
+                          <Text style={styles.pdfLabel} numberOfLines={2}>PDF Attachment</Text>
                         </TouchableOpacity>
                         <TouchableOpacity
                           style={styles.deleteIcon}
-                          onPress={() =>
-                            handleDeletePhoto(index)
-                          }
-                          hitSlop={{
-                            top: 8,
-                            left: 8,
-                            right: 8,
-                            bottom: 8,
-                          }}
+                          onPress={() => handleDeletePhoto(index)}
+                          hitSlop={{ top: 8, left: 8, right: 8, bottom: 8 }}
                         >
-                          <Text
-                            style={styles.deleteText}
-                          >
-                            ×
-                          </Text>
+                          <Text style={styles.deleteText}>×</Text>
                         </TouchableOpacity>
                       </View>
                     );
@@ -1695,44 +1336,23 @@ export default function ViewWorkOrder() {
                     <View style={styles.thumbWrapper}>
                       <TouchableOpacity
                         onPress={() => {
-                          const viewerIdx =
-                            photos.findIndex(
-                              (p) => p === url
-                            );
+                          const viewerIdx = photos.findIndex(p => p === url);
                           if (viewerIdx !== -1) {
-                            setReturnToAttachments(
-                              true
-                            );
+                            setReturnToAttachments(true);
                             setViewerIndex(viewerIdx);
-                            setPhotoViewerVisible(
-                              true
-                            );
-                            setViewAttachmentsVisible(
-                              false
-                            );
+                            setPhotoViewerVisible(true);
+                            setViewAttachmentsVisible(false);
                           }
                         }}
                       >
-                        <Image
-                          source={{ uri: url }}
-                          style={styles.thumbnail}
-                        />
+                        <Image source={{ uri: url }} style={styles.thumbnail} />
                       </TouchableOpacity>
                       <TouchableOpacity
                         style={styles.deleteIcon}
-                        onPress={() =>
-                          handleDeletePhoto(index)
-                        }
-                        hitSlop={{
-                          top: 8,
-                          left: 8,
-                          right: 8,
-                          bottom: 8,
-                        }}
+                        onPress={() => handleDeletePhoto(index)}
+                        hitSlop={{ top: 8, left: 8, right: 8, bottom: 8 }}
                       >
-                        <Text style={styles.deleteText}>
-                          ×
-                        </Text>
+                        <Text style={styles.deleteText}>×</Text>
                       </TouchableOpacity>
                     </View>
                   );
@@ -1741,10 +1361,7 @@ export default function ViewWorkOrder() {
             );
           })()}
 
-          <TouchableOpacity
-            style={styles.cancelBtn}
-            onPress={() => setViewAttachmentsVisible(false)}
-          >
+          <TouchableOpacity style={styles.cancelBtn} onPress={() => setViewAttachmentsVisible(false)}>
             <Text style={styles.cancelText}>Close</Text>
           </TouchableOpacity>
         </View>
@@ -1761,10 +1378,7 @@ export default function ViewWorkOrder() {
       >
         <KeyboardAvoidingView
           behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
-          keyboardVerticalOffset={Platform.select({
-            ios: 80,
-            android: 0,
-          })}
+          keyboardVerticalOffset={Platform.select({ ios: 80, android: 0 })}
           style={styles.addNoteOverlay}
         >
           <View style={styles.addNoteContainer}>
@@ -1779,23 +1393,11 @@ export default function ViewWorkOrder() {
               returnKeyType="done"
             />
             <View style={styles.addNoteButtons}>
-              <TouchableOpacity
-                style={styles.saveNoteBtn}
-                onPress={addNote}
-              >
-                <Text style={styles.saveNoteText}>
-                  Save
-                </Text>
+              <TouchableOpacity style={styles.saveNoteBtn} onPress={addNote}>
+                <Text style={styles.saveNoteText}>Save</Text>
               </TouchableOpacity>
-              <TouchableOpacity
-                style={styles.cancelNoteBtn}
-                onPress={() =>
-                  setShowAddNoteModal(false)
-                }
-              >
-                <Text style={styles.cancelNoteText}>
-                  Cancel
-                </Text>
+              <TouchableOpacity style={styles.cancelNoteBtn} onPress={() => setShowAddNoteModal(false)}>
+                <Text style={styles.cancelNoteText}>Cancel</Text>
               </TouchableOpacity>
             </View>
           </View>
@@ -1813,52 +1415,24 @@ export default function ViewWorkOrder() {
       >
         <View style={styles.addNoteOverlay}>
           <View style={styles.addNoteContainer}>
-            <Text style={styles.addNoteTitle}>
-              Change Status
-            </Text>
+            <Text style={styles.addNoteTitle}>Change Status</Text>
             <View style={styles.statusList}>
-              {STATUS_OPTIONS.map((s) => (
+              {STATUS_OPTIONS.map(s => (
                 <TouchableOpacity
                   key={s}
-                  style={[
-                    styles.statusOption,
-                    pendingStatus === s &&
-                      styles.statusOptionActive,
-                  ]}
-                  onPress={() =>
-                    setPendingStatus(s)
-                  }
+                  style={[styles.statusOption, pendingStatus === s && styles.statusOptionActive]}
+                  onPress={() => setPendingStatus(s)}
                 >
-                  <Text
-                    style={[
-                      styles.statusText,
-                      pendingStatus === s &&
-                        styles.statusTextActive,
-                    ]}
-                  >
-                    {s}
-                  </Text>
+                  <Text style={[styles.statusText, pendingStatus === s && styles.statusTextActive]}>{s}</Text>
                 </TouchableOpacity>
               ))}
             </View>
             <View style={styles.addNoteButtons}>
-              <TouchableOpacity
-                style={styles.saveNoteBtn}
-                onPress={applyStatus}
-              >
-                <Text style={styles.saveNoteText}>
-                  Apply
-                </Text>
+              <TouchableOpacity style={styles.saveNoteBtn} onPress={applyStatus}>
+                <Text style={styles.saveNoteText}>Apply</Text>
               </TouchableOpacity>
-              <TouchableOpacity
-                style={styles.cancelNoteBtn}
-                onPress={() =>
-                  setShowStatusModal(false)
-                }
-              >
-                <Text style={styles.cancelNoteText}>
-                  Cancel
-                </Text>
+              <TouchableOpacity style={styles.cancelNoteBtn} onPress={() => setShowStatusModal(false)}>
+                <Text style={styles.cancelNoteText}>Cancel</Text>
               </TouchableOpacity>
             </View>
           </View>
@@ -1866,14 +1440,8 @@ export default function ViewWorkOrder() {
       </Modal>
 
       {/* Draw Note Modal (JPEG export) */}
-      <Modal
-        visible={sketchVisible}
-        animationType="slide"
-        onRequestClose={() => setSketchVisible(false)}
-      >
-        <SafeAreaView
-          style={{ flex: 1, backgroundColor: '#000' }}
-        >
+      <Modal visible={sketchVisible} animationType="slide" onRequestClose={() => setSketchVisible(false)}>
+        <SafeAreaView style={{ flex: 1, backgroundColor: '#000' }}>
           <WebView
             originWhitelist={['*']}
             source={{ html: SKETCH_HTML }}
@@ -1889,14 +1457,8 @@ export default function ViewWorkOrder() {
       </Modal>
 
       {/* Annotate & Sign Modal */}
-      <Modal
-        visible={annotateVisible}
-        animationType="slide"
-        onRequestClose={() => setAnnotateVisible(false)}
-      >
-        <SafeAreaView
-          style={{ flex: 1, backgroundColor: '#000' }}
-        >
+      <Modal visible={annotateVisible} animationType="slide" onRequestClose={() => setAnnotateVisible(false)}>
+        <SafeAreaView style={{ flex: 1, backgroundColor: '#000' }}>
           {pdfBase64 ? (
             <WebView
               ref={annotatorRef}
@@ -1910,42 +1472,27 @@ export default function ViewWorkOrder() {
               decelerationRate="normal"
               overScrollMode="always"
               onMessage={onAnnotatorMessage}
-              injectedJavaScriptBeforeContentLoaded={`window.PDF_BASE64 = ${JSON.stringify(
-                pdfBase64
-              )}; true;`}
+              injectedJavaScriptBeforeContentLoaded={`window.PDF_BASE64 = ${JSON.stringify(pdfBase64)}; true;`}
               style={{ flex: 1 }}
             />
           ) : (
             <View style={styles.center}>
-              <Text style={styles.loadingText}>
-                Loading PDF…
-              </Text>
+              <Text style={styles.loadingText}>Loading PDF…</Text>
             </View>
           )}
         </SafeAreaView>
       </Modal>
 
       {/* Document Lightbox Modal (for WO/EST/PO/ATTACH) */}
-      <Modal
-        visible={docModalVisible}
-        animationType="slide"
-        onRequestClose={() => setDocModalVisible(false)}
-      >
-        <SafeAreaView
-          style={{ flex: 1, backgroundColor: '#000' }}
-        >
+      <Modal visible={docModalVisible} animationType="slide" onRequestClose={() => setDocModalVisible(false)}>
+        <SafeAreaView style={{ flex: 1, backgroundColor: '#000' }}>
           <View style={styles.docHeader}>
-            <TouchableOpacity
-              onPress={() => setDocModalVisible(false)}
-              style={styles.docHeaderBtn}
-            >
-              <Text style={styles.docHeaderBtnText}>
-                Close
-              </Text>
+            <TouchableOpacity onPress={() => setDocModalVisible(false)} style={styles.docHeaderBtn}>
+              <Text style={styles.docHeaderBtnText}>Close</Text>
             </TouchableOpacity>
             <Text style={styles.docHeaderTitle}>
-              {docItems[docIndex]?.title ||
-                (docGroup === 'WO'
+              {docItems[docIndex]?.title || (
+                docGroup === 'WO'
                   ? 'Work Order'
                   : docGroup === 'EST'
                   ? 'Estimate'
@@ -1953,24 +1500,17 @@ export default function ViewWorkOrder() {
                   ? 'PO'
                   : docGroup === 'ATTACH'
                   ? 'Attachment'
-                  : 'Document')}
-              {docItems.length > 1
-                ? `  (${docIndex + 1}/${docItems.length})`
-                : ''}
+                  : 'Document'
+              )}
+              {docItems.length > 1 ? `  (${docIndex + 1}/${docItems.length})` : ''}
             </Text>
             <View style={styles.docHeaderRight}>
               {!!docItems.length && (
                 <TouchableOpacity
-                  onPress={() =>
-                    Linking.openURL(
-                      docItems[docIndex].url
-                    )
-                  }
+                  onPress={() => Linking.openURL(docItems[docIndex].url)}
                   style={styles.docHeaderBtn}
                 >
-                  <Text style={styles.docHeaderBtnText}>
-                    Open
-                  </Text>
+                  <Text style={styles.docHeaderBtnText}>Open</Text>
                 </TouchableOpacity>
               )}
             </View>
@@ -1978,31 +1518,14 @@ export default function ViewWorkOrder() {
 
           <View style={{ flex: 1 }}>
             {docLoading && (
-              <View
-                style={[
-                  styles.center,
-                  { backgroundColor: '#000' },
-                ]}
-              >
-                <Text style={{ color: '#fff' }}>
-                  Loading…
-                </Text>
+              <View style={[styles.center, { backgroundColor: '#000' }]}>
+                <Text style={{ color: '#fff' }}>Loading…</Text>
               </View>
             )}
 
             {!!docError && (
-              <View
-                style={[
-                  styles.center,
-                  { padding: 16 },
-                ]}
-              >
-                <Text
-                  style={{
-                    color: '#ff6b6b',
-                    textAlign: 'center',
-                  }}
-                >
+              <View style={[styles.center, { padding: 16 }]}>
+                <Text style={{ color: '#ff6b6b', textAlign: 'center' }}>
                   Couldn’t load document: {docError}
                 </Text>
               </View>
@@ -2018,59 +1541,27 @@ export default function ViewWorkOrder() {
                 showsVerticalScrollIndicator
                 automaticallyAdjustContentInsets={false}
                 onMessage={(e) => {
-                  const msg =
-                    e?.nativeEvent?.data || '';
+                  const msg = e?.nativeEvent?.data || '';
                   if (msg.startsWith('HEIGHT:')) {
-                    const h = parseInt(
-                      msg.slice(7),
-                      10
-                    );
-                    if (Number.isFinite(h))
-                      setDocHeight(
-                        Math.min(
-                          h + 200,
-                          screenHeight * 5
-                        )
-                      );
+                    const h = parseInt(msg.slice(7), 10);
+                    if (Number.isFinite(h)) setDocHeight(Math.min(h + 200, screenHeight * 5));
                   } else if (msg.startsWith('ERROR:')) {
                     setDocError(msg.slice(6));
                   }
                 }}
-                injectedJavaScriptBeforeContentLoaded={`window.PDF_BASE64 = ${JSON.stringify(
-                  docB64
-                )}; true;`}
-                style={{
-                  flex: 1,
-                  height: docHeight,
-                  backgroundColor: '#000',
-                }}
+                injectedJavaScriptBeforeContentLoaded={`window.PDF_BASE64 = ${JSON.stringify(docB64)}; true;`}
+                style={{ flex: 1, height: docHeight, backgroundColor: '#000' }}
               />
             )}
           </View>
 
           {docItems.length > 1 && (
             <View style={styles.docNavBar}>
-              <TouchableOpacity
-                onPress={prevDoc}
-                style={[
-                  styles.docNavBtn,
-                  { marginRight: 8 },
-                ]}
-              >
-                <Text style={styles.docNavText}>
-                  Prev
-                </Text>
+              <TouchableOpacity onPress={prevDoc} style={[styles.docNavBtn, { marginRight: 8 }]}>
+                <Text style={styles.docNavText}>Prev</Text>
               </TouchableOpacity>
-              <TouchableOpacity
-                onPress={nextDoc}
-                style={[
-                  styles.docNavBtn,
-                  { marginLeft: 8 },
-                ]}
-              >
-                <Text style={styles.docNavText}>
-                  Next
-                </Text>
+              <TouchableOpacity onPress={nextDoc} style={[styles.docNavBtn, { marginLeft: 8 }]}>
+                <Text style={styles.docNavText}>Next</Text>
               </TouchableOpacity>
             </View>
           )}
@@ -2078,176 +1569,12 @@ export default function ViewWorkOrder() {
           {docGroup === 'WO' && woPdfUrl && (
             <View style={{ padding: 12 }}>
               <TouchableOpacity
-                style={[
-                  styles.buttonBase,
-                  styles.signBtn,
-                ]}
+                style={[styles.buttonBase, styles.signBtn]}
                 onPress={openAnnotatorFromLightbox}
               >
-                <Text style={styles.signBtnText}>
-                  Annotate & Sign This Work Order
-                </Text>
+                <Text style={styles.signBtnText}>Annotate & Sign This Work Order</Text>
               </TouchableOpacity>
             </View>
-          )}
-        </SafeAreaView>
-      </Modal>
-
-      {/* Camera Modal with continuous capture UI (expo-camera) */}
-      <Modal
-        visible={cameraVisible}
-        animationType="slide"
-        onRequestClose={() => setCameraVisible(false)}
-      >
-        <SafeAreaView style={styles.cameraContainer}>
-          <View style={styles.cameraTopBar}>
-            <TouchableOpacity
-              onPress={() => setCameraVisible(false)}
-              style={styles.cameraTopBtn}
-            >
-              <Text style={styles.cameraTopBtnText}>
-                Close
-              </Text>
-            </TouchableOpacity>
-            <Text style={styles.cameraTitle}>
-              Take Photos
-            </Text>
-            <TouchableOpacity
-              onPress={toggleCameraType}
-              style={styles.cameraTopBtn}
-            >
-              <Text style={styles.cameraTopBtnText}>
-                Flip
-              </Text>
-            </TouchableOpacity>
-          </View>
-
-          {hasCameraPermission === false ? (
-            <View style={styles.center}>
-              <Text style={styles.cameraErrorText}>
-                Camera permission not granted.
-              </Text>
-            </View>
-          ) : (
-            <>
-              <Camera
-                ref={cameraRef}
-                style={styles.camera}
-                type={cameraType}
-                ratio="16:9"
-              />
-
-              {/* Bottom controls + live pending thumbnails */}
-              <View style={styles.cameraBottomPanel}>
-                <View style={styles.cameraThumbStrip}>
-                  <FlatList
-                    horizontal
-                    data={pendingCameraPhotos}
-                    keyExtractor={(item) => item.id}
-                    showsHorizontalScrollIndicator={false}
-                    renderItem={({ item }) => (
-                      <View
-                        style={styles.cameraThumbWrapper}
-                      >
-                        <Image
-                          source={{ uri: item.uri }}
-                          style={styles.cameraThumb}
-                        />
-                        <TouchableOpacity
-                          style={
-                            styles.cameraThumbDelete
-                          }
-                          onPress={() =>
-                            removePendingCameraPhoto(
-                              item.id
-                            )
-                          }
-                          hitSlop={{
-                            top: 6,
-                            bottom: 6,
-                            left: 6,
-                            right: 6,
-                          }}
-                        >
-                          <Text
-                            style={
-                              styles.cameraThumbDeleteText
-                            }
-                          >
-                            ×
-                          </Text>
-                        </TouchableOpacity>
-                      </View>
-                    )}
-                    ListEmptyComponent={
-                      <Text
-                        style={
-                          styles.cameraHintText
-                        }
-                      >
-                        Snap photos — they’ll show up
-                        here before upload.
-                      </Text>
-                    }
-                  />
-                </View>
-
-                <View style={styles.cameraControlsRow}>
-                  <TouchableOpacity
-                    style={styles.cameraMiniBtn}
-                    onPress={clearPendingCameraPhotos}
-                    disabled={
-                      !pendingCameraPhotos.length
-                    }
-                  >
-                    <Text
-                      style={styles.cameraMiniBtnText}
-                    >
-                      Clear
-                    </Text>
-                  </TouchableOpacity>
-
-                  <TouchableOpacity
-                    style={styles.shutterOuter}
-                    onPress={capturePhoto}
-                    disabled={isCapturing}
-                  >
-                    <View
-                      style={[
-                        styles.shutterInner,
-                        isCapturing && {
-                          opacity: 0.7,
-                          transform: [
-                            { scale: 0.9 },
-                          ],
-                        },
-                      ]}
-                    />
-                  </TouchableOpacity>
-
-                  <TouchableOpacity
-                    style={[
-                      styles.cameraMiniBtn,
-                      !pendingCameraPhotos.length && {
-                        opacity: 0.6,
-                      },
-                    ]}
-                    onPress={async () => {
-                      await uploadPendingCameraPhotos();
-                    }}
-                    disabled={
-                      !pendingCameraPhotos.length
-                    }
-                  >
-                    <Text
-                      style={styles.cameraMiniBtnText}
-                    >
-                      Upload
-                    </Text>
-                  </TouchableOpacity>
-                </View>
-              </View>
-            </>
           )}
         </SafeAreaView>
       </Modal>
@@ -2260,37 +1587,15 @@ const styles = StyleSheet.create({
   details: { padding: 16, paddingBottom: 24 },
   center: { flex: 1, justifyContent: 'center', alignItems: 'center' },
   loadingText: { fontSize: 18, color: '#3D5A80' },
-  title: {
-    fontSize: 24,
-    fontWeight: '700',
-    color: '#2B2D42',
-    textAlign: 'center',
-    marginBottom: 12,
-  },
-  card: {
-    backgroundColor: '#FFF',
-    borderRadius: 12,
-    padding: 16,
-    marginBottom: 16,
-    elevation: 3,
-  },
+  title: { fontSize: 24, fontWeight: '700', color: '#2B2D42', textAlign: 'center', marginBottom: 12 },
+  card: { backgroundColor: '#FFF', borderRadius: 12, padding: 16, marginBottom: 16, elevation: 3 },
 
-  row: {
-    flexDirection: 'row',
-    marginBottom: 8,
-    flexWrap: 'wrap',
-  },
+  row: { flexDirection: 'row', marginBottom: 8, flexWrap: 'wrap' },
   label: { width: 140, fontWeight: '600', color: '#3D5A80' },
   value: { flex: 1, color: '#2B2D42' },
   linkText: { color: '#007bff', textDecorationLine: 'underline' },
 
-  buttonBase: {
-    width: '100%',
-    paddingVertical: 12,
-    borderRadius: 8,
-    alignItems: 'center',
-    marginBottom: 12,
-  },
+  buttonBase: { width: '100%', paddingVertical: 12, borderRadius: 8, alignItems: 'center', marginBottom: 12 },
   backBtn: { backgroundColor: '#6c757d' },
   backText: { color: '#FFF', fontWeight: '600', fontSize: 16 },
 
@@ -2303,21 +1608,10 @@ const styles = StyleSheet.create({
   drawBtn: { backgroundColor: '#28a745' },
   drawText: { color: '#FFF', fontWeight: '600', fontSize: 16 },
 
-  smallBtn: {
-    marginLeft: 8,
-    paddingHorizontal: 10,
-    paddingVertical: 6,
-    backgroundColor: '#0ea5e9',
-    borderRadius: 8,
-  },
+  smallBtn: { marginLeft: 8, paddingHorizontal: 10, paddingVertical: 6, backgroundColor: '#0ea5e9', borderRadius: 8 },
   smallBtnText: { color: '#fff', fontWeight: '700' },
 
-  sectionHeader: {
-    fontSize: 18,
-    fontWeight: '700',
-    marginVertical: 8,
-    color: '#2B2D42',
-  },
+  sectionHeader: { fontSize: 18, fontWeight: '700', marginVertical: 8, color: '#2B2D42' },
 
   // Tiles
   tilesGrid: { flexDirection: 'row', flexWrap: 'wrap', gap: 12 },
@@ -2353,91 +1647,30 @@ const styles = StyleSheet.create({
     overflow: 'hidden',
   },
 
-  noteCard: {
-    backgroundColor: '#FFF',
-    borderRadius: 10,
-    padding: 12,
-    marginBottom: 8,
-    borderWidth: 1,
-    borderColor: '#E2E8F0',
-  },
+  noteCard: { backgroundColor: '#FFF', borderRadius: 10, padding: 12, marginBottom: 8, borderWidth: 1, borderColor: '#E2E8F0' },
   noteTimestamp: { fontSize: 12, color: '#8D99AE', marginBottom: 4 },
   noteBody: { fontSize: 14, color: '#2B2D42' },
 
   // Photo viewer (shared full-screen style)
   viewerContainer: { flex: 1, backgroundColor: '#000' },
-  fullScreenImage: {
-    width: screenWidth,
-    height: screenHeight,
-    resizeMode: 'contain',
-  },
-  viewerButtons: {
-    position: 'absolute',
-    bottom: 40,
-    left: 0,
-    right: 0,
-    flexDirection: 'row',
-    justifyContent: 'space-around',
-  },
-  viewerButton: {
-    flex: 1,
-    marginHorizontal: 8,
-    padding: 12,
-    borderRadius: 8,
-    alignItems: 'center',
-  },
+  fullScreenImage: { width: screenWidth, height: screenHeight, resizeMode: 'contain' },
+  viewerButtons: { position: 'absolute', bottom: 40, left: 0, right: 0, flexDirection: 'row', justifyContent: 'space-around' },
+  viewerButton: { flex: 1, marginHorizontal: 8, padding: 12, borderRadius: 8, alignItems: 'center' },
   shareBtn: { backgroundColor: 'rgba(255,255,255,0.3)' },
   shareText: { color: '#fff', fontWeight: '600', fontSize: 16 },
   exitBtn: { backgroundColor: 'rgba(220,53,69,0.85)' },
   exitText: { color: '#fff', fontWeight: '600', fontSize: 16 },
 
   // Attachments modal
-  modal: {
-    flex: 1,
-    padding: 16,
-    backgroundColor: '#fff',
-    marginTop: 80,
-    borderTopLeftRadius: 12,
-    borderTopRightRadius: 12,
-  },
-  modalTitle: {
-    fontSize: 18,
-    fontWeight: '700',
-    marginBottom: 12,
-    textAlign: 'center',
-    color: '#2B2D42',
-  },
-  noPhotosText: {
-    textAlign: 'center',
-    marginTop: 20,
-    fontStyle: 'italic',
-  },
+  modal: { flex: 1, padding: 16, backgroundColor: '#fff', marginTop: 80, borderTopLeftRadius: 12, borderTopRightRadius: 12 },
+  modalTitle: { fontSize: 18, fontWeight: '700', marginBottom: 12, textAlign: 'center', color: '#2B2D42' },
+  noPhotosText: { textAlign: 'center', marginTop: 20, fontStyle: 'italic' },
   galleryList: { paddingBottom: 16 },
   thumbWrapper: { flex: 1 / 3, aspectRatio: 1, padding: 4 },
-  thumbnail: {
-    width: '100%',
-    height: '100%',
-    borderRadius: 8,
-  },
-  deleteIcon: {
-    position: 'absolute',
-    top: 6,
-    right: 6,
-    backgroundColor: 'rgba(0,0,0,0.6)',
-    width: 24,
-    height: 24,
-    borderRadius: 12,
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
+  thumbnail: { width: '100%', height: '100%', borderRadius: 8 },
+  deleteIcon: { position: 'absolute', top: 6, right: 6, backgroundColor: 'rgba(0,0,0,0.6)', width: 24, height: 24, borderRadius: 12, alignItems: 'center', justifyContent: 'center' },
   deleteText: { color: '#fff', fontSize: 14, lineHeight: 18 },
-  cancelBtn: {
-    backgroundColor: '#dc3545',
-    padding: 12,
-    borderRadius: 8,
-    alignItems: 'center',
-    marginTop: 16,
-  },
+  cancelBtn: { backgroundColor: '#dc3545', padding: 12, borderRadius: 8, alignItems: 'center', marginTop: 16 },
   cancelText: { color: '#fff', fontWeight: '700', fontSize: 16 },
 
   // PDF tiles inside attachments
@@ -2455,116 +1688,31 @@ const styles = StyleSheet.create({
   pdfLabel: { fontSize: 11, color: '#111827', textAlign: 'center' },
 
   // Transparent overlays
-  addNoteOverlay: {
-    flex: 1,
-    backgroundColor: 'rgba(0,0,0,0.45)',
-    justifyContent: 'center',
-    padding: 16,
-  },
-  addNoteContainer: {
-    backgroundColor: '#fff',
-    borderRadius: 12,
-    padding: 16,
-  },
-  addNoteTitle: {
-    fontSize: 18,
-    fontWeight: '700',
-    marginBottom: 12,
-    textAlign: 'center',
-    color: '#2B2D42',
-  },
-  addNoteInput: {
-    height: 120,
-    borderColor: '#cfd5dd',
-    borderWidth: 1,
-    borderRadius: 10,
-    padding: 10,
-    textAlignVertical: 'top',
-    marginBottom: 12,
-  },
-  addNoteButtons: {
-    flexDirection: 'row',
-    justifyContent: 'space-around',
-  },
-  saveNoteBtn: {
-    backgroundColor: '#28a745',
-    padding: 10,
-    borderRadius: 8,
-    flex: 1,
-    marginHorizontal: 4,
-  },
-  saveNoteText: {
-    color: '#fff',
-    textAlign: 'center',
-    fontWeight: '700',
-  },
-  cancelNoteBtn: {
-    backgroundColor: '#dc3545',
-    padding: 10,
-    borderRadius: 8,
-    flex: 1,
-    marginHorizontal: 4,
-  },
-  cancelNoteText: {
-    color: '#fff',
-    textAlign: 'center',
-    fontWeight: '700',
-  },
+  addNoteOverlay: { flex: 1, backgroundColor: 'rgba(0,0,0,0.45)', justifyContent: 'center', padding: 16 },
+  addNoteContainer: { backgroundColor: '#fff', borderRadius: 12, padding: 16 },
+  addNoteTitle: { fontSize: 18, fontWeight: '700', marginBottom: 12, textAlign: 'center', color: '#2B2D42' },
+  addNoteInput: { height: 120, borderColor: '#cfd5dd', borderWidth: 1, borderRadius: 10, padding: 10, textAlignVertical: 'top', marginBottom: 12 },
+  addNoteButtons: { flexDirection: 'row', justifyContent: 'space-around' },
+  saveNoteBtn: { backgroundColor: '#28a745', padding: 10, borderRadius: 8, flex: 1, marginHorizontal: 4 },
+  saveNoteText: { color: '#fff', textAlign: 'center', fontWeight: '700' },
+  cancelNoteBtn: { backgroundColor: '#dc3545', padding: 10, borderRadius: 8, flex: 1, marginHorizontal: 4 },
+  cancelNoteText: { color: '#fff', textAlign: 'center', fontWeight: '700' },
 
   statusList: { gap: 8 },
-  statusOption: {
-    padding: 12,
-    borderWidth: 1,
-    borderColor: '#e2e8f0',
-    borderRadius: 10,
-    backgroundColor: '#fff',
-  },
+  statusOption: { padding: 12, borderWidth: 1, borderColor: '#e2e8f0', borderRadius: 10, backgroundColor: '#fff' },
   statusOptionActive: { backgroundColor: '#0ea5e9' },
   statusText: { color: '#2B2D42', fontWeight: '700' },
   statusTextActive: { color: '#fff' },
 
   // Doc modal header & nav
-  docHeader: {
-    paddingHorizontal: 12,
-    paddingTop: 6,
-    paddingBottom: 6,
-    backgroundColor: '#0b0f14',
-    flexDirection: 'row',
-    alignItems: 'center',
-  },
-  docHeaderBtn: {
-    paddingVertical: 6,
-    paddingHorizontal: 10,
-    backgroundColor: '#1f2937',
-    borderRadius: 8,
-    marginRight: 8,
-  },
+  docHeader: { paddingHorizontal: 12, paddingTop: 6, paddingBottom: 6, backgroundColor: '#0b0f14', flexDirection: 'row', alignItems: 'center' },
+  docHeaderBtn: { paddingVertical: 6, paddingHorizontal: 10, backgroundColor: '#1f2937', borderRadius: 8, marginRight: 8 },
   docHeaderBtnText: { color: '#fff', fontWeight: '700' },
-  docHeaderTitle: {
-    color: '#fff',
-    fontWeight: '800',
-    fontSize: 16,
-    flex: 1,
-    textAlign: 'center',
-  },
-  docHeaderRight: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 8,
-  },
+  docHeaderTitle: { color: '#fff', fontWeight: '800', fontSize: 16, flex: 1, textAlign: 'center' },
+  docHeaderRight: { flexDirection: 'row', alignItems: 'center', gap: 8 },
 
-  docNavBar: {
-    flexDirection: 'row',
-    justifyContent: 'center',
-    padding: 12,
-    backgroundColor: '#0b0f14',
-  },
-  docNavBtn: {
-    paddingVertical: 10,
-    paddingHorizontal: 16,
-    backgroundColor: '#1f2937',
-    borderRadius: 999,
-  },
+  docNavBar: { flexDirection: 'row', justifyContent: 'center', padding: 12, backgroundColor: '#0b0f14' },
+  docNavBtn: { paddingVertical: 10, paddingHorizontal: 16, backgroundColor: '#1f2937', borderRadius: 999 },
   docNavText: { color: '#fff', fontWeight: '700' },
 
   signBtn: { backgroundColor: '#2563EB', borderRadius: 10 },
@@ -2645,121 +1793,5 @@ const styles = StyleSheet.create({
     color: '#FFFFFF',
     fontWeight: '700',
     fontSize: 15,
-  },
-
-  // Camera modal styles
-  cameraContainer: {
-    flex: 1,
-    backgroundColor: '#000',
-  },
-  cameraTopBar: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    paddingHorizontal: 12,
-    paddingVertical: 8,
-    justifyContent: 'space-between',
-    backgroundColor: 'rgba(15,23,42,0.95)',
-  },
-  cameraTopBtn: {
-    paddingHorizontal: 10,
-    paddingVertical: 6,
-    borderRadius: 999,
-    borderWidth: 1,
-    borderColor: '#64748b',
-  },
-  cameraTopBtnText: {
-    color: '#e5e7eb',
-    fontWeight: '600',
-    fontSize: 13,
-  },
-  cameraTitle: {
-    color: '#e5e7eb',
-    fontWeight: '700',
-    fontSize: 16,
-  },
-  camera: {
-    flex: 1,
-  },
-  cameraBottomPanel: {
-    paddingBottom: 16,
-    paddingTop: 8,
-    backgroundColor: 'rgba(15,23,42,0.96)',
-  },
-  cameraThumbStrip: {
-    minHeight: 70,
-    paddingHorizontal: 10,
-    marginBottom: 8,
-  },
-  cameraThumbWrapper: {
-    width: 60,
-    height: 60,
-    borderRadius: 8,
-    overflow: 'hidden',
-    marginRight: 8,
-  },
-  cameraThumb: {
-    width: '100%',
-    height: '100%',
-    backgroundColor: '#1f2937',
-  },
-  cameraThumbDelete: {
-    position: 'absolute',
-    top: 2,
-    right: 2,
-    width: 18,
-    height: 18,
-    borderRadius: 9,
-    backgroundColor: 'rgba(0,0,0,0.75)',
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  cameraThumbDeleteText: {
-    color: '#fff',
-    fontSize: 11,
-    lineHeight: 14,
-  },
-  cameraHintText: {
-    color: '#9ca3af',
-    fontSize: 12,
-    paddingVertical: 16,
-  },
-  cameraControlsRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-around',
-    paddingHorizontal: 32,
-    paddingTop: 4,
-  },
-  shutterOuter: {
-    width: 74,
-    height: 74,
-    borderRadius: 37,
-    borderWidth: 4,
-    borderColor: '#e5e7eb',
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  shutterInner: {
-    width: 56,
-    height: 56,
-    borderRadius: 28,
-    backgroundColor: '#f97316',
-  },
-  cameraMiniBtn: {
-    paddingHorizontal: 14,
-    paddingVertical: 8,
-    borderRadius: 999,
-    borderWidth: 1,
-    borderColor: '#6b7280',
-    backgroundColor: '#111827',
-  },
-  cameraMiniBtnText: {
-    color: '#e5e7eb',
-    fontWeight: '600',
-    fontSize: 13,
-  },
-  cameraErrorText: {
-    color: '#f97373',
-    fontSize: 14,
   },
 });
