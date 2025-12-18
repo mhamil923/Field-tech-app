@@ -49,8 +49,8 @@ const STATUS_OPTIONS = [
 const authHeaders = () => {
   try {
     const token = typeof localStorage !== 'undefined' ? localStorage.getItem('jwt') : null;
-    // React Native doesn't have localStorage; try AsyncStorage-like shim if you added one to api.
-    // If your axios instance already attaches the token, this just harmlessly adds it again.
+    // React Native doesn't have localStorage; if your axios instance already attaches the token,
+    // this is harmless. If you added a shim, it will work.
     return token ? { Authorization: `Bearer ${token}` } : {};
   } catch {
     return {};
@@ -62,7 +62,6 @@ const authHeaders = () => {
  * -------------------------------------------------------------------------- */
 function parseNotesArrayOrText(raw) {
   if (!raw) return [];
-  // If it's already an array
   if (Array.isArray(raw)) {
     return raw.map((n) => ({
       text: String(n?.text ?? '').trim(),
@@ -70,7 +69,6 @@ function parseNotesArrayOrText(raw) {
       by: n?.by || n?.author || n?.user || null,
     }));
   }
-  // If it's JSON-encoded
   if (typeof raw === 'string') {
     try {
       const arr = JSON.parse(raw);
@@ -82,10 +80,10 @@ function parseNotesArrayOrText(raw) {
         }));
       }
     } catch {
-      /* fall through to log parser */
+      /* fall through */
     }
   }
-  // Legacy text log:
+
   const s = String(raw);
   const lines = s.split(/\r?\n/);
   const entries = [];
@@ -435,13 +433,6 @@ export default function ViewWorkOrder() {
   const [photos, setPhotos] = useState([]); // image URLs only
   const [notes, setNotes] = useState([]);
 
-  // PENDING camera photos (local, not uploaded yet)
-  const [pendingCameraPhotos, setPendingCameraPhotos] = useState([]); // [{id, uri}]
-
-  // Full-screen viewer for pending camera photos
-  const [pendingViewerVisible, setPendingViewerVisible] = useState(false);
-  const [pendingViewerIndex, setPendingViewerIndex] = useState(0);
-
   // Notes modal
   const [showAddNoteModal, setShowAddNoteModal] = useState(false);
   const [newNoteText, setNewNoteText] = useState('');
@@ -471,11 +462,14 @@ export default function ViewWorkOrder() {
   const [docModalVisible, setDocModalVisible] = useState(false);
   const [docGroup, setDocGroup] = useState(null); // 'WO' | 'EST' | 'PO' | 'ATTACH'
   const [docIndex, setDocIndex] = useState(0);
-  const [docItems, setDocItems] = useState([]);  // [{title, url}]
+  const [docItems, setDocItems] = useState([]); // [{title, url}]
   const [docB64, setDocB64] = useState(null);
   const [docHeight, setDocHeight] = useState(Math.max(600, screenHeight * 0.85));
   const [docError, setDocError] = useState(null);
   const [docLoading, setDocLoading] = useState(false);
+
+  // NEW: camera upload state (uploads immediately on "Use Photo")
+  const [isCameraUploading, setIsCameraUploading] = useState(false);
 
   // -------- helpers for contact actions & address --------
   const normPhone = (p) => String(p || '').replace(/[^\d+]/g, '');
@@ -499,7 +493,7 @@ export default function ViewWorkOrder() {
     });
     const googleWebUrl = `https://www.google.com/maps/search/?api=1&query=${q}`;
     Linking.canOpenURL(googleAppUrl)
-      .then(supported => (supported ? Linking.openURL(googleAppUrl) : Linking.openURL(googleWebUrl)))
+      .then((supported) => (supported ? Linking.openURL(googleAppUrl) : Linking.openURL(googleWebUrl)))
       .catch(() => Alert.alert('Error', 'Unable to open Google Maps.'));
   };
   // -------------------------------------------------------
@@ -511,7 +505,7 @@ export default function ViewWorkOrder() {
     if (typeof val === 'string') {
       return val
         .split(',')
-        .map(s => s.trim())
+        .map((s) => s.trim())
         .filter(Boolean)
         .map(fileUrl);
     }
@@ -528,13 +522,13 @@ export default function ViewWorkOrder() {
       const parsed = parseNotesArrayOrText(data?.notes);
       setNotes(sortNotesDesc(parsed));
 
-      // Attachments: photoPath may contain images and PDFs (sign-off sheets)
+      // Attachments: photoPath may contain images and PDFs
       const rawKeys = (data?.photoPath || '')
         .split(',')
-        .map(s => s.trim())
+        .map((s) => s.trim())
         .filter(Boolean);
 
-      const allUrls = rawKeys.map(k => fileUrl(k));
+      const allUrls = rawKeys.map((k) => fileUrl(k));
 
       // Only keep *image* URLs in `photos` for the image viewer
       const imageUrls = allUrls.filter((u) => {
@@ -551,7 +545,9 @@ export default function ViewWorkOrder() {
     }
   }, [workOrderId]);
 
-  useEffect(() => { fetchWorkOrder(); }, [fetchWorkOrder]);
+  useEffect(() => {
+    fetchWorkOrder();
+  }, [fetchWorkOrder]);
 
   // Derivations for tiles
   const woPdfUrl = workOrder?.pdfPath ? fileUrl(workOrder.pdfPath) : null;
@@ -572,7 +568,10 @@ export default function ViewWorkOrder() {
 
   // Lightbox loader
   const loadDocIntoModal = useCallback(async (url) => {
-    if (!url) { setDocError('Missing file URL'); return; }
+    if (!url) {
+      setDocError('Missing file URL');
+      return;
+    }
     try {
       setDocLoading(true);
       setDocError(null);
@@ -591,13 +590,22 @@ export default function ViewWorkOrder() {
   const openDocGroup = (group, startIndex = 0) => {
     let items = [];
     if (group === 'WO') {
-      if (!woPdfUrl) { Alert.alert('No PDF', 'This work order does not have a PDF attached.'); return; }
+      if (!woPdfUrl) {
+        Alert.alert('No PDF', 'This work order does not have a PDF attached.');
+        return;
+      }
       items = [{ title: `Work Order ${workOrder?.workOrderNumber || workOrderId}`, url: woPdfUrl }];
     } else if (group === 'EST') {
-      if (!estimateUrls.length) { Alert.alert('No Estimates', 'No Estimate PDFs found for this job.'); return; }
+      if (!estimateUrls.length) {
+        Alert.alert('No Estimates', 'No Estimate PDFs found for this job.');
+        return;
+      }
       items = estimateUrls.map((u, i) => ({ title: `Estimate ${i + 1}`, url: u }));
     } else if (group === 'PO') {
-      if (!poUrls.length) { Alert.alert('No POs', 'No PO PDFs found for this job.'); return; }
+      if (!poUrls.length) {
+        Alert.alert('No POs', 'No PO PDFs found for this job.');
+        return;
+      }
       items = poUrls.map((u, i) => ({ title: `PO ${i + 1}`, url: u }));
     }
 
@@ -628,14 +636,12 @@ export default function ViewWorkOrder() {
     if (!text) return;
 
     try {
-      // Primary: EXACT match to working curl
       await api.put(
         `/work-orders/${workOrderId}/notes`,
         { notes: text, append: true },
         { headers: { 'Content-Type': 'application/json', ...authHeaders() } }
       );
     } catch (err1) {
-      // Fallback: some deployments accept "text" instead of "notes"
       try {
         await api.put(
           `/work-orders/${workOrderId}/notes`,
@@ -674,14 +680,27 @@ export default function ViewWorkOrder() {
   };
 
   /**
-   * CAMERA FLOW (ImagePicker, multi-shot):
-   * - openCamera launches camera
-   * - user keeps snapping / using photos
-   * - after each accepted photo, we add it to pending list
-   * - camera keeps re-opening until they hit "Cancel" in the native camera UI
-   *   then they can decide what to upload from the Pending section.
+   * Upload ONE camera photo immediately (no pending queue)
+   */
+  const uploadCameraPhotoNow = async (uri) => {
+    const form = new FormData();
+    const processedUri = await processImageForUpload(uri);
+    const name = `photo-${Date.now()}.jpg`;
+    form.append('photoFile', { uri: processedUri, name, type: 'image/jpeg' });
+
+    await api.put(`/work-orders/${workOrderId}/edit`, form, {
+      headers: { 'Content-Type': 'multipart/form-data', ...authHeaders() },
+    });
+  };
+
+  /**
+   * CAMERA FLOW (multi-shot):
+   * - each time user taps "Use Photo", we upload immediately
+   * - we re-open camera until they hit "Cancel"
    */
   const openCamera = async () => {
+    if (!workOrderId) return;
+
     const { status } = await ImagePicker.requestCameraPermissionsAsync();
     if (status !== 'granted') {
       return Alert.alert('Permission required', 'Need camera access.');
@@ -695,67 +714,33 @@ export default function ViewWorkOrder() {
         allowsEditing: false,
       });
 
-      // If user cancels from camera, stop the session
+      // Cancel exits the loop
       if (result.canceled || !result.assets?.length) {
         keepCapturing = false;
         break;
       }
 
       const asset = result.assets[0];
-      if (asset?.uri) {
-        setPendingCameraPhotos((prev) => [
-          ...prev,
-          {
-            id: `${Date.now()}-${Math.random().toString(16).slice(2)}`,
-            uri: asset.uri,
-          },
-        ]);
+      if (!asset?.uri) continue;
+
+      setIsCameraUploading(true);
+      try {
+        await uploadCameraPhotoNow(asset.uri);
+        await fetchWorkOrder();
+        // Optional: small toast-like confirmation
+        // Alert.alert('Uploaded', 'Photo uploaded.');
+      } catch (err) {
+        // If upload fails, ask if they want to keep going or stop
+        const msg = err?.response?.data?.error || err?.message || 'Failed to upload photo.';
+        await new Promise((resolve) => {
+          Alert.alert('Upload Error', msg, [
+            { text: 'Stop', style: 'destructive', onPress: () => { keepCapturing = false; resolve(); } },
+            { text: 'Try Next Photo', style: 'default', onPress: () => resolve() },
+          ]);
+        });
+      } finally {
+        setIsCameraUploading(false);
       }
-      // Loop continues; user taps "Use Photo" to add another, or Cancel to exit
-    }
-  };
-
-  const removePendingCameraPhoto = (id) => {
-    setPendingCameraPhotos((prev) => prev.filter((p) => p.id !== id));
-  };
-
-  const clearPendingCameraPhotos = () => {
-    if (!pendingCameraPhotos.length) return;
-    Alert.alert(
-      'Discard All?',
-      'This will remove all pending camera photos that have not been uploaded yet.',
-      [
-        { text: 'Cancel', style: 'cancel' },
-        {
-          text: 'Discard',
-          style: 'destructive',
-          onPress: () => setPendingCameraPhotos([]),
-        },
-      ]
-    );
-  };
-
-  const uploadPendingCameraPhotos = async () => {
-    if (!pendingCameraPhotos.length) return;
-
-    const form = new FormData();
-    try {
-      for (let i = 0; i < pendingCameraPhotos.length; i++) {
-        const p = pendingCameraPhotos[i];
-        const processedUri = await processImageForUpload(p.uri);
-        const name = `photo-${Date.now()}-${i}.jpg`;
-        form.append('photoFile', { uri: processedUri, name, type: 'image/jpeg' });
-      }
-
-      await api.put(`/work-orders/${workOrderId}/edit`, form, {
-        headers: { 'Content-Type': 'multipart/form-data', ...authHeaders() },
-      });
-
-      setPendingCameraPhotos([]);
-      await fetchWorkOrder();
-      Alert.alert('Success', 'Camera photos uploaded!');
-    } catch (err) {
-      Alert.alert('Upload Error', err?.response?.data?.error || err.message);
     }
   };
 
@@ -789,8 +774,7 @@ export default function ViewWorkOrder() {
   };
 
   const handleDeletePhoto = (idx) => {
-    // idx is index in *attachment keys* (photoPath list) – used in Attachments modal
-    const keys = (workOrder?.photoPath || '').split(',').map(s => s.trim()).filter(Boolean);
+    const keys = (workOrder?.photoPath || '').split(',').map((s) => s.trim()).filter(Boolean);
     if (idx < 0 || idx >= keys.length) return;
 
     Alert.alert('Delete Attachment?', 'This will permanently remove it.', [
@@ -818,7 +802,9 @@ export default function ViewWorkOrder() {
     if (!photos.length) return;
     const safeIndex = Math.min(Math.max(0, viewerIndex), Math.max(0, photos.length - 1));
     const url = photos[safeIndex];
-    try { await Share.share({ url, message: url }); } catch {}
+    try {
+      await Share.share({ url, message: url });
+    } catch {}
   };
 
   const closePhotoViewer = () => {
@@ -835,7 +821,6 @@ export default function ViewWorkOrder() {
   const openAnnotator = async () => {
     if (!pdfURL) return Alert.alert('No PDF', 'This work order does not have a PDF attached.');
     try {
-      // Preload the PDF before showing, so it appears ready
       const tmp = FileSystem.cacheDirectory + `wo_${workOrderId}.pdf`;
       await FileSystem.downloadAsync(pdfURL, tmp);
       const b64 = await FileSystem.readAsStringAsync(tmp, { encoding: FileSystem.EncodingType.Base64 });
@@ -847,20 +832,24 @@ export default function ViewWorkOrder() {
     }
   };
 
-  // If the user taps "Annotate" from inside the Lightbox, close it first then open annotator
   const openAnnotatorFromLightbox = async () => {
     setDocModalVisible(false);
-    setTimeout(() => { openAnnotator(); }, 250);
+    setTimeout(() => {
+      openAnnotator();
+    }, 250);
   };
 
-  const openSketch = () => setSketchVisible(true);
-
-  // WebView message handlers
   const onAnnotatorMessage = async (ev) => {
     const msg = ev?.nativeEvent?.data || '';
     if (typeof msg !== 'string') return;
-    if (msg.startsWith('ERROR:')) { Alert.alert('Annotator Error', msg.slice(6)); return; }
-    if (msg === 'CLOSE') { setAnnotateVisible(false); return; }
+    if (msg.startsWith('ERROR:')) {
+      Alert.alert('Annotator Error', msg.slice(6));
+      return;
+    }
+    if (msg === 'CLOSE') {
+      setAnnotateVisible(false);
+      return;
+    }
     if (msg.startsWith('SIGNED:')) {
       const b64 = msg.slice(7);
       try {
@@ -884,8 +873,14 @@ export default function ViewWorkOrder() {
   const onSketchMessage = async (ev) => {
     const msg = ev?.nativeEvent?.data || '';
     if (typeof msg !== 'string') return;
-    if (msg.startsWith('ERROR:')) { Alert.alert('Draw Notes Error', msg.slice(6)); return; }
-    if (msg === 'CLOSE') { setSketchVisible(false); return; }
+    if (msg.startsWith('ERROR:')) {
+      Alert.alert('Draw Notes Error', msg.slice(6));
+      return;
+    }
+    if (msg === 'CLOSE') {
+      setSketchVisible(false);
+      return;
+    }
     if (msg.startsWith('IMAGE:')) {
       const b64 = msg.slice(6);
       try {
@@ -961,7 +956,7 @@ export default function ViewWorkOrder() {
   const applyStatus = async () => {
     const next = pendingStatus || STATUS_OPTIONS[0];
     const prev = workOrder?.status;
-    setWorkOrder(w => (w ? { ...w, status: next } : w));
+    setWorkOrder((w) => (w ? { ...w, status: next } : w));
     setShowStatusModal(false);
     setIsStatusSaving(true);
     try {
@@ -970,7 +965,7 @@ export default function ViewWorkOrder() {
       await api.put(`/work-orders/${workOrderId}/edit`, form, { headers: authHeaders() });
       await fetchWorkOrder();
     } catch (e) {
-      setWorkOrder(w => (w ? { ...w, status: prev } : w));
+      setWorkOrder((w) => (w ? { ...w, status: prev } : w));
       Alert.alert('Error', e?.response?.data?.error || e?.message || 'Failed to update status.');
     } finally {
       setIsStatusSaving(false);
@@ -980,7 +975,7 @@ export default function ViewWorkOrder() {
 
   // Open a PDF attachment from Attachments modal using the multi-page viewer
   const openAttachmentPdf = (attachmentIndex) => {
-    const keys = (workOrder?.photoPath || '').split(',').map(s => s.trim()).filter(Boolean);
+    const keys = (workOrder?.photoPath || '').split(',').map((s) => s.trim()).filter(Boolean);
     if (!keys.length) return;
 
     const pdfItems = [];
@@ -1097,14 +1092,14 @@ export default function ViewWorkOrder() {
           <TouchableOpacity style={styles.tile} onPress={() => openDocGroup('EST', 0)}>
             <View style={styles.tileIconCircle}><Text style={styles.tileIconText}>EST</Text></View>
             <Text style={styles.tileTitle}>Estimates</Text>
-            <Text style={styles.tileSub}>{estimateUrls.length ? `${estimateUrls.length} file${estimateUrls.length>1?'s':''}` : 'None'}</Text>
+            <Text style={styles.tileSub}>{estimateUrls.length ? `${estimateUrls.length} file${estimateUrls.length > 1 ? 's' : ''}` : 'None'}</Text>
             {!!estimateUrls.length && <Text style={styles.tileBadge}>PDF</Text>}
           </TouchableOpacity>
 
           <TouchableOpacity style={styles.tile} onPress={() => openDocGroup('PO', 0)}>
             <View style={styles.tileIconCircle}><Text style={styles.tileIconText}>PO</Text></View>
             <Text style={styles.tileTitle}>POs</Text>
-            <Text style={styles.tileSub}>{poUrls.length ? `${poUrls.length} file${poUrls.length>1?'s':''}` : 'None'}</Text>
+            <Text style={styles.tileSub}>{poUrls.length ? `${poUrls.length} file${poUrls.length > 1 ? 's' : ''}` : 'None'}</Text>
             {!!poUrls.length && <Text style={styles.tileBadge}>PDF</Text>}
           </TouchableOpacity>
         </View>
@@ -1118,12 +1113,24 @@ export default function ViewWorkOrder() {
             <Text style={styles.attachText}>Annotate & Sign PDF</Text>
           </TouchableOpacity>
 
-          <TouchableOpacity style={[styles.buttonBase, styles.photoBtn]} onPress={openCamera}>
-            <Text style={styles.photoText}>Take Photo (Camera)</Text>
+          <TouchableOpacity
+            style={[
+              styles.buttonBase,
+              styles.photoBtn,
+              (isCameraUploading || isStatusSaving) && { opacity: 0.75 },
+            ]}
+            onPress={openCamera}
+            disabled={isCameraUploading}
+          >
+            <Text style={styles.photoText}>
+              {isCameraUploading ? 'Uploading…' : 'Take Photo (Camera)'}
+            </Text>
           </TouchableOpacity>
+
           <TouchableOpacity style={[styles.buttonBase, styles.photoBtn]} onPress={uploadPhotos}>
             <Text style={styles.photoText}>Upload Photo(s) from Library</Text>
           </TouchableOpacity>
+
           <TouchableOpacity style={[styles.buttonBase, styles.attachBtn]} onPress={() => setViewAttachmentsVisible(true)}>
             <Text style={styles.attachText}>View Attachments</Text>
           </TouchableOpacity>
@@ -1134,62 +1141,6 @@ export default function ViewWorkOrder() {
             <Text style={styles.drawText}>Draw Note</Text>
           </TouchableOpacity>
         </View>
-
-        {/* PENDING CAMERA PHOTOS (multi-shot, delete, batch upload) */}
-        {pendingCameraPhotos.length > 0 && (
-          <View style={styles.pendingSection}>
-            <View style={styles.pendingHeaderRow}>
-              <Text style={styles.pendingTitle}>Pending Camera Photos</Text>
-              <Text style={styles.pendingCount}>
-                {pendingCameraPhotos.length} ready
-              </Text>
-            </View>
-
-            <FlatList
-              data={pendingCameraPhotos}
-              keyExtractor={(item) => item.id}
-              horizontal
-              showsHorizontalScrollIndicator={false}
-              contentContainerStyle={styles.pendingList}
-              renderItem={({ item, index }) => (
-                <View style={styles.pendingThumbWrapper}>
-                  <TouchableOpacity
-                    onPress={() => {
-                      setPendingViewerIndex(index);
-                      setPendingViewerVisible(true);
-                    }}
-                  >
-                    <Image source={{ uri: item.uri }} style={styles.pendingThumb} />
-                  </TouchableOpacity>
-                  <TouchableOpacity
-                    style={styles.pendingDeleteIcon}
-                    onPress={() => removePendingCameraPhoto(item.id)}
-                    hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
-                  >
-                    <Text style={styles.pendingDeleteText}>×</Text>
-                  </TouchableOpacity>
-                </View>
-              )}
-            />
-
-            <View style={styles.pendingActionsRow}>
-              <TouchableOpacity
-                style={[styles.buttonBase, styles.pendingUploadBtn]}
-                onPress={uploadPendingCameraPhotos}
-              >
-                <Text style={styles.pendingUploadText}>
-                  Upload {pendingCameraPhotos.length} Photo{pendingCameraPhotos.length > 1 ? 's' : ''}
-                </Text>
-              </TouchableOpacity>
-              <TouchableOpacity
-                style={[styles.buttonBase, styles.pendingDiscardBtn]}
-                onPress={clearPendingCameraPhotos}
-              >
-                <Text style={styles.pendingDiscardText}>Discard All</Text>
-              </TouchableOpacity>
-            </View>
-          </View>
-        )}
 
         {/* Notes list */}
         {notes.length > 0 && (
@@ -1218,7 +1169,7 @@ export default function ViewWorkOrder() {
             pagingEnabled
             initialScrollIndex={viewerIndex}
             getItemLayout={(_, idx) => ({ length: screenWidth, offset: screenWidth * idx, index: idx })}
-            onMomentumScrollEnd={ev => {
+            onMomentumScrollEnd={(ev) => {
               const x = ev?.nativeEvent?.contentOffset?.x ?? 0;
               const idx = Math.round(x / screenWidth);
               setViewerIndex(Number.isFinite(idx) ? idx : 0);
@@ -1231,40 +1182,6 @@ export default function ViewWorkOrder() {
             </TouchableOpacity>
             <TouchableOpacity style={[styles.viewerButton, styles.exitBtn]} onPress={closePhotoViewer}>
               <Text style={styles.exitText}>Exit</Text>
-            </TouchableOpacity>
-          </View>
-        </View>
-      </Modal>
-
-      {/* Full-screen viewer for pending camera photos */}
-      <Modal
-        visible={pendingViewerVisible}
-        animationType="fade"
-        onRequestClose={() => setPendingViewerVisible(false)}
-      >
-        <View style={styles.viewerContainer}>
-          <FlatList
-            data={pendingCameraPhotos}
-            keyExtractor={(item) => item.id}
-            horizontal
-            pagingEnabled
-            initialScrollIndex={pendingViewerIndex}
-            getItemLayout={(_, idx) => ({ length: screenWidth, offset: screenWidth * idx, index: idx })}
-            onMomentumScrollEnd={ev => {
-              const x = ev?.nativeEvent?.contentOffset?.x ?? 0;
-              const idx = Math.round(x / screenWidth);
-              if (Number.isFinite(idx)) setPendingViewerIndex(idx);
-            }}
-            renderItem={({ item }) => (
-              <Image source={{ uri: item.uri }} style={styles.fullScreenImage} />
-            )}
-          />
-          <View style={styles.viewerButtons}>
-            <TouchableOpacity
-              style={[styles.viewerButton, styles.exitBtn]}
-              onPress={() => setPendingViewerVisible(false)}
-            >
-              <Text style={styles.exitText}>Close</Text>
             </TouchableOpacity>
           </View>
         </View>
@@ -1285,7 +1202,7 @@ export default function ViewWorkOrder() {
           {(() => {
             const keys = (workOrder?.photoPath || '')
               .split(',')
-              .map(s => s.trim())
+              .map((s) => s.trim())
               .filter(Boolean);
 
             if (!keys.length) {
@@ -1307,7 +1224,6 @@ export default function ViewWorkOrder() {
                     lower.startsWith('data:application/pdf');
 
                   if (isPdf) {
-                    // PDF tile (tap to open multi-page pdf.js viewer)
                     return (
                       <View style={styles.thumbWrapper}>
                         <TouchableOpacity
@@ -1331,12 +1247,11 @@ export default function ViewWorkOrder() {
                     );
                   }
 
-                  // Image thumbnail (tap to open image viewer)
                   return (
                     <View style={styles.thumbWrapper}>
                       <TouchableOpacity
                         onPress={() => {
-                          const viewerIdx = photos.findIndex(p => p === url);
+                          const viewerIdx = photos.findIndex((p) => p === url);
                           if (viewerIdx !== -1) {
                             setReturnToAttachments(true);
                             setViewerIndex(viewerIdx);
@@ -1417,7 +1332,7 @@ export default function ViewWorkOrder() {
           <View style={styles.addNoteContainer}>
             <Text style={styles.addNoteTitle}>Change Status</Text>
             <View style={styles.statusList}>
-              {STATUS_OPTIONS.map(s => (
+              {STATUS_OPTIONS.map((s) => (
                 <TouchableOpacity
                   key={s}
                   style={[styles.statusOption, pendingStatus === s && styles.statusOptionActive]}
@@ -1717,81 +1632,4 @@ const styles = StyleSheet.create({
 
   signBtn: { backgroundColor: '#2563EB', borderRadius: 10 },
   signBtnText: { color: '#fff', fontWeight: '800' },
-
-  // NEW: pending camera photos styles (bigger & tappable)
-  pendingSection: {
-    marginTop: 12,
-    marginBottom: 8,
-    padding: 12,
-    backgroundColor: '#FFFFFF',
-    borderRadius: 12,
-    borderWidth: 1,
-    borderColor: '#E5E7EB',
-  },
-  pendingHeaderRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    marginBottom: 8,
-  },
-  pendingTitle: {
-    fontSize: 16,
-    fontWeight: '700',
-    color: '#111827',
-  },
-  pendingCount: {
-    fontSize: 13,
-    fontWeight: '600',
-    color: '#4B5563',
-  },
-  pendingList: {
-    paddingVertical: 4,
-  },
-  pendingThumbWrapper: {
-    width: 120,
-    height: 120,
-    marginRight: 10,
-  },
-  pendingThumb: {
-    width: '100%',
-    height: '100%',
-    borderRadius: 10,
-    backgroundColor: '#E5E7EB',
-  },
-  pendingDeleteIcon: {
-    position: 'absolute',
-    top: 6,
-    right: 6,
-    width: 24,
-    height: 24,
-    borderRadius: 12,
-    backgroundColor: 'rgba(0,0,0,0.7)',
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  pendingDeleteText: {
-    color: '#fff',
-    fontSize: 14,
-    lineHeight: 18,
-  },
-  pendingActionsRow: {
-    marginTop: 12,
-  },
-  pendingUploadBtn: {
-    backgroundColor: '#15803D',
-  },
-  pendingUploadText: {
-    color: '#FFFFFF',
-    fontWeight: '700',
-    fontSize: 15,
-  },
-  pendingDiscardBtn: {
-    backgroundColor: '#DC2626',
-    marginTop: 6,
-  },
-  pendingDiscardText: {
-    color: '#FFFFFF',
-    fontWeight: '700',
-    fontSize: 15,
-  },
 });
