@@ -773,30 +773,32 @@ export default function ViewWorkOrder() {
     }
   };
 
-  const handleDeletePhoto = (idx) => {
-    const keys = (workOrder?.photoPath || '').split(',').map((s) => s.trim()).filter(Boolean);
-    if (idx < 0 || idx >= keys.length) return;
+const handleDeletePhoto = (idx) => {
+  const keys = (workOrder?.photoPath || '').split(',').map((s) => s.trim()).filter(Boolean);
+  if (idx < 0 || idx >= keys.length) return;
 
-    Alert.alert('Delete Attachment?', 'This will permanently remove it.', [
-      { text: 'Cancel, keep it', style: 'cancel' },
-      {
-        text: 'Delete',
-        style: 'destructive',
-        onPress: async () => {
-          try {
-            await api.delete(`/work-orders/${workOrderId}/attachment`, {
-              data: { photoPath: keys[idx] },
-              headers: authHeaders(),
-            });
-            fetchWorkOrder();
-            Alert.alert('Deleted');
-          } catch (err) {
-            Alert.alert('Error', err?.response?.data?.error || err.message);
-          }
-        },
+  Alert.alert('Delete Attachment?', 'This will permanently remove it.', [
+    { text: 'Cancel, keep it', style: 'cancel' },
+    {
+      text: 'Delete',
+      style: 'destructive',
+      onPress: async () => {
+        try {
+          await api.delete(`/work-orders/${workOrderId}/attachments`, {
+            // axios supports body on DELETE via `data`
+            data: { key: keys[idx] },
+            headers: { 'Content-Type': 'application/json', ...authHeaders() },
+          });
+
+          await fetchWorkOrder();
+          Alert.alert('Deleted');
+        } catch (err) {
+          Alert.alert('Error', err?.response?.data?.error || err?.message || 'Delete failed.');
+        }
       },
-    ]);
-  };
+    },
+  ]);
+};
 
   const handleShare = async () => {
     if (!photos.length) return;
