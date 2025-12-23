@@ -115,6 +115,9 @@ const isAssignedToMe = (order, me) => {
     order.assignedTo ??
     order.assignedToId ??
     order.assignedUserId ??
+    order.assigned_user_id ??
+    order.techId ??
+    order.tech_id ??
     null;
 
   const assignedName = (
@@ -122,6 +125,8 @@ const isAssignedToMe = (order, me) => {
     order.assignedToUsername ||
     order.assignedToUser ||
     order.assignedTech ||
+    order.techName ||
+    order.tech_name ||
     ''
   )
     .toString()
@@ -138,6 +143,29 @@ const isAssignedToMe = (order, me) => {
   if (myName && assignedName && myName === assignedName) return true;
 
   return false;
+};
+
+// ----- Scheduled date normalization (fixes "Today shows nothing" when backend field differs) -----
+const getScheduledRaw = (o) =>
+  o?.scheduledDate ??
+  o?.scheduled_date ??
+  o?.scheduledFor ??
+  o?.scheduled_for ??
+  o?.scheduledAt ??
+  o?.scheduled_at ??
+  o?.scheduleDate ??
+  o?.schedule_date ??
+  null;
+
+const isScheduledToday = (o) => {
+  const raw = getScheduledRaw(o);
+  if (!raw) return false;
+
+  // parseZone keeps offsets if present; local() makes "today" match device timezone
+  const m = moment.parseZone(raw);
+  if (!m.isValid()) return false;
+
+  return m.local().isSame(moment(), 'day');
 };
 
 // Build best-available address for routing from a WO
@@ -157,7 +185,8 @@ const niceLabelForOrder = (o) => {
   const wo = o.workOrderNumber || '—';
   const po = displayPO(o.workOrderNumber, o.poNumber);
   const cust = o.customer || '—';
-  const loc = norm(o.siteLocation) || norm(o.siteName) || norm(o.siteLocationName) || '';
+  const loc =
+    norm(o.siteLocation) || norm(o.siteName) || norm(o.siteLocationName) || '';
   return `WO ${wo}${po ? ` • PO ${po}` : ''} • ${cust}${loc ? ` • ${loc}` : ''}`;
 };
 
@@ -174,8 +203,7 @@ const buildGoogleMapsDirectionsUrl = (origin, destination, waypointAddrs) => {
   const base = 'https://www.google.com/maps/dir/?api=1';
   const wp = (waypointAddrs || []).filter(Boolean);
 
-  // Google supports many waypoints, but to avoid edge cases, keep it reasonable.
-  const wpStr = wp.slice(0, 23).map(enc).join('|'); // 23 + origin + dest = 25 points-ish
+  const wpStr = wp.slice(0, 23).map(enc).join('|');
   const parts = [
     `${base}&origin=${enc(origin)}`,
     `&destination=${enc(destination)}`,
@@ -211,7 +239,7 @@ export default function WorkOrdersScreen() {
   // ✅ Route generation UI/state
   const [routeWorking, setRouteWorking] = useState(false);
   const [routeModalOpen, setRouteModalOpen] = useState(false);
-  const [routeResult, setRouteResult] = useState(null); // { orderedIds, orderedStops, totals, mapsUrl }
+  const [routeResult, setRouteResult] = useState(null);
 
   const loadTodayOrder = useCallback(async () => {
     try {
@@ -230,7 +258,7 @@ export default function WorkOrdersScreen() {
     [todayKey]
   );
 
-  // current user (Add button + Today behavior)
+  // current user
   useEffect(() => {
     (async () => {
       try {
@@ -239,15 +267,6 @@ export default function WorkOrdersScreen() {
       } catch {}
     })();
   }, []);
-
-  // 🔒 special flags for Jeff accounts + Adin
-  const usernameLower = (me?.username || '').toLowerCase();
-  const isJeff = usernameLower === 'jeff';
-  const isJeffSr = usernameLower === 'jeffsr';
-  const isAdin = usernameLower === 'adin';
-
-  // 👉 jeffsr and Adin are restricted to the "Today-only / assigned-to-me" view (chip layout)
-  const isTodayScopedUser = isJeffSr || isAdin;
 
   const fetchWorkOrders = useCallback(async () => {
     try {
@@ -270,11 +289,10 @@ export default function WorkOrdersScreen() {
     fetchWorkOrders();
   }, [fetchWorkOrders]);
 
-  // useFocusEffect must NOT return a Promise.
   useFocusEffect(
     useCallback(() => {
-      fetchWorkOrders(); // fire and forget; no return
-      return undefined; // explicit no-cleanup
+      fetchWorkOrders();
+      return undefined;
     }, [fetchWorkOrders])
   );
 
@@ -283,25 +301,20 @@ export default function WorkOrdersScreen() {
   }, [loadTodayOrder, workOrders.length]);
 
   // ---------- COUNTS ----------
-  // Status counts are global; "Today" count is ONLY "assignedTo me" + scheduled today.
+  // ✅ Today count is ALWAYS: (assigned to me) + (scheduled today)
   const counts = useMemo(() => {
     const byStatus = Object.fromEntries(STATUSES.map((s) => [s, 0]));
-    let today = 0;
-
     for (const o of workOrders) {
       const label = toCanonicalStatus(o?.status);
       if (byStatus[label] !== undefined) byStatus[label] += 1;
     }
 
-    const todayBase = me
-      ? workOrders.filter((o) => isAssignedToMe(o, me))
-      : workOrders;
-
-    today = todayBase.filter(
-      (o) =>
-        o?.scheduledDate &&
-        moment(o.scheduledDate).isSame(moment(), 'day')
-    ).length;
+    // If we don't know who "me" is yet, we cannot compute "assigned-to-me" safely.
+    const today =
+      me
+        ? workOrders.filter((o) => isAssignedToMe(o, me) && isScheduledToday(o))
+            .length
+        : 0;
 
     return { byStatus, today };
   }, [workOrders, me]);
@@ -319,20 +332,14 @@ export default function WorkOrdersScreen() {
   };
 
   // ---------- FILTERED ORDERS ----------
-  // Today tab: ONLY work orders assigned to the logged-in user, scheduled for today.
-  // Other tabs: status-based, global (same as before).
+  // ✅ Today tab: ALWAYS only my work orders scheduled today.
+  // Other tabs: status-based, global.
   const filteredOrders = useMemo(() => {
-    let base = workOrders;
+    const base = workOrders;
 
     if (selectedStatus === 'Today') {
-      const todayStr = moment().format('YYYY-MM-DD');
-      return base.filter((o) => {
-        const isToday =
-          o.scheduledDate &&
-          moment(o.scheduledDate).format('YYYY-MM-DD') === todayStr;
-        const isMine = me ? isAssignedToMe(o, me) : true;
-        return isToday && isMine;
-      });
+      if (!me) return []; // don't show everyone's work while user is still loading
+      return base.filter((o) => isAssignedToMe(o, me));
     }
 
     return base.filter(
@@ -340,9 +347,16 @@ export default function WorkOrdersScreen() {
     );
   }, [workOrders, selectedStatus, me]);
 
+  // Today tab applies "scheduled today" after assignment filter (so it stays “my jobs today”)
+  const filteredToday = useMemo(() => {
+    if (selectedStatus !== 'Today') return [];
+    return filteredOrders.filter((o) => isScheduledToday(o));
+  }, [filteredOrders, selectedStatus]);
+
   const orderedToday = useMemo(() => {
     if (selectedStatus !== 'Today') return filteredOrders;
-    const map = new Map(filteredOrders.map((o) => [String(o.id), o]));
+
+    const map = new Map(filteredToday.map((o) => [String(o.id), o]));
     const ordered = [];
     for (const id of todayOrderIds) {
       if (map.has(id)) {
@@ -351,7 +365,7 @@ export default function WorkOrdersScreen() {
       }
     }
     return [...ordered, ...Array.from(map.values())];
-  }, [filteredOrders, selectedStatus, todayOrderIds]);
+  }, [filteredOrders, filteredToday, selectedStatus, todayOrderIds]);
 
   const onRefresh = () => {
     setRefreshing(true);
@@ -360,7 +374,6 @@ export default function WorkOrdersScreen() {
 
   /* ---------------- Status update: primary /edit (FormData), fallback JSON ---------------- */
   const putStatus = async (id, newStatus) => {
-    // Primary: /edit with FormData (parity with web + other screens)
     try {
       const form = new FormData();
       form.append('status', newStatus);
@@ -371,8 +384,7 @@ export default function WorkOrdersScreen() {
         },
       });
       return;
-    } catch (err) {
-      // Fallback: JSON to /work-orders/:id (older servers)
+    } catch {
       await api.put(
         `/work-orders/${id}`,
         { status: newStatus },
@@ -412,7 +424,6 @@ export default function WorkOrdersScreen() {
     if (!trimmed) return;
 
     try {
-      // primary
       await api.put(
         `/work-orders/${id}/notes`,
         { notes: trimmed, append: true },
@@ -425,7 +436,6 @@ export default function WorkOrdersScreen() {
       );
     } catch (e1) {
       try {
-        // fallback legacy body shape
         await api.put(
           `/work-orders/${id}/notes`,
           { text: trimmed, append: true },
@@ -454,7 +464,7 @@ export default function WorkOrdersScreen() {
     [workOrders]
   );
 
-  const [bulkDefaultSeed, setBulkDefaultSeed] = useState(0); // forces FlatList to refresh selection defaults
+  const [bulkDefaultSeed, setBulkDefaultSeed] = useState(0);
 
   const filteredWaitingForModal = useMemo(() => {
     const q = bulkSearch.trim().toLowerCase();
@@ -494,7 +504,7 @@ export default function WorkOrdersScreen() {
   const openBulkModal = () => {
     setBulkSearch('');
     setBulkNote('Parts In');
-    setBulkSelected(new Set(waitingOrders.map((o) => o.id))); // default select all
+    setBulkSelected(new Set(waitingOrders.map((o) => o.id)));
     setBulkDefaultSeed((s) => s + 1);
     setBulkVisible(true);
   };
@@ -521,7 +531,6 @@ export default function WorkOrdersScreen() {
             await addNote(id, bulkNote.trim());
           }
         } catch (e) {
-          // continue others but surface one error at end
           console.error(
             'Bulk status error for id',
             id,
@@ -549,10 +558,8 @@ export default function WorkOrdersScreen() {
       return;
     }
 
-    // Use current on-screen ordering as input (drag order may matter as a tie-break)
     const candidates = orderedToday;
 
-    // Build stops with usable addresses
     const stops = candidates
       .map((o) => ({
         id: o.id,
@@ -582,17 +589,6 @@ export default function WorkOrdersScreen() {
 
     setRouteWorking(true);
     try {
-      // Backend endpoint we’ll add next:
-      // POST /routes/best
-      // body: { start, end, stops: [{id,address,label}] }
-      // response (suggested):
-      // {
-      //   orderedIds: number[],
-      //   orderedStops?: [{id,address,label, legDistanceMeters?, legDurationSeconds?}],
-      //   totalDistanceMeters?: number,
-      //   totalDurationSeconds?: number,
-      //   googleMapsUrl?: string
-      // }
       const payload = {
         start: SHOP_ADDRESS,
         end: SHOP_ADDRESS,
@@ -610,10 +606,8 @@ export default function WorkOrdersScreen() {
         throw new Error('Route service did not return an ordered list.');
       }
 
-      // ✅ Reorder Today tab to match route (and persist)
       await saveTodayOrder(orderedIds.map((x) => String(x)));
 
-      // Build orderedStops for preview if backend didn’t provide it
       let orderedStops = Array.isArray(data.orderedStops) ? data.orderedStops : null;
       if (!orderedStops) {
         const byId = new Map(stops.map((s) => [String(s.id), s]));
@@ -647,7 +641,6 @@ export default function WorkOrdersScreen() {
     } catch (e) {
       console.error('Route generation failed:', e?.response?.data || e?.message || e);
 
-      // Fallback: open Google Maps in the current order so they can still run the day
       const fallbackUrl = buildGoogleMapsDirectionsUrl(
         SHOP_ADDRESS,
         SHOP_ADDRESS,
@@ -691,7 +684,6 @@ export default function WorkOrdersScreen() {
     );
   };
 
-  // ✅ Today-only header actions (Generate Best Route)
   const TodayRouteActions = () => {
     if (selectedStatus !== 'Today') return null;
 
@@ -717,64 +709,18 @@ export default function WorkOrdersScreen() {
           )}
         </TouchableOpacity>
 
-        <Text style={styles.routeHint}>
-          Start/End: {SHOP_ADDRESS}
-        </Text>
+        <Text style={styles.routeHint}>Start/End: {SHOP_ADDRESS}</Text>
       </View>
     );
   };
 
-  // 🔹 Chips:
-  // - For jeffsr & Adin: ONLY show Today tab (scoped to assigned-to-me)
-  // - For everyone else (including Jeff): show Today + all statuses
+  // ✅ Chips: everyone gets Today + statuses
   const renderChips = () => {
-    if (isTodayScopedUser) {
-      return (
-        <View style={styles.chipsWrap}>
-          <TouchableOpacity
-            onPress={() => setSelectedStatus('Today')}
-            style={[
-              styles.chip,
-              selectedStatus === 'Today' && styles.chipActive,
-            ]}
-          >
-            <Text
-              style={[
-                styles.chipText,
-                selectedStatus === 'Today' && styles.chipTextActive,
-              ]}
-            >
-              Today
-            </Text>
-            <View
-              style={[
-                styles.badge,
-                selectedStatus === 'Today' && styles.badgeActive,
-              ]}
-            >
-              <Text
-                style={[
-                  styles.badgeText,
-                  selectedStatus === 'Today' && styles.badgeTextActive,
-                ]}
-              >
-                {filteredOrders.length}
-              </Text>
-            </View>
-          </TouchableOpacity>
-        </View>
-      );
-    }
-
-    // Default: Today + all statuses
     return (
       <View style={styles.chipsWrap}>
         <TouchableOpacity
           onPress={() => setSelectedStatus('Today')}
-          style={[
-            styles.chip,
-            selectedStatus === 'Today' && styles.chipActive,
-          ]}
+          style={[styles.chip, selectedStatus === 'Today' && styles.chipActive]}
         >
           <Text
             style={[
@@ -837,14 +783,11 @@ export default function WorkOrdersScreen() {
   };
 
   const Card = ({ item, drag }) => {
-    // Legacy-safe Site Location / Address handling
     const rawLoc = norm(item.siteLocation);
     const explicitName = norm(item.siteName) || norm(item.siteLocationName);
     let siteLocationName = explicitName;
     let siteAddress =
-      norm(item.siteAddress) ||
-      norm(item.serviceAddress) ||
-      norm(item.address);
+      norm(item.siteAddress) || norm(item.serviceAddress) || norm(item.address);
 
     if (!siteAddress && rawLoc) {
       siteAddress = rawLoc;
@@ -859,57 +802,47 @@ export default function WorkOrdersScreen() {
       <View style={styles.card}>
         <View style={styles.cardHeaderRow}>
           <Text style={styles.cardTitle}>
-            WO: {item.workOrderNumber || '—'} • PO:{' '}
-            {displayPO(item.workOrderNumber, item.poNumber)}
+            WO: {item.workOrderNumber || '—'} • PO: {displayPO(item.workOrderNumber, item.poNumber)}
           </Text>
           {selectedStatus === 'Today' && (
-            <TouchableOpacity
-              onLongPress={drag}
-              delayLongPress={120}
-              style={styles.dragHandle}
-            >
+            <TouchableOpacity onLongPress={drag} delayLongPress={120} style={styles.dragHandle}>
               <Text style={styles.dragGlyph}>≡</Text>
             </TouchableOpacity>
           )}
         </View>
 
         <Text style={styles.cardText}>Customer: {item.customer || 'N/A'}</Text>
-        <Text style={styles.cardText}>
-          Site Location: {siteLocationName || '—'}
-        </Text>
+        <Text style={styles.cardText}>Site Location: {siteLocationName || '—'}</Text>
 
         {hasAddress ? (
-          <TouchableOpacity
-            onPress={() => openInGoogleMaps(siteAddress || siteLocationName)}
-          >
+          <TouchableOpacity onPress={() => openInGoogleMaps(siteAddress || siteLocationName)}>
             <Text style={styles.linkText}>Site Address: {siteAddress}</Text>
           </TouchableOpacity>
         ) : (
           <Text style={styles.cardText}>Site Address: N/A</Text>
         )}
 
-        <Text style={styles.cardText}>
-          Problem: {item.problemDescription || 'N/A'}
-        </Text>
+        <Text style={styles.cardText}>Problem: {item.problemDescription || 'N/A'}</Text>
+
         {!!latest && (
           <Text numberOfLines={2} style={styles.noteLine}>
             Latest Note: {latest}
           </Text>
         )}
+
         <Text style={styles.cardText}>
           Scheduled:{' '}
-          {item.scheduledDate
-            ? moment(item.scheduledDate).format('YYYY-MM-DD HH:mm')
+          {getScheduledRaw(item)
+            ? moment.parseZone(getScheduledRaw(item)).local().format('YYYY-MM-DD HH:mm')
             : 'Not Scheduled'}
         </Text>
+
         <Text style={styles.cardText}>Status: {item.status}</Text>
 
         <View style={styles.actionsRow}>
           <TouchableOpacity
             style={styles.statusBtn}
-            onPress={() =>
-              setStatusModal({ id: item.id, value: item.status || STATUSES[0] })
-            }
+            onPress={() => setStatusModal({ id: item.id, value: item.status || STATUSES[0] })}
           >
             <Text style={styles.statusBtnText}>Status</Text>
           </TouchableOpacity>
@@ -924,6 +857,14 @@ export default function WorkOrdersScreen() {
       </View>
     );
   };
+
+  const TodayEmpty = () => (
+    <View style={styles.center}>
+      <Text style={styles.noData}>
+        {me ? 'No work orders scheduled for today.' : 'Loading your work orders…'}
+      </Text>
+    </View>
+  );
 
   const ListComponent =
     selectedStatus === 'Today' ? (
@@ -940,10 +881,9 @@ export default function WorkOrdersScreen() {
             styles.list,
             { paddingBottom: insets.bottom + 160 },
           ]}
-          refreshControl={
-            <RefreshControl refreshing={refreshing} onRefresh={onRefresh} />
-          }
+          refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} />}
           ListFooterComponent={<View style={{ height: insets.bottom + 40 }} />}
+          ListEmptyComponent={!loadingFirst ? <TodayEmpty /> : null}
         />
       </>
     ) : (
@@ -952,9 +892,7 @@ export default function WorkOrdersScreen() {
         keyExtractor={(it) => String(it.id)}
         renderItem={({ item }) => <Card item={item} />}
         contentContainerStyle={styles.list}
-        refreshControl={
-          <RefreshControl refreshing={refreshing} onRefresh={onRefresh} />
-        }
+        refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} />}
         ListFooterComponent={<View style={styles.bottomSpacer} />}
         ListEmptyComponent={
           !loadingFirst ? (
@@ -972,10 +910,7 @@ export default function WorkOrdersScreen() {
         <Text style={styles.header}>Work Orders</Text>
         <View style={{ flexDirection: 'row', gap: 8 }}>
           {me?.username === 'Jeff' && (
-            <TouchableOpacity
-              onPress={() => router.push('/screens/AddWorkOrder')}
-              style={styles.addBtn}
-            >
+            <TouchableOpacity onPress={() => router.push('/screens/AddWorkOrder')} style={styles.addBtn}>
               <Text style={styles.addBtnText}>+ Add Work Order</Text>
             </TouchableOpacity>
           )}
@@ -984,9 +919,7 @@ export default function WorkOrdersScreen() {
 
       <View style={styles.filterBar}>{renderChips()}</View>
 
-      {/* Web-parity bulk "Mark Parts In" button shown only on Waiting on Parts */}
       <HeaderActions />
-
       {ListComponent}
 
       {/* ROUTE RESULT MODAL */}
@@ -996,19 +929,12 @@ export default function WorkOrdersScreen() {
         animationType="fade"
         onRequestClose={() => setRouteModalOpen(false)}
       >
-        <Pressable
-          style={styles.modalOverlay}
-          onPress={() => setRouteModalOpen(false)}
-        >
+        <Pressable style={styles.modalOverlay} onPress={() => setRouteModalOpen(false)}>
           <Pressable style={styles.routeModalCard} onPress={() => {}}>
             <Text style={styles.modalTitle}>Today’s Best Route</Text>
 
-            <Text style={styles.routeMeta}>
-              Start: {SHOP_ADDRESS}
-            </Text>
-            <Text style={styles.routeMeta}>
-              End: {SHOP_ADDRESS}
-            </Text>
+            <Text style={styles.routeMeta}>Start: {SHOP_ADDRESS}</Text>
+            <Text style={styles.routeMeta}>End: {SHOP_ADDRESS}</Text>
 
             {!!routeResult && (
               <Text style={[styles.routeMeta, { marginTop: 6, fontWeight: '700' }]}>
@@ -1028,9 +954,7 @@ export default function WorkOrdersScreen() {
                     <Text style={styles.routeStopIdxText}>{idx + 1}</Text>
                   </View>
                   <View style={{ flex: 1 }}>
-                    <Text style={styles.routeStopTitle}>
-                      {s.label || `Stop ${idx + 1}`}
-                    </Text>
+                    <Text style={styles.routeStopTitle}>{s.label || `Stop ${idx + 1}`}</Text>
                     <Text style={styles.routeStopAddr} numberOfLines={2}>
                       {s.address || '—'}
                     </Text>
@@ -1044,10 +968,7 @@ export default function WorkOrdersScreen() {
                     )}
                   </View>
 
-                  <TouchableOpacity
-                    onPress={() => openInGoogleMaps(s.address)}
-                    style={styles.routeMiniBtn}
-                  >
+                  <TouchableOpacity onPress={() => openInGoogleMaps(s.address)} style={styles.routeMiniBtn}>
                     <Text style={styles.routeMiniBtnText}>Map</Text>
                   </TouchableOpacity>
                 </View>
@@ -1055,10 +976,7 @@ export default function WorkOrdersScreen() {
             </ScrollView>
 
             <View style={styles.modalButtonsRow}>
-              <TouchableOpacity
-                style={styles.modalBtnCancel}
-                onPress={() => setRouteModalOpen(false)}
-              >
+              <TouchableOpacity style={styles.modalBtnCancel} onPress={() => setRouteModalOpen(false)}>
                 <Text style={styles.modalBtnText}>Close</Text>
               </TouchableOpacity>
 
@@ -1116,16 +1034,10 @@ export default function WorkOrdersScreen() {
               </TouchableOpacity>
             ))}
             <View style={styles.modalButtonsRow}>
-              <TouchableOpacity
-                style={styles.modalBtnCancel}
-                onPress={closeStatusModal}
-              >
+              <TouchableOpacity style={styles.modalBtnCancel} onPress={closeStatusModal}>
                 <Text style={styles.modalBtnText}>Cancel</Text>
               </TouchableOpacity>
-              <TouchableOpacity
-                style={styles.modalBtnApply}
-                onPress={applyStatusModal}
-              >
+              <TouchableOpacity style={styles.modalBtnApply} onPress={applyStatusModal}>
                 <Text style={styles.modalBtnText}>Apply</Text>
               </TouchableOpacity>
             </View>
@@ -1144,7 +1056,6 @@ export default function WorkOrdersScreen() {
           <Pressable style={styles.partsModalCard} onPress={() => {}}>
             <Text style={styles.modalTitle}>Mark Parts as Received</Text>
 
-            {/* Search + Select all/none */}
             <View style={styles.bulkTopRow}>
               <TextInput
                 style={styles.searchInput}
@@ -1160,7 +1071,6 @@ export default function WorkOrdersScreen() {
               </TouchableOpacity>
             </View>
 
-            {/* List */}
             <FlatList
               data={filteredWaitingForModal}
               keyExtractor={(it) => String(it.id)}
@@ -1176,28 +1086,15 @@ export default function WorkOrdersScreen() {
                   norm(item.siteLocation) ||
                   '';
                 return (
-                  <TouchableOpacity
-                    onPress={() => toggleBulkSelect(item.id)}
-                    style={styles.partsRow}
-                  >
-                    <View
-                      style={[
-                        styles.checkbox,
-                        checked && styles.checkboxChecked,
-                      ]}
-                    >
-                      {checked ? (
-                        <Text style={styles.checkboxGlyph}>✓</Text>
-                      ) : null}
+                  <TouchableOpacity onPress={() => toggleBulkSelect(item.id)} style={styles.partsRow}>
+                    <View style={[styles.checkbox, checked && styles.checkboxChecked]}>
+                      {checked ? <Text style={styles.checkboxGlyph}>✓</Text> : null}
                     </View>
                     <View style={{ flex: 1 }}>
                       <Text style={styles.partsRowTitle}>
-                        WO: {item.workOrderNumber || '—'}{' '}
-                        {item.poNumber ? ` • PO: ${item.poNumber}` : ''}
+                        WO: {item.workOrderNumber || '—'} {item.poNumber ? ` • PO: ${item.poNumber}` : ''}
                       </Text>
-                      <Text style={styles.partsRowSub}>
-                        {item.customer || '—'}
-                      </Text>
+                      <Text style={styles.partsRowSub}>{item.customer || '—'}</Text>
                       {!!site && (
                         <Text style={styles.partsRowSub} numberOfLines={1}>
                           {site}
@@ -1216,10 +1113,7 @@ export default function WorkOrdersScreen() {
               }
             />
 
-            {/* Optional note */}
-            <Text style={[styles.inputLabel, { marginTop: 10 }]}>
-              Optional note
-            </Text>
+            <Text style={[styles.inputLabel, { marginTop: 10 }]}>Optional note</Text>
             <TextInput
               value={bulkNote}
               onChangeText={setBulkNote}
@@ -1228,7 +1122,6 @@ export default function WorkOrdersScreen() {
               multiline
             />
 
-            {/* Action buttons */}
             <View style={styles.modalButtonsRow}>
               <TouchableOpacity
                 style={[styles.modalBtnCancel, bulkWorking && { opacity: 0.7 }]}
@@ -1246,9 +1139,7 @@ export default function WorkOrdersScreen() {
                 disabled={!bulkSelected.size || bulkWorking}
               >
                 <Text style={styles.modalBtnText}>
-                  {bulkWorking
-                    ? 'Updating…'
-                    : `Mark Parts In (${bulkSelected.size})`}
+                  {bulkWorking ? 'Updating…' : `Mark Parts In (${bulkSelected.size})`}
                 </Text>
               </TouchableOpacity>
             </View>
@@ -1278,7 +1169,6 @@ const styles = StyleSheet.create({
   },
   addBtnText: { color: '#fff', fontWeight: '700' },
 
-  /* chip/filter bar */
   filterBar: {
     paddingTop: 6,
     paddingBottom: 6,
@@ -1324,7 +1214,6 @@ const styles = StyleSheet.create({
   badgeText: { color: '#17a2b8', fontSize: 12, fontWeight: '700' },
   badgeTextActive: { color: '#fff' },
 
-  // waiting tab header action
   partsHeaderRow: {
     paddingTop: 8,
     paddingBottom: 4,
@@ -1338,7 +1227,6 @@ const styles = StyleSheet.create({
   },
   partsHeaderBtnText: { color: '#fff', fontWeight: '700' },
 
-  // ✅ Today route action row
   todayHeaderRow: {
     paddingTop: 10,
     paddingBottom: 6,
@@ -1351,9 +1239,7 @@ const styles = StyleSheet.create({
     borderRadius: 10,
     alignItems: 'center',
   },
-  routeBtnDisabled: {
-    backgroundColor: '#64748b',
-  },
+  routeBtnDisabled: { backgroundColor: '#64748b' },
   routeBtnText: { color: '#fff', fontWeight: '800', fontSize: 14 },
   routeHint: {
     color: '#475569',
@@ -1361,10 +1247,7 @@ const styles = StyleSheet.create({
     textAlign: 'center',
   },
 
-  // List padding (base)
   list: { paddingTop: 8, paddingBottom: 16 },
-
-  // Non-Today footer spacer (Today uses dynamic footer)
   bottomSpacer: { height: 96 },
 
   card: {
@@ -1426,7 +1309,6 @@ const styles = StyleSheet.create({
     marginVertical: 6,
   },
 
-  // Shared modal styles
   modalOverlay: {
     flex: 1,
     backgroundColor: 'rgba(0,0,0,0.35)',
@@ -1453,7 +1335,6 @@ const styles = StyleSheet.create({
     borderColor: '#E2E8F0',
   },
 
-  // ✅ Route modal
   routeModalCard: {
     width: '100%',
     maxWidth: 680,
@@ -1463,11 +1344,7 @@ const styles = StyleSheet.create({
     borderWidth: StyleSheet.hairlineWidth,
     borderColor: '#E2E8F0',
   },
-  routeMeta: {
-    color: '#334155',
-    fontSize: 12,
-    textAlign: 'center',
-  },
+  routeMeta: { color: '#334155', fontSize: 12, textAlign: 'center' },
   routeStopRow: {
     flexDirection: 'row',
     gap: 10,
@@ -1497,12 +1374,7 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
   },
   routeMiniBtnText: { fontWeight: '800', color: '#0f172a' },
-  routeFootnote: {
-    marginTop: 10,
-    color: '#475569',
-    fontSize: 12,
-    textAlign: 'center',
-  },
+  routeFootnote: { marginTop: 10, color: '#475569', fontSize: 12, textAlign: 'center' },
 
   modalTitle: {
     fontSize: 18,
@@ -1511,12 +1383,7 @@ const styles = StyleSheet.create({
     textAlign: 'center',
     marginBottom: 8,
   },
-  inputLabel: {
-    fontSize: 12,
-    color: '#475569',
-    marginBottom: 4,
-    fontWeight: '600',
-  },
+  inputLabel: { fontSize: 12, color: '#475569', marginBottom: 4, fontWeight: '600' },
   textInput: {
     minHeight: 60,
     borderWidth: 1,
@@ -1534,10 +1401,7 @@ const styles = StyleSheet.create({
     marginBottom: 8,
     backgroundColor: '#FFFFFF',
   },
-  statusOptionActive: {
-    backgroundColor: '#17a2b8',
-    borderColor: '#17a2b8',
-  },
+  statusOptionActive: { backgroundColor: '#17a2b8', borderColor: '#17a2b8' },
   statusOptionText: { color: '#0F172A', fontWeight: '600' },
   statusOptionTextActive: { color: '#FFFFFF', fontWeight: '700' },
   modalButtonsRow: {
@@ -1562,13 +1426,7 @@ const styles = StyleSheet.create({
   },
   modalBtnText: { color: '#fff', fontWeight: '700' },
 
-  // bulk modal specifics
-  bulkTopRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 8,
-    marginBottom: 10,
-  },
+  bulkTopRow: { flexDirection: 'row', alignItems: 'center', gap: 8, marginBottom: 10 },
   searchInput: {
     flex: 1,
     borderWidth: 1,
@@ -1586,16 +1444,8 @@ const styles = StyleSheet.create({
   },
   bulkTopBtnText: { color: '#0f172a', fontWeight: '600' },
 
-  partsRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    paddingVertical: 10,
-    gap: 10,
-  },
-  rowDivider: {
-    height: StyleSheet.hairlineWidth,
-    backgroundColor: '#e5e7eb',
-  },
+  partsRow: { flexDirection: 'row', alignItems: 'center', paddingVertical: 10, gap: 10 },
+  rowDivider: { height: StyleSheet.hairlineWidth, backgroundColor: '#e5e7eb' },
   checkbox: {
     width: 20,
     height: 20,
@@ -1605,10 +1455,7 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
   },
-  checkboxChecked: {
-    backgroundColor: '#22c55e',
-    borderColor: '#22c55e',
-  },
+  checkboxChecked: { backgroundColor: '#22c55e', borderColor: '#22c55e' },
   checkboxGlyph: { color: '#fff', fontWeight: '900', fontSize: 13 },
   partsRowTitle: { fontWeight: '700', color: '#111827' },
   partsRowSub: { color: '#475569', fontSize: 12 },
