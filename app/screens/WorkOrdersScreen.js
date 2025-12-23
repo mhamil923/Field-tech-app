@@ -41,23 +41,11 @@ const PARTS_NEXT = 'Needs to be Scheduled';
 // ✅ Shop address (start + end)
 const SHOP_ADDRESS = '1513 Industrial Dr, Itasca, IL 60143';
 
-/* ---------------- auth header (safe no-op if axios already injects) ---------------- */
-const authHeaders = () => {
-  try {
-    const token =
-      typeof localStorage !== 'undefined'
-        ? localStorage.getItem('jwt')
-        : null;
-    return token ? { Authorization: `Bearer ${token}` } : {};
-  } catch {
-    return {};
-  }
-};
-
 const norm = (v) => (v ?? '').toString().trim();
 const statusKey = (s) =>
   norm(s).toLowerCase().replace(/[_-]+/g, ' ').replace(/\s+/g, ' ').trim();
 const normStatus = statusKey;
+
 const CANON = new Map(STATUSES.map((label) => [statusKey(label), label]));
 
 const STATUS_SYNONYMS = new Map([
@@ -133,19 +121,17 @@ const isAssignedToMe = (order, me) => {
     .trim()
     .toLowerCase();
 
-  // Match IDs if we have them
   if (myId != null) {
     if (assignedId === myId) return true;
     if (assignedId != null && String(assignedId) === String(myId)) return true;
   }
 
-  // Fallback to matching names
   if (myName && assignedName && myName === assignedName) return true;
 
   return false;
 };
 
-// ----- Scheduled date normalization (fixes "Today shows nothing" when backend field differs) -----
+// ----- Scheduled date normalization -----
 const getScheduledRaw = (o) =>
   o?.scheduledDate ??
   o?.scheduled_date ??
@@ -161,7 +147,6 @@ const isScheduledToday = (o) => {
   const raw = getScheduledRaw(o);
   if (!raw) return false;
 
-  // parseZone keeps offsets if present; local() makes "today" match device timezone
   const m = moment.parseZone(raw);
   if (!m.isValid()) return false;
 
@@ -216,7 +201,10 @@ const buildGoogleMapsDirectionsUrl = (origin, destination, waypointAddrs) => {
 export default function WorkOrdersScreen() {
   const router = useRouter();
   const insets = useSafeAreaInsets();
+
+  const [token, setToken] = useState(null);
   const [me, setMe] = useState(null);
+
   const [workOrders, setWorkOrders] = useState([]);
   const [selectedStatus, setSelectedStatus] = useState('Today');
   const [refreshing, setRefreshing] = useState(false);
@@ -225,7 +213,7 @@ export default function WorkOrdersScreen() {
   // single-status change modal
   const [statusModal, setStatusModal] = useState({ id: null, value: null });
 
-  // ----- BULK "Parts In" (web parity) -----
+  // ----- BULK "Parts In" -----
   const [bulkVisible, setBulkVisible] = useState(false);
   const [bulkSearch, setBulkSearch] = useState('');
   const [bulkSelected, setBulkSelected] = useState(() => new Set());
@@ -240,6 +228,30 @@ export default function WorkOrdersScreen() {
   const [routeWorking, setRouteWorking] = useState(false);
   const [routeModalOpen, setRouteModalOpen] = useState(false);
   const [routeResult, setRouteResult] = useState(null);
+
+  // ✅ RN-safe auth header
+  const authHeaders = useMemo(() => {
+    return token ? { Authorization: `Bearer ${token}` } : {};
+  }, [token]);
+
+  // Load token from AsyncStorage (supports a few possible keys)
+  useEffect(() => {
+    (async () => {
+      try {
+        const candidates = ['jwt', 'token', 'authToken'];
+        for (const k of candidates) {
+          const v = await AsyncStorage.getItem(k);
+          if (v) {
+            setToken(v);
+            return;
+          }
+        }
+        setToken(null);
+      } catch {
+        setToken(null);
+      }
+    })();
+  }, []);
 
   const loadTodayOrder = useCallback(async () => {
     try {
@@ -258,32 +270,49 @@ export default function WorkOrdersScreen() {
     [todayKey]
   );
 
-  // current user
+  // Load current user (requires token)
   useEffect(() => {
+    if (!token) {
+      setMe(null);
+      return;
+    }
     (async () => {
       try {
-        const r = await api.get('/auth/me', { headers: authHeaders() });
+        const r = await api.get('/auth/me', { headers: authHeaders });
         setMe(r.data || null);
-      } catch {}
+      } catch (e) {
+        setMe(null);
+      }
     })();
-  }, []);
+  }, [token, authHeaders]);
 
   const fetchWorkOrders = useCallback(async () => {
+    if (!token) {
+      setWorkOrders([]);
+      setLoadingFirst(false);
+      setRefreshing(false);
+      return;
+    }
+
     try {
-      const res = await api.get('/work-orders', { headers: authHeaders() });
+      const res = await api.get('/work-orders', { headers: authHeaders });
       const canon = (res.data || []).map((o) => ({
         ...o,
         status: toCanonicalStatus(o.status),
       }));
       setWorkOrders(canon);
     } catch (err) {
-      console.error('Error fetching work orders:', err);
-      Alert.alert('Error', 'Failed to fetch work orders.');
+      console.error('Error fetching work orders:', err?.response?.data || err?.message || err);
+      Alert.alert(
+        'Error',
+        err?.response?.data?.error || 'Failed to fetch work orders.'
+      );
+      setWorkOrders([]);
     } finally {
       setLoadingFirst(false);
       setRefreshing(false);
     }
-  }, []);
+  }, [token, authHeaders]);
 
   useEffect(() => {
     fetchWorkOrders();
@@ -301,7 +330,7 @@ export default function WorkOrdersScreen() {
   }, [loadTodayOrder, workOrders.length]);
 
   // ---------- COUNTS ----------
-  // ✅ Today count is ALWAYS: (assigned to me) + (scheduled today)
+  // ✅ Today count = (assigned to me) AND (scheduled today)
   const counts = useMemo(() => {
     const byStatus = Object.fromEntries(STATUSES.map((s) => [s, 0]));
     for (const o of workOrders) {
@@ -309,11 +338,9 @@ export default function WorkOrdersScreen() {
       if (byStatus[label] !== undefined) byStatus[label] += 1;
     }
 
-    // If we don't know who "me" is yet, we cannot compute "assigned-to-me" safely.
     const today =
       me
-        ? workOrders.filter((o) => isAssignedToMe(o, me) && isScheduledToday(o))
-            .length
+        ? workOrders.filter((o) => isAssignedToMe(o, me) && isScheduledToday(o)).length
         : 0;
 
     return { byStatus, today };
@@ -332,14 +359,14 @@ export default function WorkOrdersScreen() {
   };
 
   // ---------- FILTERED ORDERS ----------
-  // ✅ Today tab: ALWAYS only my work orders scheduled today.
+  // ✅ Today tab: ONLY my work orders scheduled today.
   // Other tabs: status-based, global.
   const filteredOrders = useMemo(() => {
     const base = workOrders;
 
     if (selectedStatus === 'Today') {
-      if (!me) return []; // don't show everyone's work while user is still loading
-      return base.filter((o) => isAssignedToMe(o, me));
+      if (!me) return [];
+      return base.filter((o) => isAssignedToMe(o, me) && isScheduledToday(o));
     }
 
     return base.filter(
@@ -347,16 +374,10 @@ export default function WorkOrdersScreen() {
     );
   }, [workOrders, selectedStatus, me]);
 
-  // Today tab applies "scheduled today" after assignment filter (so it stays “my jobs today”)
-  const filteredToday = useMemo(() => {
-    if (selectedStatus !== 'Today') return [];
-    return filteredOrders.filter((o) => isScheduledToday(o));
-  }, [filteredOrders, selectedStatus]);
-
   const orderedToday = useMemo(() => {
     if (selectedStatus !== 'Today') return filteredOrders;
 
-    const map = new Map(filteredToday.map((o) => [String(o.id), o]));
+    const map = new Map(filteredOrders.map((o) => [String(o.id), o]));
     const ordered = [];
     for (const id of todayOrderIds) {
       if (map.has(id)) {
@@ -365,14 +386,14 @@ export default function WorkOrdersScreen() {
       }
     }
     return [...ordered, ...Array.from(map.values())];
-  }, [filteredOrders, filteredToday, selectedStatus, todayOrderIds]);
+  }, [filteredOrders, selectedStatus, todayOrderIds]);
 
   const onRefresh = () => {
     setRefreshing(true);
     fetchWorkOrders();
   };
 
-  /* ---------------- Status update: primary /edit (FormData), fallback JSON ---------------- */
+  /* ---------------- Status update: primary /edit (FormData), fallback /status ---------------- */
   const putStatus = async (id, newStatus) => {
     try {
       const form = new FormData();
@@ -380,18 +401,19 @@ export default function WorkOrdersScreen() {
       await api.put(`/work-orders/${id}/edit`, form, {
         headers: {
           'Content-Type': 'multipart/form-data',
-          ...authHeaders(),
+          ...authHeaders,
         },
       });
       return;
     } catch {
+      // ✅ your server has: PUT /work-orders/:id/status
       await api.put(
-        `/work-orders/${id}`,
+        `/work-orders/${id}/status`,
         { status: newStatus },
         {
           headers: {
             'Content-Type': 'application/json',
-            ...authHeaders(),
+            ...authHeaders,
           },
         }
       );
@@ -418,7 +440,7 @@ export default function WorkOrdersScreen() {
     }
   };
 
-  /* ---------------- Notes: primary {notes, append:true}, fallback {text, append:true} ------ */
+  /* ---------------- Notes: {notes, append:true} fallback {text, append:true} ------ */
   const addNote = async (id, text) => {
     const trimmed = (text || '').trim();
     if (!trimmed) return;
@@ -430,7 +452,7 @@ export default function WorkOrdersScreen() {
         {
           headers: {
             'Content-Type': 'application/json',
-            ...authHeaders(),
+            ...authHeaders,
           },
         }
       );
@@ -442,7 +464,7 @@ export default function WorkOrdersScreen() {
           {
             headers: {
               'Content-Type': 'application/json',
-              ...authHeaders(),
+              ...authHeaders,
             },
           }
         );
@@ -597,7 +619,7 @@ export default function WorkOrdersScreen() {
       };
 
       const res = await api.post('/routes/best', payload, {
-        headers: { 'Content-Type': 'application/json', ...authHeaders() },
+        headers: { 'Content-Type': 'application/json', ...authHeaders },
       });
 
       const data = res?.data || {};
@@ -608,7 +630,9 @@ export default function WorkOrdersScreen() {
 
       await saveTodayOrder(orderedIds.map((x) => String(x)));
 
-      let orderedStops = Array.isArray(data.orderedStops) ? data.orderedStops : null;
+      let orderedStops = Array.isArray(data.orderedStops)
+        ? data.orderedStops
+        : null;
       if (!orderedStops) {
         const byId = new Map(stops.map((s) => [String(s.id), s]));
         orderedStops = orderedIds
@@ -861,7 +885,7 @@ export default function WorkOrdersScreen() {
   const TodayEmpty = () => (
     <View style={styles.center}>
       <Text style={styles.noData}>
-        {me ? 'No work orders scheduled for today.' : 'Loading your work orders…'}
+        {me ? 'No work orders scheduled for today.' : (token ? 'Loading your work orders…' : 'Not logged in.')}
       </Text>
     </View>
   );
