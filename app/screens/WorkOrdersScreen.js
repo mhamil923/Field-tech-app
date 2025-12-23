@@ -143,14 +143,38 @@ const getScheduledRaw = (o) =>
   o?.schedule_date ??
   null;
 
+/**
+ * Robust parse:
+ * - If backend gives "YYYY-MM-DD HH:mm:ss" (MySQL), treat as LOCAL time.
+ * - If backend gives ISO with Z/offset, parseZone then local().
+ */
+const parseScheduledMoment = (raw) => {
+  if (!raw) return null;
+  const s = String(raw).trim();
+  if (!s) return null;
+
+  const hasOffset =
+    /[zZ]$/.test(s) || /([+-]\d{2}:?\d{2})$/.test(s);
+
+  if (hasOffset) {
+    const mz = moment.parseZone(s);
+    return mz.isValid() ? mz.local() : null;
+  }
+
+  // MySQL DATETIME common formats (no timezone)
+  const mLocal = moment(s, ['YYYY-MM-DD HH:mm:ss', 'YYYY-MM-DD HH:mm', 'YYYY-MM-DD'], true);
+  if (mLocal.isValid()) return mLocal; // already local
+
+  // fallback
+  const mf = moment(s);
+  return mf.isValid() ? mf.local() : null;
+};
+
 const isScheduledToday = (o) => {
   const raw = getScheduledRaw(o);
-  if (!raw) return false;
-
-  const m = moment.parseZone(raw);
-  if (!m.isValid()) return false;
-
-  return m.local().isSame(moment(), 'day');
+  const m = parseScheduledMoment(raw);
+  if (!m) return false;
+  return m.isSame(moment(), 'day');
 };
 
 // Build best-available address for routing from a WO
@@ -202,8 +226,8 @@ export default function WorkOrdersScreen() {
   const router = useRouter();
   const insets = useSafeAreaInsets();
 
-  const [token, setToken] = useState(null);
   const [me, setMe] = useState(null);
+  const [meLoading, setMeLoading] = useState(true);
 
   const [workOrders, setWorkOrders] = useState([]);
   const [selectedStatus, setSelectedStatus] = useState('Today');
@@ -229,30 +253,6 @@ export default function WorkOrdersScreen() {
   const [routeModalOpen, setRouteModalOpen] = useState(false);
   const [routeResult, setRouteResult] = useState(null);
 
-  // ✅ RN-safe auth header
-  const authHeaders = useMemo(() => {
-    return token ? { Authorization: `Bearer ${token}` } : {};
-  }, [token]);
-
-  // Load token from AsyncStorage (supports a few possible keys)
-  useEffect(() => {
-    (async () => {
-      try {
-        const candidates = ['jwt', 'token', 'authToken'];
-        for (const k of candidates) {
-          const v = await AsyncStorage.getItem(k);
-          if (v) {
-            setToken(v);
-            return;
-          }
-        }
-        setToken(null);
-      } catch {
-        setToken(null);
-      }
-    })();
-  }, []);
-
   const loadTodayOrder = useCallback(async () => {
     try {
       const raw = await AsyncStorage.getItem(todayKey);
@@ -270,49 +270,44 @@ export default function WorkOrdersScreen() {
     [todayKey]
   );
 
-  // Load current user (requires token)
+  // ✅ FIX: set Authorization header using AsyncStorage (React Native)
   useEffect(() => {
-    if (!token) {
-      setMe(null);
-      return;
-    }
     (async () => {
       try {
-        const r = await api.get('/auth/me', { headers: authHeaders });
+        setMeLoading(true);
+        const token = await AsyncStorage.getItem('jwt');
+        if (token) {
+          api.defaults.headers.common.Authorization = `Bearer ${token}`;
+        } else {
+          delete api.defaults.headers.common.Authorization;
+        }
+
+        const r = await api.get('/auth/me');
         setMe(r.data || null);
       } catch (e) {
         setMe(null);
+      } finally {
+        setMeLoading(false);
       }
     })();
-  }, [token, authHeaders]);
+  }, []);
 
   const fetchWorkOrders = useCallback(async () => {
-    if (!token) {
-      setWorkOrders([]);
-      setLoadingFirst(false);
-      setRefreshing(false);
-      return;
-    }
-
     try {
-      const res = await api.get('/work-orders', { headers: authHeaders });
+      const res = await api.get('/work-orders');
       const canon = (res.data || []).map((o) => ({
         ...o,
         status: toCanonicalStatus(o.status),
       }));
       setWorkOrders(canon);
     } catch (err) {
-      console.error('Error fetching work orders:', err?.response?.data || err?.message || err);
-      Alert.alert(
-        'Error',
-        err?.response?.data?.error || 'Failed to fetch work orders.'
-      );
-      setWorkOrders([]);
+      console.error('Error fetching work orders:', err);
+      Alert.alert('Error', 'Failed to fetch work orders.');
     } finally {
       setLoadingFirst(false);
       setRefreshing(false);
     }
-  }, [token, authHeaders]);
+  }, []);
 
   useEffect(() => {
     fetchWorkOrders();
@@ -330,7 +325,6 @@ export default function WorkOrdersScreen() {
   }, [loadTodayOrder, workOrders.length]);
 
   // ---------- COUNTS ----------
-  // ✅ Today count = (assigned to me) AND (scheduled today)
   const counts = useMemo(() => {
     const byStatus = Object.fromEntries(STATUSES.map((s) => [s, 0]));
     for (const o of workOrders) {
@@ -393,31 +387,14 @@ export default function WorkOrdersScreen() {
     fetchWorkOrders();
   };
 
-  /* ---------------- Status update: primary /edit (FormData), fallback /status ---------------- */
+  /* ---------------- Status update: correct endpoint for your server.js ---------------- */
   const putStatus = async (id, newStatus) => {
-    try {
-      const form = new FormData();
-      form.append('status', newStatus);
-      await api.put(`/work-orders/${id}/edit`, form, {
-        headers: {
-          'Content-Type': 'multipart/form-data',
-          ...authHeaders,
-        },
-      });
-      return;
-    } catch {
-      // ✅ your server has: PUT /work-orders/:id/status
-      await api.put(
-        `/work-orders/${id}/status`,
-        { status: newStatus },
-        {
-          headers: {
-            'Content-Type': 'application/json',
-            ...authHeaders,
-          },
-        }
-      );
-    }
+    // ✅ your server.js has: PUT /work-orders/:id/status
+    await api.put(
+      `/work-orders/${id}/status`,
+      { status: newStatus },
+      { headers: { 'Content-Type': 'application/json' } }
+    );
   };
 
   const handleUpdateStatus = async (id, newStatus) => {
@@ -440,7 +417,7 @@ export default function WorkOrdersScreen() {
     }
   };
 
-  /* ---------------- Notes: {notes, append:true} fallback {text, append:true} ------ */
+  /* ---------------- Notes: /work-orders/:id/notes ---------------- */
   const addNote = async (id, text) => {
     const trimmed = (text || '').trim();
     if (!trimmed) return;
@@ -449,24 +426,14 @@ export default function WorkOrdersScreen() {
       await api.put(
         `/work-orders/${id}/notes`,
         { notes: trimmed, append: true },
-        {
-          headers: {
-            'Content-Type': 'application/json',
-            ...authHeaders,
-          },
-        }
+        { headers: { 'Content-Type': 'application/json' } }
       );
     } catch (e1) {
       try {
         await api.put(
           `/work-orders/${id}/notes`,
           { text: trimmed, append: true },
-          {
-            headers: {
-              'Content-Type': 'application/json',
-              ...authHeaders,
-            },
-          }
+          { headers: { 'Content-Type': 'application/json' } }
         );
       } catch (e2) {
         console.error(
@@ -619,7 +586,7 @@ export default function WorkOrdersScreen() {
       };
 
       const res = await api.post('/routes/best', payload, {
-        headers: { 'Content-Type': 'application/json', ...authHeaders },
+        headers: { 'Content-Type': 'application/json' },
       });
 
       const data = res?.data || {};
@@ -630,9 +597,7 @@ export default function WorkOrdersScreen() {
 
       await saveTodayOrder(orderedIds.map((x) => String(x)));
 
-      let orderedStops = Array.isArray(data.orderedStops)
-        ? data.orderedStops
-        : null;
+      let orderedStops = Array.isArray(data.orderedStops) ? data.orderedStops : null;
       if (!orderedStops) {
         const byId = new Map(stops.map((s) => [String(s.id), s]));
         orderedStops = orderedIds
@@ -738,7 +703,6 @@ export default function WorkOrdersScreen() {
     );
   };
 
-  // ✅ Chips: everyone gets Today + statuses
   const renderChips = () => {
     return (
       <View style={styles.chipsWrap}>
@@ -857,7 +821,7 @@ export default function WorkOrdersScreen() {
         <Text style={styles.cardText}>
           Scheduled:{' '}
           {getScheduledRaw(item)
-            ? moment.parseZone(getScheduledRaw(item)).local().format('YYYY-MM-DD HH:mm')
+            ? (parseScheduledMoment(getScheduledRaw(item))?.format('YYYY-MM-DD HH:mm') || 'Not Scheduled')
             : 'Not Scheduled'}
         </Text>
 
@@ -885,7 +849,11 @@ export default function WorkOrdersScreen() {
   const TodayEmpty = () => (
     <View style={styles.center}>
       <Text style={styles.noData}>
-        {me ? 'No work orders scheduled for today.' : (token ? 'Loading your work orders…' : 'Not logged in.')}
+        {meLoading
+          ? 'Loading your user…'
+          : me
+          ? 'No work orders assigned to you and scheduled for today.'
+          : 'You are not logged in (missing/expired token).'}
       </Text>
     </View>
   );
@@ -1033,9 +1001,9 @@ export default function WorkOrdersScreen() {
         transparent
         visible={statusModal.id != null}
         animationType="fade"
-        onRequestClose={closeStatusModal}
+        onRequestClose={() => setStatusModal({ id: null, value: null })}
       >
-        <Pressable style={styles.modalOverlay} onPress={closeStatusModal}>
+        <Pressable style={styles.modalOverlay} onPress={() => setStatusModal({ id: null, value: null })}>
           <Pressable style={styles.modalCard}>
             <Text style={styles.modalTitle}>Change Status</Text>
             {STATUSES.map((s) => (
@@ -1058,7 +1026,7 @@ export default function WorkOrdersScreen() {
               </TouchableOpacity>
             ))}
             <View style={styles.modalButtonsRow}>
-              <TouchableOpacity style={styles.modalBtnCancel} onPress={closeStatusModal}>
+              <TouchableOpacity style={styles.modalBtnCancel} onPress={() => setStatusModal({ id: null, value: null })}>
                 <Text style={styles.modalBtnText}>Cancel</Text>
               </TouchableOpacity>
               <TouchableOpacity style={styles.modalBtnApply} onPress={applyStatusModal}>
@@ -1325,7 +1293,7 @@ const styles = StyleSheet.create({
   viewButtonText: { color: '#fff', fontWeight: 'bold' },
 
   center: { alignItems: 'center', marginTop: 24 },
-  noData: { fontStyle: 'italic', color: '#8D99AE' },
+  noData: { fontStyle: 'italic', color: '#8D99AE', textAlign: 'center' },
 
   dragBanner: {
     textAlign: 'center',
