@@ -153,8 +153,7 @@ const parseScheduledMoment = (raw) => {
   const s = String(raw).trim();
   if (!s) return null;
 
-  const hasOffset =
-    /[zZ]$/.test(s) || /([+-]\d{2}:?\d{2})$/.test(s);
+  const hasOffset = /[zZ]$/.test(s) || /([+-]\d{2}:?\d{2})$/.test(s);
 
   if (hasOffset) {
     const mz = moment.parseZone(s);
@@ -162,7 +161,11 @@ const parseScheduledMoment = (raw) => {
   }
 
   // MySQL DATETIME common formats (no timezone)
-  const mLocal = moment(s, ['YYYY-MM-DD HH:mm:ss', 'YYYY-MM-DD HH:mm', 'YYYY-MM-DD'], true);
+  const mLocal = moment(
+    s,
+    ['YYYY-MM-DD HH:mm:ss', 'YYYY-MM-DD HH:mm', 'YYYY-MM-DD'],
+    true
+  );
   if (mLocal.isValid()) return mLocal; // already local
 
   // fallback
@@ -220,6 +223,20 @@ const buildGoogleMapsDirectionsUrl = (origin, destination, waypointAddrs) => {
     '&travelmode=driving',
   ].join('');
   return parts;
+};
+
+// ✅ Detect HTML error pages (the classic "<!DOCTYPE html>..." problem)
+const isHtmlLike = (data) => {
+  if (typeof data !== 'string') return false;
+  const s = data.trim().slice(0, 200).toLowerCase();
+  return s.startsWith('<!doctype html') || s.startsWith('<html') || s.includes('<head');
+};
+
+const isHtmlResponse = (res) => {
+  const ct = (res?.headers?.['content-type'] || res?.headers?.['Content-Type'] || '')
+    .toString()
+    .toLowerCase();
+  return ct.includes('text/html') || ct.includes('text/plain') || isHtmlLike(res?.data);
 };
 
 export default function WorkOrdersScreen() {
@@ -332,10 +349,9 @@ export default function WorkOrdersScreen() {
       if (byStatus[label] !== undefined) byStatus[label] += 1;
     }
 
-    const today =
-      me
-        ? workOrders.filter((o) => isAssignedToMe(o, me) && isScheduledToday(o)).length
-        : 0;
+    const today = me
+      ? workOrders.filter((o) => isAssignedToMe(o, me) && isScheduledToday(o)).length
+      : 0;
 
     return { byStatus, today };
   }, [workOrders, me]);
@@ -363,9 +379,7 @@ export default function WorkOrdersScreen() {
       return base.filter((o) => isAssignedToMe(o, me) && isScheduledToday(o));
     }
 
-    return base.filter(
-      (o) => normStatus(o.status) === normStatus(selectedStatus)
-    );
+    return base.filter((o) => normStatus(o.status) === normStatus(selectedStatus));
   }, [workOrders, selectedStatus, me]);
 
   const orderedToday = useMemo(() => {
@@ -399,9 +413,7 @@ export default function WorkOrdersScreen() {
 
   const handleUpdateStatus = async (id, newStatus) => {
     const prev = workOrders;
-    setWorkOrders(
-      prev.map((o) => (o.id === id ? { ...o, status: newStatus } : o))
-    );
+    setWorkOrders(prev.map((o) => (o.id === id ? { ...o, status: newStatus } : o)));
 
     try {
       await putStatus(id, newStatus);
@@ -409,10 +421,7 @@ export default function WorkOrdersScreen() {
     } catch (err) {
       console.error(err);
       setWorkOrders(prev);
-      const msg =
-        err?.response?.data?.error ||
-        err?.message ||
-        'Failed to update status.';
+      const msg = err?.response?.data?.error || err?.message || 'Failed to update status.';
       Alert.alert('Error', msg);
     }
   };
@@ -446,10 +455,7 @@ export default function WorkOrdersScreen() {
 
   // ----- BULK "Parts In" helpers -----
   const waitingOrders = useMemo(
-    () =>
-      workOrders.filter(
-        (o) => normStatus(o.status) === normStatus(PARTS_WAITING)
-      ),
+    () => workOrders.filter((o) => normStatus(o.status) === normStatus(PARTS_WAITING)),
     [workOrders]
   );
 
@@ -486,8 +492,7 @@ export default function WorkOrdersScreen() {
       return next;
     });
   };
-  const selectAll = () =>
-    setBulkSelected(new Set(filteredWaitingForModal.map((o) => o.id)));
+  const selectAll = () => setBulkSelected(new Set(filteredWaitingForModal.map((o) => o.id)));
   const selectNone = () => setBulkSelected(new Set());
 
   const openBulkModal = () => {
@@ -520,27 +525,22 @@ export default function WorkOrdersScreen() {
             await addNote(id, bulkNote.trim());
           }
         } catch (e) {
-          console.error(
-            'Bulk status error for id',
-            id,
-            e?.response?.data?.error || e?.message
-          );
+          console.error('Bulk status error for id', id, e?.response?.data?.error || e?.message);
         }
       }
       Alert.alert('Success', `Marked parts in for ${ids.length} work order(s).`);
       closeBulkModal();
       fetchWorkOrders();
     } catch (e) {
-      Alert.alert(
-        'Error',
-        e?.response?.data?.error || e?.message || 'Failed to apply updates.'
-      );
+      Alert.alert('Error', e?.response?.data?.error || e?.message || 'Failed to apply updates.');
     } finally {
       setBulkWorking(false);
     }
   };
 
   // ✅ ROUTE: generate + reorder Today list
+  // ✅ FIX: If /routes/best doesn't exist (or baseURL points to a web server),
+  // the server returns an HTML page ("<!DOCTYPE html>..."). We detect that and fallback cleanly.
   const generateBestRoute = async () => {
     if (selectedStatus !== 'Today') {
       Alert.alert('Route', 'Switch to the Today tab to generate a route.');
@@ -576,6 +576,12 @@ export default function WorkOrdersScreen() {
       );
     }
 
+    const fallbackUrl = buildGoogleMapsDirectionsUrl(
+      SHOP_ADDRESS,
+      SHOP_ADDRESS,
+      stops.map((s) => s.address)
+    );
+
     setRouteWorking(true);
     try {
       const payload = {
@@ -586,30 +592,79 @@ export default function WorkOrdersScreen() {
       };
 
       const res = await api.post('/routes/best', payload, {
-        headers: { 'Content-Type': 'application/json' },
+        headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
+        timeout: 20000,
+        // If the server still replies with HTML, axios will keep it as a string.
+        responseType: 'text',
+        transformResponse: [(data) => data],
+        validateStatus: (status) => status >= 200 && status < 500,
       });
 
-      const data = res?.data || {};
-      const orderedIds = Array.isArray(data.orderedIds) ? data.orderedIds : [];
+      // If we got HTML, it means route doesn't exist / wrong baseURL / proxy HTML page.
+      if (isHtmlResponse(res)) {
+        console.warn('Route endpoint returned HTML (likely missing route):', {
+          url: `${api?.defaults?.baseURL || ''}/routes/best`,
+          status: res?.status,
+          contentType: res?.headers?.['content-type'],
+        });
+
+        Alert.alert(
+          'Route (Backend not ready)',
+          'Your app hit /routes/best but the server returned an HTML page (classic <!DOCTYPE html> error). That usually means the route is missing on the backend or the API base URL is pointing at a web server.\n\nOpening Google Maps using your current stop order instead.',
+          [
+            { text: 'Cancel', style: 'cancel' },
+            { text: 'Open Maps', onPress: () => Linking.openURL(fallbackUrl) },
+          ]
+        );
+        return;
+      }
+
+      // Parse JSON safely (since we forced responseType 'text')
+      let data = res?.data;
+      if (typeof data === 'string') {
+        try {
+          data = JSON.parse(data);
+        } catch (e) {
+          // Non-HTML, but still not JSON
+          console.warn('Route endpoint did not return JSON:', data?.slice?.(0, 200));
+          Alert.alert(
+            'Route (Unexpected response)',
+            'The route service responded, but not with JSON. Opening Google Maps with the stops in the current order instead.',
+            [
+              { text: 'Cancel', style: 'cancel' },
+              { text: 'Open Maps', onPress: () => Linking.openURL(fallbackUrl) },
+            ]
+          );
+          return;
+        }
+      }
+
+      const orderedIds = Array.isArray(data?.orderedIds) ? data.orderedIds : [];
       if (!orderedIds.length) {
-        throw new Error('Route service did not return an ordered list.');
+        Alert.alert(
+          'Route (No ordered list)',
+          'The route service responded but did not return an ordered stop list. Opening Google Maps with the stops in the current order instead.',
+          [
+            { text: 'Cancel', style: 'cancel' },
+            { text: 'Open Maps', onPress: () => Linking.openURL(fallbackUrl) },
+          ]
+        );
+        return;
       }
 
       await saveTodayOrder(orderedIds.map((x) => String(x)));
 
-      let orderedStops = Array.isArray(data.orderedStops) ? data.orderedStops : null;
+      let orderedStops = Array.isArray(data?.orderedStops) ? data.orderedStops : null;
       if (!orderedStops) {
         const byId = new Map(stops.map((s) => [String(s.id), s]));
-        orderedStops = orderedIds
-          .map((id) => byId.get(String(id)))
-          .filter(Boolean);
+        orderedStops = orderedIds.map((id) => byId.get(String(id))).filter(Boolean);
       }
 
-      const totalDistanceMiles = metersToMiles(data.totalDistanceMeters);
-      const totalDurationMinutes = secondsToMinutes(data.totalDurationSeconds);
+      const totalDistanceMiles = metersToMiles(data?.totalDistanceMeters);
+      const totalDurationMinutes = secondsToMinutes(data?.totalDurationSeconds);
 
       const mapsUrl =
-        data.googleMapsUrl ||
+        data?.googleMapsUrl ||
         buildGoogleMapsDirectionsUrl(
           SHOP_ADDRESS,
           SHOP_ADDRESS,
@@ -619,8 +674,8 @@ export default function WorkOrdersScreen() {
       setRouteResult({
         orderedIds,
         orderedStops,
-        totalDistanceMeters: data.totalDistanceMeters ?? null,
-        totalDurationSeconds: data.totalDurationSeconds ?? null,
+        totalDistanceMeters: data?.totalDistanceMeters ?? null,
+        totalDurationSeconds: data?.totalDurationSeconds ?? null,
         totalDistanceMiles,
         totalDurationMinutes,
         googleMapsUrl: mapsUrl,
@@ -630,21 +685,12 @@ export default function WorkOrdersScreen() {
     } catch (e) {
       console.error('Route generation failed:', e?.response?.data || e?.message || e);
 
-      const fallbackUrl = buildGoogleMapsDirectionsUrl(
-        SHOP_ADDRESS,
-        SHOP_ADDRESS,
-        stops.map((s) => s.address)
-      );
-
       Alert.alert(
         'Route',
-        'Could not generate the “best route” yet (backend not added or returned an error).\n\nOpening Google Maps with the stops in the current order as a fallback.',
+        'Could not generate the “best route” (backend not added or returned an error).\n\nOpening Google Maps with the stops in the current order as a fallback.',
         [
           { text: 'Cancel', style: 'cancel' },
-          {
-            text: 'Open Maps',
-            onPress: () => Linking.openURL(fallbackUrl),
-          },
+          { text: 'Open Maps', onPress: () => Linking.openURL(fallbackUrl) },
         ]
       );
     } finally {
@@ -710,26 +756,11 @@ export default function WorkOrdersScreen() {
           onPress={() => setSelectedStatus('Today')}
           style={[styles.chip, selectedStatus === 'Today' && styles.chipActive]}
         >
-          <Text
-            style={[
-              styles.chipText,
-              selectedStatus === 'Today' && styles.chipTextActive,
-            ]}
-          >
+          <Text style={[styles.chipText, selectedStatus === 'Today' && styles.chipTextActive]}>
             Today
           </Text>
-          <View
-            style={[
-              styles.badge,
-              selectedStatus === 'Today' && styles.badgeActive,
-            ]}
-          >
-            <Text
-              style={[
-                styles.badgeText,
-                selectedStatus === 'Today' && styles.badgeTextActive,
-              ]}
-            >
+          <View style={[styles.badge, selectedStatus === 'Today' && styles.badgeActive]}>
+            <Text style={[styles.badgeText, selectedStatus === 'Today' && styles.badgeTextActive]}>
               {counts.today}
             </Text>
           </View>
@@ -741,26 +772,11 @@ export default function WorkOrdersScreen() {
             onPress={() => setSelectedStatus(s)}
             style={[styles.chip, selectedStatus === s && styles.chipActive]}
           >
-            <Text
-              style={[
-                styles.chipText,
-                selectedStatus === s && styles.chipTextActive,
-              ]}
-            >
+            <Text style={[styles.chipText, selectedStatus === s && styles.chipTextActive]}>
               {s}
             </Text>
-            <View
-              style={[
-                styles.badge,
-                selectedStatus === s && styles.badgeActive,
-              ]}
-            >
-              <Text
-                style={[
-                  styles.badgeText,
-                  selectedStatus === s && styles.badgeTextActive,
-                ]}
-              >
+            <View style={[styles.badge, selectedStatus === s && styles.badgeActive]}>
+              <Text style={[styles.badgeText, selectedStatus === s && styles.badgeTextActive]}>
                 {counts.byStatus[s]}
               </Text>
             </View>
@@ -774,8 +790,7 @@ export default function WorkOrdersScreen() {
     const rawLoc = norm(item.siteLocation);
     const explicitName = norm(item.siteName) || norm(item.siteLocationName);
     let siteLocationName = explicitName;
-    let siteAddress =
-      norm(item.siteAddress) || norm(item.serviceAddress) || norm(item.address);
+    let siteAddress = norm(item.siteAddress) || norm(item.serviceAddress) || norm(item.address);
 
     if (!siteAddress && rawLoc) {
       siteAddress = rawLoc;
@@ -790,7 +805,8 @@ export default function WorkOrdersScreen() {
       <View style={styles.card}>
         <View style={styles.cardHeaderRow}>
           <Text style={styles.cardTitle}>
-            WO: {item.workOrderNumber || '—'} • PO: {displayPO(item.workOrderNumber, item.poNumber)}
+            WO: {item.workOrderNumber || '—'} • PO:{' '}
+            {displayPO(item.workOrderNumber, item.poNumber)}
           </Text>
           {selectedStatus === 'Today' && (
             <TouchableOpacity onLongPress={drag} delayLongPress={120} style={styles.dragHandle}>
@@ -821,7 +837,8 @@ export default function WorkOrdersScreen() {
         <Text style={styles.cardText}>
           Scheduled:{' '}
           {getScheduledRaw(item)
-            ? (parseScheduledMoment(getScheduledRaw(item))?.format('YYYY-MM-DD HH:mm') || 'Not Scheduled')
+            ? parseScheduledMoment(getScheduledRaw(item))?.format('YYYY-MM-DD HH:mm') ||
+              'Not Scheduled'
             : 'Not Scheduled'}
         </Text>
 
@@ -869,10 +886,7 @@ export default function WorkOrdersScreen() {
           activationDistance={12}
           onDragEnd={({ data }) => saveTodayOrder(data.map((d) => String(d.id)))}
           renderItem={({ item, drag }) => <Card item={item} drag={drag} />}
-          contentContainerStyle={[
-            styles.list,
-            { paddingBottom: insets.bottom + 160 },
-          ]}
+          contentContainerStyle={[styles.list, { paddingBottom: insets.bottom + 160 }]}
           refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} />}
           ListFooterComponent={<View style={{ height: insets.bottom + 40 }} />}
           ListEmptyComponent={!loadingFirst ? <TodayEmpty /> : null}
@@ -932,7 +946,9 @@ export default function WorkOrdersScreen() {
               <Text style={[styles.routeMeta, { marginTop: 6, fontWeight: '700' }]}>
                 Stops: {routeResult.orderedStops?.length || 0}
                 {routeResult.totalDistanceMiles != null || routeResult.totalDurationMinutes != null
-                  ? ` • ${fmtMiles(routeResult.totalDistanceMiles)} • ${fmtMinutes(routeResult.totalDurationMinutes)}`
+                  ? ` • ${fmtMiles(routeResult.totalDistanceMiles)} • ${fmtMinutes(
+                      routeResult.totalDurationMinutes
+                    )}`
                   : ''}
               </Text>
             )}
@@ -1009,10 +1025,7 @@ export default function WorkOrdersScreen() {
             {STATUSES.map((s) => (
               <TouchableOpacity
                 key={s}
-                style={[
-                  styles.statusOption,
-                  statusModal.value === s && styles.statusOptionActive,
-                ]}
+                style={[styles.statusOption, statusModal.value === s && styles.statusOptionActive]}
                 onPress={() => setStatusModal({ ...statusModal, value: s })}
               >
                 <Text
@@ -1026,7 +1039,10 @@ export default function WorkOrdersScreen() {
               </TouchableOpacity>
             ))}
             <View style={styles.modalButtonsRow}>
-              <TouchableOpacity style={styles.modalBtnCancel} onPress={() => setStatusModal({ id: null, value: null })}>
+              <TouchableOpacity
+                style={styles.modalBtnCancel}
+                onPress={() => setStatusModal({ id: null, value: null })}
+              >
                 <Text style={styles.modalBtnText}>Cancel</Text>
               </TouchableOpacity>
               <TouchableOpacity style={styles.modalBtnApply} onPress={applyStatusModal}>
@@ -1038,12 +1054,7 @@ export default function WorkOrdersScreen() {
       </Modal>
 
       {/* BULK Parts In Modal */}
-      <Modal
-        transparent
-        visible={bulkVisible}
-        animationType="fade"
-        onRequestClose={closeBulkModal}
-      >
+      <Modal transparent visible={bulkVisible} animationType="fade" onRequestClose={closeBulkModal}>
         <Pressable style={styles.modalOverlay} onPress={closeBulkModal}>
           <Pressable style={styles.partsModalCard} onPress={() => {}}>
             <Text style={styles.modalTitle}>Mark Parts as Received</Text>
@@ -1084,7 +1095,8 @@ export default function WorkOrdersScreen() {
                     </View>
                     <View style={{ flex: 1 }}>
                       <Text style={styles.partsRowTitle}>
-                        WO: {item.workOrderNumber || '—'} {item.poNumber ? ` • PO: ${item.poNumber}` : ''}
+                        WO: {item.workOrderNumber || '—'}{' '}
+                        {item.poNumber ? ` • PO: ${item.poNumber}` : ''}
                       </Text>
                       <Text style={styles.partsRowSub}>{item.customer || '—'}</Text>
                       {!!site && (
@@ -1098,9 +1110,7 @@ export default function WorkOrdersScreen() {
               }}
               ListEmptyComponent={
                 <View style={{ paddingVertical: 12 }}>
-                  <Text style={{ textAlign: 'center', color: '#64748b' }}>
-                    No matching work orders.
-                  </Text>
+                  <Text style={{ textAlign: 'center', color: '#64748b' }}>No matching work orders.</Text>
                 </View>
               }
             />
@@ -1123,10 +1133,7 @@ export default function WorkOrdersScreen() {
                 <Text style={styles.modalBtnText}>Cancel</Text>
               </TouchableOpacity>
               <TouchableOpacity
-                style={[
-                  styles.modalBtnApply,
-                  !bulkSelected.size && { backgroundColor: '#94a3b8' },
-                ]}
+                style={[styles.modalBtnApply, !bulkSelected.size && { backgroundColor: '#94a3b8' }]}
                 onPress={applyBulkPartsIn}
                 disabled={!bulkSelected.size || bulkWorking}
               >
