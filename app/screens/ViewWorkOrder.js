@@ -727,10 +727,7 @@ export default function ViewWorkOrder() {
       try {
         await uploadCameraPhotoNow(asset.uri);
         await fetchWorkOrder();
-        // Optional: small toast-like confirmation
-        // Alert.alert('Uploaded', 'Photo uploaded.');
       } catch (err) {
-        // If upload fails, ask if they want to keep going or stop
         const msg = err?.response?.data?.error || err?.message || 'Failed to upload photo.';
         await new Promise((resolve) => {
           Alert.alert('Upload Error', msg, [
@@ -773,32 +770,32 @@ export default function ViewWorkOrder() {
     }
   };
 
-const handleDeletePhoto = (idx) => {
-  const keys = (workOrder?.photoPath || '').split(',').map((s) => s.trim()).filter(Boolean);
-  if (idx < 0 || idx >= keys.length) return;
+  const handleDeletePhoto = (idx) => {
+    const keys = (workOrder?.photoPath || '').split(',').map((s) => s.trim()).filter(Boolean);
+    if (idx < 0 || idx >= keys.length) return;
 
-  Alert.alert('Delete Attachment?', 'This will permanently remove it.', [
-    { text: 'Cancel, keep it', style: 'cancel' },
-    {
-      text: 'Delete',
-      style: 'destructive',
-      onPress: async () => {
-        try {
-          await api.delete(`/work-orders/${workOrderId}/attachments`, {
-            // axios supports body on DELETE via `data`
-            data: { key: keys[idx] },
-            headers: { 'Content-Type': 'application/json', ...authHeaders() },
-          });
+    Alert.alert('Delete Attachment?', 'This will permanently remove it.', [
+      { text: 'Cancel, keep it', style: 'cancel' },
+      {
+        text: 'Delete',
+        style: 'destructive',
+        onPress: async () => {
+          try {
+            await api.delete(`/work-orders/${workOrderId}/attachments`, {
+              // axios supports body on DELETE via `data`
+              data: { key: keys[idx] },
+              headers: { 'Content-Type': 'application/json', ...authHeaders() },
+            });
 
-          await fetchWorkOrder();
-          Alert.alert('Deleted');
-        } catch (err) {
-          Alert.alert('Error', err?.response?.data?.error || err?.message || 'Delete failed.');
-        }
+            await fetchWorkOrder();
+            Alert.alert('Deleted');
+          } catch (err) {
+            Alert.alert('Error', err?.response?.data?.error || err?.message || 'Delete failed.');
+          }
+        },
       },
-    },
-  ]);
-};
+    ]);
+  };
 
   const handleShare = async () => {
     if (!photos.length) return;
@@ -927,9 +924,27 @@ const handleDeletePhoto = (idx) => {
   const customer = workOrder?.customer || workOrder?.customerName || '—';
   const problem = workOrder?.problemDescription || workOrder?.problem || '—';
   const status = workOrder?.status || '—';
+
   const scheduled = workOrder?.scheduledDate
     ? moment(workOrder.scheduledDate).format('YYYY-MM-DD HH:mm')
     : 'Not Scheduled';
+
+  // ✅ NEW: Date Created (supports many common backend field names)
+  const createdRaw =
+    workOrder?.createdAt ||
+    workOrder?.dateCreated ||
+    workOrder?.created_on ||
+    workOrder?.createdOn ||
+    workOrder?.created ||
+    workOrder?.createdDate ||
+    workOrder?.date_created ||
+    null;
+
+  const createdDateDisplay = createdRaw
+    ? moment(createdRaw).isValid()
+      ? moment(createdRaw).format('YYYY-MM-DD HH:mm')
+      : String(createdRaw)
+    : '—';
 
   const customerPhone =
     workOrder?.customerPhone ||
@@ -1071,6 +1086,9 @@ const handleDeletePhoto = (idx) => {
           </View>
 
           <View style={styles.row}><Text style={styles.label}>Scheduled Date:</Text><Text style={styles.value}>{scheduled}</Text></View>
+
+          {/* ✅ NEW ROW: Date Created (directly under Scheduled Date) */}
+          <View style={styles.row}><Text style={styles.label}>Date Created:</Text><Text style={styles.value}>{createdDateDisplay}</Text></View>
         </View>
 
         {/* Actions */}
@@ -1300,6 +1318,8 @@ const handleDeletePhoto = (idx) => {
         >
           <View style={styles.addNoteContainer}>
             <Text style={styles.addNoteTitle}>New Note</Text>
+
+            {/* ✅ Updated TextInput: Enter inserts a new line like a normal notes app */}
             <TextInput
               style={styles.addNoteInput}
               multiline
@@ -1307,8 +1327,10 @@ const handleDeletePhoto = (idx) => {
               value={newNoteText}
               onChangeText={setNewNoteText}
               autoFocus
-              returnKeyType="done"
+              blurOnSubmit={false}
+              textAlignVertical="top"
             />
+
             <View style={styles.addNoteButtons}>
               <TouchableOpacity style={styles.saveNoteBtn} onPress={addNote}>
                 <Text style={styles.saveNoteText}>Save</Text>
