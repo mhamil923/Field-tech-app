@@ -94,10 +94,7 @@ const isAssignedToMe = (order, me) => {
   if (!me) return false;
 
   const myId = me.id;
-  const myName = (me.username || me.name || '')
-    .toString()
-    .trim()
-    .toLowerCase();
+  const myName = (me.username || me.name || '').toString().trim().toLowerCase();
 
   const assignedId =
     order.assignedTo ??
@@ -161,11 +158,7 @@ const parseScheduledMoment = (raw) => {
   }
 
   // MySQL DATETIME common formats (no timezone)
-  const mLocal = moment(
-    s,
-    ['YYYY-MM-DD HH:mm:ss', 'YYYY-MM-DD HH:mm', 'YYYY-MM-DD'],
-    true
-  );
+  const mLocal = moment(s, ['YYYY-MM-DD HH:mm:ss', 'YYYY-MM-DD HH:mm', 'YYYY-MM-DD'], true);
   if (mLocal.isValid()) return mLocal; // already local
 
   // fallback
@@ -197,46 +190,43 @@ const niceLabelForOrder = (o) => {
   const wo = o.workOrderNumber || '—';
   const po = displayPO(o.workOrderNumber, o.poNumber);
   const cust = o.customer || '—';
-  const loc =
-    norm(o.siteLocation) || norm(o.siteName) || norm(o.siteLocationName) || '';
+  const loc = norm(o.siteLocation) || norm(o.siteName) || norm(o.siteLocationName) || '';
   return `WO ${wo}${po ? ` • PO ${po}` : ''} • ${cust}${loc ? ` • ${loc}` : ''}`;
 };
 
 const metersToMiles = (m) => (m == null ? null : m / 1609.344);
 const secondsToMinutes = (s) => (s == null ? null : s / 60);
-const fmtMiles = (miles) =>
-  miles == null ? '' : `${miles.toFixed(miles >= 10 ? 1 : 2)} mi`;
-const fmtMinutes = (mins) =>
-  mins == null ? '' : `${Math.round(mins)} min`;
+const fmtMiles = (miles) => (miles == null ? '' : `${miles.toFixed(miles >= 10 ? 1 : 2)} mi`);
+const fmtMinutes = (mins) => (mins == null ? '' : `${Math.round(mins)} min`);
 
-// Build a Google Maps directions URL (fallback) with waypoints (limit-friendly)
+// Build a Google Maps directions URL (waypoints limit-friendly)
 const buildGoogleMapsDirectionsUrl = (origin, destination, waypointAddrs) => {
   const enc = encodeURIComponent;
   const base = 'https://www.google.com/maps/dir/?api=1';
   const wp = (waypointAddrs || []).filter(Boolean);
 
+  // Note: Google supports up to 23 waypoints for api=1
   const wpStr = wp.slice(0, 23).map(enc).join('|');
-  const parts = [
+
+  return [
     `${base}&origin=${enc(origin)}`,
     `&destination=${enc(destination)}`,
     wpStr ? `&waypoints=${wpStr}` : '',
     '&travelmode=driving',
   ].join('');
-  return parts;
 };
 
-// ✅ Detect HTML error pages (the classic "<!DOCTYPE html>..." problem)
+// ✅ Detect HTML error pages (classic "<!DOCTYPE html>..." problem)
 const isHtmlLike = (data) => {
   if (typeof data !== 'string') return false;
   const s = data.trim().slice(0, 200).toLowerCase();
   return s.startsWith('<!doctype html') || s.startsWith('<html') || s.includes('<head');
 };
-
 const isHtmlResponse = (res) => {
   const ct = (res?.headers?.['content-type'] || res?.headers?.['Content-Type'] || '')
     .toString()
     .toLowerCase();
-  return ct.includes('text/html') || ct.includes('text/plain') || isHtmlLike(res?.data);
+  return ct.includes('text/html') || isHtmlLike(res?.data);
 };
 
 export default function WorkOrdersScreen() {
@@ -270,6 +260,56 @@ export default function WorkOrdersScreen() {
   const [routeModalOpen, setRouteModalOpen] = useState(false);
   const [routeResult, setRouteResult] = useState(null);
 
+  /**
+   * ✅ IMPORTANT FIX #1 (401):
+   * Ensure JWT header is applied BEFORE EVERY API CALL.
+   * This prevents random 401s when the axios instance was created before token is available,
+   * or when app resumes, etc.
+   */
+  const ensureAuthHeader = useCallback(async () => {
+    const token = await AsyncStorage.getItem('jwt');
+    if (token) {
+      api.defaults.headers.common.Authorization = `Bearer ${token}`;
+      return token;
+    }
+    delete api.defaults.headers.common.Authorization;
+    return null;
+  }, []);
+
+  /**
+   * ✅ IMPORTANT FIX #2 (Google Maps "%20" showing / can't find address):
+   * iOS Linking can re-encode already-encoded URLs. If we pass an encoded URL, it may become double-encoded.
+   * So we decode once right before opening.
+   */
+  const openUrlSafely = useCallback(async (url) => {
+    if (!url) return;
+
+    // If iOS re-encodes, we want to give it a "decoded once" URL
+    let candidate = url;
+    try {
+      candidate = decodeURIComponent(url);
+    } catch {
+      candidate = url;
+    }
+
+    try {
+      const can = await Linking.canOpenURL(candidate);
+      if (!can) {
+        // fallback: try original
+        await Linking.openURL(url);
+        return;
+      }
+      await Linking.openURL(candidate);
+    } catch (e) {
+      // last resort: try original
+      try {
+        await Linking.openURL(url);
+      } catch {
+        Alert.alert('Error', 'Failed to open Maps.');
+      }
+    }
+  }, []);
+
   const loadTodayOrder = useCallback(async () => {
     try {
       const raw = await AsyncStorage.getItem(todayKey);
@@ -287,30 +327,45 @@ export default function WorkOrdersScreen() {
     [todayKey]
   );
 
-  // ✅ FIX: set Authorization header using AsyncStorage (React Native)
+  // Load current user (me)
   useEffect(() => {
     (async () => {
       try {
         setMeLoading(true);
-        const token = await AsyncStorage.getItem('jwt');
-        if (token) {
-          api.defaults.headers.common.Authorization = `Bearer ${token}`;
-        } else {
-          delete api.defaults.headers.common.Authorization;
+        const token = await ensureAuthHeader();
+        if (!token) {
+          setMe(null);
+          return;
         }
-
         const r = await api.get('/auth/me');
         setMe(r.data || null);
-      } catch (e) {
+      } catch {
         setMe(null);
       } finally {
         setMeLoading(false);
       }
     })();
-  }, []);
+  }, [ensureAuthHeader]);
+
+  const handle401 = useCallback(() => {
+    Alert.alert(
+      'Session expired',
+      'Your login token is missing or expired. Please log in again.',
+      [{ text: 'OK', onPress: () => router.replace('/screens/Login') }]
+    );
+  }, [router]);
 
   const fetchWorkOrders = useCallback(async () => {
     try {
+      const token = await ensureAuthHeader();
+      if (!token) {
+        setWorkOrders([]);
+        setLoadingFirst(false);
+        setRefreshing(false);
+        handle401();
+        return;
+      }
+
       const res = await api.get('/work-orders');
       const canon = (res.data || []).map((o) => ({
         ...o,
@@ -318,13 +373,20 @@ export default function WorkOrdersScreen() {
       }));
       setWorkOrders(canon);
     } catch (err) {
-      console.error('Error fetching work orders:', err);
-      Alert.alert('Error', 'Failed to fetch work orders.');
+      const status = err?.response?.status;
+      console.error('Error fetching work orders:', status, err?.response?.data || err?.message);
+
+      if (status === 401) {
+        setWorkOrders([]);
+        handle401();
+      } else {
+        Alert.alert('Error', 'Failed to fetch work orders.');
+      }
     } finally {
       setLoadingFirst(false);
       setRefreshing(false);
     }
-  }, []);
+  }, [ensureAuthHeader, handle401]);
 
   useEffect(() => {
     fetchWorkOrders();
@@ -356,21 +418,31 @@ export default function WorkOrdersScreen() {
     return { byStatus, today };
   }, [workOrders, me]);
 
-  const openInGoogleMaps = async (query) => {
-    const q = encodeURIComponent(query || '');
-    const gm = `comgooglemaps://?q=${q}`;
-    const web = `https://www.google.com/maps/search/?api=1&query=${q}`;
-    try {
-      const can = await Linking.canOpenURL(gm);
-      Linking.openURL(can ? gm : web);
-    } catch {
-      Alert.alert('Error', 'Failed to open maps');
-    }
-  };
+  const openInGoogleMaps = useCallback(
+    async (query) => {
+      const qRaw = (query || '').toString().trim();
+      if (!qRaw) {
+        Alert.alert('Maps', 'No address to open.');
+        return;
+      }
+
+      // Important: do NOT pre-encode the whole URL for Linking.
+      // We encode only the q param here, then openUrlSafely() decodes once to prevent double-encoding.
+      const q = encodeURIComponent(qRaw);
+      const gm = `comgooglemaps://?q=${q}`;
+      const web = `https://www.google.com/maps/search/?api=1&query=${q}`;
+
+      try {
+        const can = await Linking.canOpenURL(gm);
+        await openUrlSafely(can ? gm : web);
+      } catch {
+        Alert.alert('Error', 'Failed to open maps');
+      }
+    },
+    [openUrlSafely]
+  );
 
   // ---------- FILTERED ORDERS ----------
-  // ✅ Today tab: ONLY my work orders scheduled today.
-  // Other tabs: status-based, global.
   const filteredOrders = useMemo(() => {
     const base = workOrders;
 
@@ -401,9 +473,9 @@ export default function WorkOrdersScreen() {
     fetchWorkOrders();
   };
 
-  /* ---------------- Status update: correct endpoint for your server.js ---------------- */
+  /* ---------------- Status update: PUT /work-orders/:id/status ---------------- */
   const putStatus = async (id, newStatus) => {
-    // ✅ your server.js has: PUT /work-orders/:id/status
+    await ensureAuthHeader();
     await api.put(
       `/work-orders/${id}/status`,
       { status: newStatus },
@@ -419,8 +491,14 @@ export default function WorkOrdersScreen() {
       await putStatus(id, newStatus);
       await fetchWorkOrders();
     } catch (err) {
-      console.error(err);
+      console.error(err?.response?.status, err?.response?.data || err?.message);
       setWorkOrders(prev);
+
+      if (err?.response?.status === 401) {
+        handle401();
+        return;
+      }
+
       const msg = err?.response?.data?.error || err?.message || 'Failed to update status.';
       Alert.alert('Error', msg);
     }
@@ -430,6 +508,8 @@ export default function WorkOrdersScreen() {
   const addNote = async (id, text) => {
     const trimmed = (text || '').trim();
     if (!trimmed) return;
+
+    await ensureAuthHeader();
 
     try {
       await api.put(
@@ -526,6 +606,10 @@ export default function WorkOrdersScreen() {
           }
         } catch (e) {
           console.error('Bulk status error for id', id, e?.response?.data?.error || e?.message);
+          if (e?.response?.status === 401) {
+            handle401();
+            return;
+          }
         }
       }
       Alert.alert('Success', `Marked parts in for ${ids.length} work order(s).`);
@@ -539,8 +623,6 @@ export default function WorkOrdersScreen() {
   };
 
   // ✅ ROUTE: generate + reorder Today list
-  // ✅ FIX: If /routes/best doesn't exist (or baseURL points to a web server),
-  // the server returns an HTML page ("<!DOCTYPE html>..."). We detect that and fallback cleanly.
   const generateBestRoute = async () => {
     if (selectedStatus !== 'Today') {
       Alert.alert('Route', 'Switch to the Today tab to generate a route.');
@@ -584,6 +666,12 @@ export default function WorkOrdersScreen() {
 
     setRouteWorking(true);
     try {
+      const token = await ensureAuthHeader();
+      if (!token) {
+        handle401();
+        return;
+      }
+
       const payload = {
         start: SHOP_ADDRESS,
         end: SHOP_ADDRESS,
@@ -594,45 +682,41 @@ export default function WorkOrdersScreen() {
       const res = await api.post('/routes/best', payload, {
         headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
         timeout: 20000,
-        // If the server still replies with HTML, axios will keep it as a string.
         responseType: 'text',
         transformResponse: [(data) => data],
         validateStatus: (status) => status >= 200 && status < 500,
       });
 
-      // If we got HTML, it means route doesn't exist / wrong baseURL / proxy HTML page.
-      if (isHtmlResponse(res)) {
-        console.warn('Route endpoint returned HTML (likely missing route):', {
-          url: `${api?.defaults?.baseURL || ''}/routes/best`,
-          status: res?.status,
-          contentType: res?.headers?.['content-type'],
-        });
+      if (res?.status === 401) {
+        handle401();
+        return;
+      }
 
+      // If we got HTML, route isn't implemented yet OR baseURL points to a web server.
+      if (isHtmlResponse(res)) {
         Alert.alert(
           'Route (Backend not ready)',
-          'Your app hit /routes/best but the server returned an HTML page (classic <!DOCTYPE html> error). That usually means the route is missing on the backend or the API base URL is pointing at a web server.\n\nOpening Google Maps using your current stop order instead.',
+          'Your app hit /routes/best but the server returned an HTML page. That means the route is missing on the backend (or API base URL is wrong).\n\nOpening Google Maps using your current stop order instead.',
           [
             { text: 'Cancel', style: 'cancel' },
-            { text: 'Open Maps', onPress: () => Linking.openURL(fallbackUrl) },
+            { text: 'Open Maps', onPress: () => openUrlSafely(fallbackUrl) },
           ]
         );
         return;
       }
 
-      // Parse JSON safely (since we forced responseType 'text')
+      // Parse JSON safely
       let data = res?.data;
       if (typeof data === 'string') {
         try {
           data = JSON.parse(data);
-        } catch (e) {
-          // Non-HTML, but still not JSON
-          console.warn('Route endpoint did not return JSON:', data?.slice?.(0, 200));
+        } catch {
           Alert.alert(
             'Route (Unexpected response)',
             'The route service responded, but not with JSON. Opening Google Maps with the stops in the current order instead.',
             [
               { text: 'Cancel', style: 'cancel' },
-              { text: 'Open Maps', onPress: () => Linking.openURL(fallbackUrl) },
+              { text: 'Open Maps', onPress: () => openUrlSafely(fallbackUrl) },
             ]
           );
           return;
@@ -646,7 +730,7 @@ export default function WorkOrdersScreen() {
           'The route service responded but did not return an ordered stop list. Opening Google Maps with the stops in the current order instead.',
           [
             { text: 'Cancel', style: 'cancel' },
-            { text: 'Open Maps', onPress: () => Linking.openURL(fallbackUrl) },
+            { text: 'Open Maps', onPress: () => openUrlSafely(fallbackUrl) },
           ]
         );
         return;
@@ -683,14 +767,19 @@ export default function WorkOrdersScreen() {
 
       setRouteModalOpen(true);
     } catch (e) {
-      console.error('Route generation failed:', e?.response?.data || e?.message || e);
+      console.error('Route generation failed:', e?.response?.status, e?.response?.data || e?.message);
+
+      if (e?.response?.status === 401) {
+        handle401();
+        return;
+      }
 
       Alert.alert(
         'Route',
         'Could not generate the “best route” (backend not added or returned an error).\n\nOpening Google Maps with the stops in the current order as a fallback.',
         [
           { text: 'Cancel', style: 'cancel' },
-          { text: 'Open Maps', onPress: () => Linking.openURL(fallbackUrl) },
+          { text: 'Open Maps', onPress: () => openUrlSafely(fallbackUrl) },
         ]
       );
     } finally {
@@ -698,12 +787,11 @@ export default function WorkOrdersScreen() {
     }
   };
 
-  const closeStatusModal = () => setStatusModal({ id: null, value: null });
   const applyStatusModal = () => {
     if (statusModal.id && statusModal.value) {
       handleUpdateStatus(statusModal.id, statusModal.value);
     }
-    closeStatusModal();
+    setStatusModal({ id: null, value: null });
   };
 
   const HeaderActions = () => {
@@ -711,9 +799,7 @@ export default function WorkOrdersScreen() {
     return (
       <View style={styles.partsHeaderRow}>
         <TouchableOpacity onPress={openBulkModal} style={styles.partsHeaderBtn}>
-          <Text style={styles.partsHeaderBtnText}>
-            Mark Parts In ({waitingOrders.length})
-          </Text>
+          <Text style={styles.partsHeaderBtnText}>Mark Parts In ({waitingOrders.length})</Text>
         </TouchableOpacity>
       </View>
     );
@@ -728,10 +814,7 @@ export default function WorkOrdersScreen() {
       <View style={styles.todayHeaderRow}>
         <TouchableOpacity
           onPress={generateBestRoute}
-          style={[
-            styles.routeBtn,
-            (routeWorking || todaysStopsCount < 2) && styles.routeBtnDisabled,
-          ]}
+          style={[styles.routeBtn, (routeWorking || todaysStopsCount < 2) && styles.routeBtnDisabled]}
           disabled={routeWorking || todaysStopsCount < 2}
         >
           {routeWorking ? (
@@ -772,9 +855,7 @@ export default function WorkOrdersScreen() {
             onPress={() => setSelectedStatus(s)}
             style={[styles.chip, selectedStatus === s && styles.chipActive]}
           >
-            <Text style={[styles.chipText, selectedStatus === s && styles.chipTextActive]}>
-              {s}
-            </Text>
+            <Text style={[styles.chipText, selectedStatus === s && styles.chipTextActive]}>{s}</Text>
             <View style={[styles.badge, selectedStatus === s && styles.badgeActive]}>
               <Text style={[styles.badgeText, selectedStatus === s && styles.badgeTextActive]}>
                 {counts.byStatus[s]}
@@ -805,8 +886,7 @@ export default function WorkOrdersScreen() {
       <View style={styles.card}>
         <View style={styles.cardHeaderRow}>
           <Text style={styles.cardTitle}>
-            WO: {item.workOrderNumber || '—'} • PO:{' '}
-            {displayPO(item.workOrderNumber, item.poNumber)}
+            WO: {item.workOrderNumber || '—'} • PO: {displayPO(item.workOrderNumber, item.poNumber)}
           </Text>
           {selectedStatus === 'Today' && (
             <TouchableOpacity onLongPress={drag} delayLongPress={120} style={styles.dragHandle}>
@@ -837,8 +917,7 @@ export default function WorkOrdersScreen() {
         <Text style={styles.cardText}>
           Scheduled:{' '}
           {getScheduledRaw(item)
-            ? parseScheduledMoment(getScheduledRaw(item))?.format('YYYY-MM-DD HH:mm') ||
-              'Not Scheduled'
+            ? parseScheduledMoment(getScheduledRaw(item))?.format('YYYY-MM-DD HH:mm') || 'Not Scheduled'
             : 'Not Scheduled'}
         </Text>
 
@@ -998,7 +1077,7 @@ export default function WorkOrdersScreen() {
                       SHOP_ADDRESS,
                       (routeResult?.orderedStops || []).map((s) => s.address)
                     );
-                  Linking.openURL(url);
+                  openUrlSafely(url);
                 }}
               >
                 <Text style={styles.modalBtnText}>Open Route in Maps</Text>
@@ -1095,8 +1174,7 @@ export default function WorkOrdersScreen() {
                     </View>
                     <View style={{ flex: 1 }}>
                       <Text style={styles.partsRowTitle}>
-                        WO: {item.workOrderNumber || '—'}{' '}
-                        {item.poNumber ? ` • PO: ${item.poNumber}` : ''}
+                        WO: {item.workOrderNumber || '—'} {item.poNumber ? ` • PO: ${item.poNumber}` : ''}
                       </Text>
                       <Text style={styles.partsRowSub}>{item.customer || '—'}</Text>
                       {!!site && (
