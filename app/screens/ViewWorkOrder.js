@@ -1,7 +1,7 @@
 // File: app/screens/ViewWorkOrder.js
 // ================================
 // SECTION 1 of 6
-// Imports, constants, helpers, and NEW filename rules
+// Imports, constants, helpers, and filename rules (NO duplicates)
 // ================================
 
 import React, { useRef, useState, useEffect, useCallback } from 'react';
@@ -54,8 +54,7 @@ const STATUS_OPTIONS = [
 const authHeaders = () => {
   try {
     const token = typeof localStorage !== 'undefined' ? localStorage.getItem('jwt') : null;
-    // React Native doesn't have localStorage; if your axios instance already attaches the token,
-    // this is harmless. If you added a shim, it will work.
+    // RN doesn't have localStorage; if your axios instance already attaches token, this is harmless.
     return token ? { Authorization: `Bearer ${token}` } : {};
   } catch {
     return {};
@@ -63,17 +62,17 @@ const authHeaders = () => {
 };
 
 /* --------------------------------------------------------------------------
- * ✅ NEW: Attachment filename conventions (Photos vs Draw Notes)
+ * ✅ Attachment filename conventions (Photos vs Draw Notes)
  *
  * Goal:
  * - Photos and Draw Notes both upload via the same backend field today (photoFile),
  *   BUT we can tell them apart later in the web CRM by the filename.
- * - Also add the *date taken* to filenames so you can split "initial" vs "final" visit.
+ * - Include the *visit date* in filenames so you can split "initial" vs "final" visit.
  *
  * Format:
- *   WO-<workOrderNumberOrId>_<YYYY-MM-DD>_<TYPE>_<timestamp>.jpg
- * Types:
- *   PHOTO, DRAW
+ *   WO-<identifier>_<YYYY-MM-DD>_<TYPE>_<timestamp>.jpg
+ * TYPE:
+ *   PHOTO or DRAW
  * -------------------------------------------------------------------------- */
 const safeSlug = (v) =>
   String(v ?? '')
@@ -82,11 +81,11 @@ const safeSlug = (v) =>
     .replace(/[^a-zA-Z0-9-_]/g, '')
     .slice(0, 64);
 
-const captureDateStr = (d = new Date()) => moment(d).format('YYYY-MM-DD');
+const dateStamp = (d = new Date()) => moment(d).format('YYYY-MM-DD');
 
-const buildAttachmentName = ({ workOrderNumberOrId, type }) => {
+const buildAttachmentName = ({ workOrderNumberOrId, type, dateObj }) => {
   const wo = safeSlug(workOrderNumberOrId || 'WO');
-  const date = captureDateStr(); // device date when captured
+  const date = dateStamp(dateObj || new Date());
   const ts = Date.now();
   const t = String(type || 'PHOTO').toUpperCase() === 'DRAW' ? 'DRAW' : 'PHOTO';
   return `WO-${wo}_${date}_${t}_${ts}.jpg`;
@@ -130,11 +129,7 @@ function parseNotesArrayOrText(raw) {
     const m = line.match(startRe);
     if (m) {
       if (current) entries.push({ ...current });
-      current = {
-        createdAt: m[1],
-        by: (m[2] || '').trim(),
-        text: m[3] ? m[3] : '',
-      };
+      current = { createdAt: m[1], by: (m[2] || '').trim(), text: m[3] ? m[3] : '' };
       continue;
     }
     if (/^\s*$/.test(line)) {
@@ -222,12 +217,9 @@ const PDF_VIEWER_HTML = `
 </body>
 </html>
 `;
-
-// (SECTION 2 continues below…)
 // ================================
 // SECTION 2 of 6
 // Annotator HTML, Sketch HTML, and component state/hooks
-// (Copy/paste directly AFTER Section 1)
 // ================================
 
 /**
@@ -311,6 +303,7 @@ const ANNOTATOR_HTML = `
           const scale=targetWidth/vp.width;
           const viewport=page.getViewport({scale});
           const wrap=document.createElement('div'); wrap.className='pageWrap';
+
           const pageCanvas=document.createElement('canvas'); pageCanvas.className='page';
           pageCanvas.width=Math.floor(viewport.width); pageCanvas.height=Math.floor(viewport.height);
           wrap.appendChild(pageCanvas);
@@ -377,7 +370,9 @@ const ANNOTATOR_HTML = `
           const scaleY=pageH/view.overlayCanvas.height;
           p.drawImage(png,{x:0,y:0,width:view.overlayCanvas.width*scaleX,height:view.overlayCanvas.height*scaleY,opacity:1});
         }
-        const outB64 = pdfDoc.saveAsBase64 ? await pdfDoc.saveAsBase64({dataUri:false}) : btoa(String.fromCharCode(...(await pdfDoc.save())));
+        const outB64 = pdfDoc.saveAsBase64
+          ? await pdfDoc.saveAsBase64({dataUri:false})
+          : btoa(String.fromCharCode(...(await pdfDoc.save())));
         window.ReactNativeWebView?.postMessage('SIGNED:'+outB64);
       }catch(e){window.ReactNativeWebView?.postMessage('ERROR:'+(e?.message||String(e))); }
     }
@@ -553,8 +548,7 @@ export default function ViewWorkOrder() {
 // ================================
 // SECTION 3 of 6
 // Helpers, fetchWorkOrder, doc lightbox loader, addNote,
-// and NEW filename/date tagging helpers for Photos vs Draw Notes
-// (Copy/paste directly AFTER Section 2)
+// and image processing
 // ================================
 
   // -------- helpers for contact actions & address --------
@@ -562,12 +556,16 @@ export default function ViewWorkOrder() {
   const callNumber = (p) => {
     const n = normPhone(p);
     if (!n) return;
-    Linking.openURL(`tel:${n}`).catch(() => Alert.alert('Error', 'Unable to open Phone app.'));
+    Linking.openURL(`tel:${n}`).catch(() =>
+      Alert.alert('Error', 'Unable to open Phone app.')
+    );
   };
   const emailTo = (e) => {
     const addr = String(e || '').trim();
     if (!addr) return;
-    Linking.openURL(`mailto:${addr}`).catch(() => Alert.alert('Error', 'Unable to open Mail app.'));
+    Linking.openURL(`mailto:${addr}`).catch(() =>
+      Alert.alert('Error', 'Unable to open Mail app.')
+    );
   };
   const openMap = (loc) => {
     const q = encodeURIComponent(loc || '');
@@ -579,8 +577,12 @@ export default function ViewWorkOrder() {
     });
     const googleWebUrl = `https://www.google.com/maps/search/?api=1&query=${q}`;
     Linking.canOpenURL(googleAppUrl)
-      .then((supported) => (supported ? Linking.openURL(googleAppUrl) : Linking.openURL(googleWebUrl)))
-      .catch(() => Alert.alert('Error', 'Unable to open Google Maps.'));
+      .then((supported) =>
+        supported ? Linking.openURL(googleAppUrl) : Linking.openURL(googleWebUrl)
+      )
+      .catch(() =>
+        Alert.alert('Error', 'Unable to open Google Maps.')
+      );
   };
   // -------------------------------------------------------
 
@@ -598,54 +600,14 @@ export default function ViewWorkOrder() {
     return [];
   };
 
-  // ✅ NEW: build date-stamped, type-stamped filenames
-  // We use local time so techs get the day they were on site.
-  const stampDay = (d = new Date()) => moment(d).format('YYYY-MM-DD');
-  const stampTime = (d = new Date()) => moment(d).format('HHmmss');
-
-  // ✅ Prefer scheduled day (if set) for "visit day" grouping.
-  // If not scheduled, fall back to "today".
-  const getVisitDateForFilename = () => {
-    const raw = workOrder?.scheduledDate || null;
-    if (raw && moment(raw).isValid()) return moment(raw).toDate();
-    return new Date();
-  };
-
-  // ✅ Extract a stable identifier for filenames (WO preferred, else PO, else ID)
-  const getIdForFilename = () => {
-    const wo = String(workOrder?.workOrderNumber || '').trim();
-    const po = String(workOrder?.poNumber || '').trim();
-    if (wo) return `WO-${wo}`;
-    if (po) return `PO-${po}`;
-    return `ID-${workOrderId}`;
-  };
-
-  // ✅ Final filename builders:
-  // Photos:    photo__YYYY-MM-DD__WO-12345__HHmmss.jpg
-  // DrawNotes: drawnote__YYYY-MM-DD__WO-12345__HHmmss.jpg
-  const buildPhotoFilename = (ext = 'jpg') => {
-    const day = stampDay(getVisitDateForFilename());
-    const t = stampTime(new Date());
-    const id = getIdForFilename();
-    return `photo__${day}__${id}__${t}.${ext}`;
-  };
-
-  const buildDrawNoteFilename = (ext = 'jpg') => {
-    const day = stampDay(getVisitDateForFilename());
-    const t = stampTime(new Date());
-    const id = getIdForFilename();
-    return `drawnote__${day}__${id}__${t}.${ext}`;
-  };
-
-  // ✅ NEW: classify attachments for future split on web CRM
-  // (If you later add filters on the mobile side, these helpers will be ready.)
-  const isDrawNoteKey = (k = '') => /(^|\/)drawnote__/i.test(String(k));
-  const isPhotoKey = (k = '') => /(^|\/)photo__/i.test(String(k));
-
+  // Fetch work order
   const fetchWorkOrder = useCallback(async () => {
     if (!workOrderId) return;
     try {
-      const { data } = await api.get(`/work-orders/${workOrderId}`, { headers: authHeaders() });
+      const { data } = await api.get(
+        `/work-orders/${workOrderId}`,
+        { headers: authHeaders() }
+      );
       setWorkOrder(data);
 
       // Notes (supports array or legacy TEXT)
@@ -660,7 +622,7 @@ export default function ViewWorkOrder() {
 
       const allUrls = rawKeys.map((k) => fileUrl(k));
 
-      // Only keep *image* URLs in `photos` for the image viewer
+      // Only keep *image* URLs in `photos`
       const imageUrls = allUrls.filter((u) => {
         const lower = u.toLowerCase();
         return !(
@@ -669,9 +631,13 @@ export default function ViewWorkOrder() {
           lower.startsWith('data:application/pdf')
         );
       });
+
       setPhotos(imageUrls);
     } catch (err) {
-      Alert.alert('Error', err?.response?.data?.error || 'Failed to load work order.');
+      Alert.alert(
+        'Error',
+        err?.response?.data?.error || 'Failed to load work order.'
+      );
     }
   }, [workOrderId]);
 
@@ -679,17 +645,18 @@ export default function ViewWorkOrder() {
     fetchWorkOrder();
   }, [fetchWorkOrder]);
 
-  // Derivations for tiles
+  // Work Order main PDF
   const woPdfUrl = workOrder?.pdfPath ? fileUrl(workOrder.pdfPath) : null;
 
-  // Estimates: try multiple likely fields from backend, normalize to array of URLs
+  // Estimates
   const estimateUrls = [
     ...toUrlArray(workOrder?.estimatePdfPaths),
     ...toUrlArray(workOrder?.estimatePaths),
     ...toUrlArray(workOrder?.estimatesPdf),
     ...toUrlArray(workOrder?.estimatePdfPath),
   ];
-  // POs: similarly normalize
+
+  // Purchase Orders
   const poUrls = [
     ...toUrlArray(workOrder?.poPdfPaths),
     ...toUrlArray(workOrder?.poPaths),
@@ -706,11 +673,14 @@ export default function ViewWorkOrder() {
       setDocLoading(true);
       setDocError(null);
       setDocB64(null);
+
       const target = FileSystem.cacheDirectory + `doc_${Date.now()}.pdf`;
       await FileSystem.downloadAsync(url, target);
+
       const b64 = await FileSystem.readAsStringAsync(target, {
         encoding: FileSystem.EncodingType.Base64,
       });
+
       setDocB64(b64);
     } catch (e) {
       setDocError(e?.message || 'Failed to load document.');
@@ -721,29 +691,44 @@ export default function ViewWorkOrder() {
 
   const openDocGroup = (group, startIndex = 0) => {
     let items = [];
+
     if (group === 'WO') {
       if (!woPdfUrl) {
         Alert.alert('No PDF', 'This work order does not have a PDF attached.');
         return;
       }
-      items = [{ title: `Work Order ${workOrder?.workOrderNumber || workOrderId}`, url: woPdfUrl }];
+      items = [
+        {
+          title: `Work Order ${workOrder?.workOrderNumber || workOrderId}`,
+          url: woPdfUrl,
+        },
+      ];
     } else if (group === 'EST') {
       if (!estimateUrls.length) {
         Alert.alert('No Estimates', 'No Estimate PDFs found for this job.');
         return;
       }
-      items = estimateUrls.map((u, i) => ({ title: `Estimate ${i + 1}`, url: u }));
+      items = estimateUrls.map((u, i) => ({
+        title: `Estimate ${i + 1}`,
+        url: u,
+      }));
     } else if (group === 'PO') {
       if (!poUrls.length) {
         Alert.alert('No POs', 'No PO PDFs found for this job.');
         return;
       }
-      items = poUrls.map((u, i) => ({ title: `PO ${i + 1}`, url: u }));
+      items = poUrls.map((u, i) => ({
+        title: `PO ${i + 1}`,
+        url: u,
+      }));
     }
 
     setDocGroup(group);
     setDocItems(items);
-    const safeIdx = Math.min(Math.max(0, startIndex), Math.max(0, items.length - 1));
+    const safeIdx = Math.min(
+      Math.max(0, startIndex),
+      Math.max(0, items.length - 1)
+    );
     setDocIndex(safeIdx);
     setDocModalVisible(true);
     loadDocIntoModal(items[safeIdx].url);
@@ -755,6 +740,7 @@ export default function ViewWorkOrder() {
     setDocIndex(ni);
     loadDocIntoModal(docItems[ni].url);
   };
+
   const prevDoc = () => {
     if (!docItems.length) return;
     const pi = (docIndex - 1 + docItems.length) % docItems.length;
@@ -762,7 +748,7 @@ export default function ViewWorkOrder() {
     loadDocIntoModal(docItems[pi].url);
   };
 
-  /* ---------- ADD NOTE (FIXED like web) ---------- */
+  // Add Note
   const addNote = async () => {
     const text = newNoteText.trim();
     if (!text) return;
@@ -781,13 +767,12 @@ export default function ViewWorkOrder() {
           { headers: { 'Content-Type': 'application/json', ...authHeaders() } }
         );
       } catch (err2) {
-        const msg =
+        Alert.alert(
+          'Error',
           err2?.response?.data?.error ||
-          err1?.response?.data?.error ||
-          err2?.message ||
-          err1?.message ||
-          'Failed to add note.';
-        Alert.alert('Error', msg);
+            err1?.response?.data?.error ||
+            'Failed to add note.'
+        );
         return;
       }
     }
@@ -797,13 +782,16 @@ export default function ViewWorkOrder() {
     await fetchWorkOrder();
   };
 
-  // keep uploads smaller
+  // Keep uploads smaller
   const processImageForUpload = async (uri) => {
     try {
       const manip = await ImageManipulator.manipulateAsync(
         uri,
         [{ resize: { width: 1600 } }],
-        { compress: 0.7, format: ImageManipulator.SaveFormat.JPEG }
+        {
+          compress: 0.7,
+          format: ImageManipulator.SaveFormat.JPEG,
+        }
       );
       return manip.uri;
     } catch {
@@ -815,32 +803,39 @@ export default function ViewWorkOrder() {
 // ================================
 // SECTION 4 of 6
 // Upload logic for Photos + Draw Notes
-// ✅ Photos + Draw Notes now save with DATE + type prefix in filename
-// (Copy/paste directly AFTER Section 3)
+// IMPORTANT: uploadCameraPhotoNow is defined ONLY ONCE
 // ================================
 
   /**
-   * Upload ONE camera photo immediately (no pending queue)
-   * ✅ filename includes visit date + "photo__" prefix
+   * Upload ONE camera photo immediately
+   * (called each time user taps "Use Photo")
    */
   const uploadCameraPhotoNow = async (uri) => {
+    if (!workOrderId) return;
+
     const form = new FormData();
     const processedUri = await processImageForUpload(uri);
 
-    // ✅ date-stamped + type-stamped name
+    // Build dated + typed filename
     const name = buildPhotoFilename('jpg');
 
-    form.append('photoFile', { uri: processedUri, name, type: 'image/jpeg' });
+    form.append('photoFile', {
+      uri: processedUri,
+      name,
+      type: 'image/jpeg',
+    });
 
     await api.put(`/work-orders/${workOrderId}/edit`, form, {
-      headers: { 'Content-Type': 'multipart/form-data', ...authHeaders() },
+      headers: {
+        'Content-Type': 'multipart/form-data',
+        ...authHeaders(),
+      },
     });
   };
 
   /**
-   * CAMERA FLOW (multi-shot):
-   * - each time user taps "Use Photo", we upload immediately
-   * - we re-open camera until they hit "Cancel"
+   * CAMERA FLOW (multi-shot)
+   * Keeps reopening camera until Cancel is pressed
    */
   const openCamera = async () => {
     if (!workOrderId) return;
@@ -858,7 +853,7 @@ export default function ViewWorkOrder() {
         allowsEditing: false,
       });
 
-      // Cancel exits the loop
+      // Cancel exits loop
       if (result.canceled || !result.assets?.length) {
         keepCapturing = false;
         break;
@@ -872,7 +867,11 @@ export default function ViewWorkOrder() {
         await uploadCameraPhotoNow(asset.uri);
         await fetchWorkOrder();
       } catch (err) {
-        const msg = err?.response?.data?.error || err?.message || 'Failed to upload photo.';
+        const msg =
+          err?.response?.data?.error ||
+          err?.message ||
+          'Failed to upload photo.';
+
         await new Promise((resolve) => {
           Alert.alert('Upload Error', msg, [
             {
@@ -883,7 +882,10 @@ export default function ViewWorkOrder() {
                 resolve();
               },
             },
-            { text: 'Try Next Photo', style: 'default', onPress: () => resolve() },
+            {
+              text: 'Continue',
+              onPress: resolve,
+            },
           ]);
         });
       } finally {
@@ -892,184 +894,114 @@ export default function ViewWorkOrder() {
     }
   };
 
-  // Library multi-select
-  // ✅ filenames include visit date + "photo__" prefix
+  /**
+   * Upload photos from library (multi-select)
+   */
   const uploadPhotos = async () => {
-    const { status } = await ImagePicker.requestMediaLibraryPermissionsAsync();
-    if (status !== 'granted') return Alert.alert('Permission required', 'Need photo library access.');
+    const { status } =
+      await ImagePicker.requestMediaLibraryPermissionsAsync();
+
+    if (status !== 'granted') {
+      return Alert.alert(
+        'Permission required',
+        'Need photo library access.'
+      );
+    }
 
     const result = await ImagePicker.launchImageLibraryAsync({
       mediaTypes: ImagePicker.MediaTypeOptions.Images,
       allowsMultipleSelection: true,
       quality: 1,
     });
+
     if (result.canceled || !result.assets?.length) return;
 
     const form = new FormData();
 
     for (let i = 0; i < result.assets.length; i++) {
-      const processedUri = await processImageForUpload(result.assets[i].uri);
+      const processedUri = await processImageForUpload(
+        result.assets[i].uri
+      );
 
-      // ✅ date-stamped + type-stamped name (ensure uniqueness with i)
+      // Ensure unique filename per image
       const base = buildPhotoFilename('jpg').replace(/\.jpg$/i, '');
-      const name = `${base}__${i + 1}.jpg`;
+      const name = `${base}_${i + 1}.jpg`;
 
-      form.append('photoFile', { uri: processedUri, name, type: 'image/jpeg' });
+      form.append('photoFile', {
+        uri: processedUri,
+        name,
+        type: 'image/jpeg',
+      });
     }
 
     try {
       await api.put(`/work-orders/${workOrderId}/edit`, form, {
-        headers: { 'Content-Type': 'multipart/form-data', ...authHeaders() },
+        headers: {
+          'Content-Type': 'multipart/form-data',
+          ...authHeaders(),
+        },
       });
-      fetchWorkOrder();
+      await fetchWorkOrder();
       Alert.alert('Success', 'Photos uploaded!');
     } catch (err) {
-      Alert.alert('Upload Error', err?.response?.data?.error || err.message);
+      Alert.alert(
+        'Upload Error',
+        err?.response?.data?.error || err.message
+      );
     }
   };
 
-  const handleDeletePhoto = (idx) => {
-    const keys = (workOrder?.photoPath || '').split(',').map((s) => s.trim()).filter(Boolean);
-    if (idx < 0 || idx >= keys.length) return;
-
-    Alert.alert('Delete Attachment?', 'This will permanently remove it.', [
-      { text: 'Cancel, keep it', style: 'cancel' },
-      {
-        text: 'Delete',
-        style: 'destructive',
-        onPress: async () => {
-          try {
-            await api.delete(`/work-orders/${workOrderId}/attachments`, {
-              // axios supports body on DELETE via `data`
-              data: { key: keys[idx] },
-              headers: { 'Content-Type': 'application/json', ...authHeaders() },
-            });
-
-            await fetchWorkOrder();
-            Alert.alert('Deleted');
-          } catch (err) {
-            Alert.alert('Error', err?.response?.data?.error || err?.message || 'Delete failed.');
-          }
-        },
-      },
-    ]);
-  };
-
-  const handleShare = async () => {
-    if (!photos.length) return;
-    const safeIndex = Math.min(Math.max(0, viewerIndex), Math.max(0, photos.length - 1));
-    const url = photos[safeIndex];
-    try {
-      await Share.share({ url, message: url });
-    } catch {}
-  };
-
-  const closePhotoViewer = () => {
-    setPhotoViewerVisible(false);
-    if (returnToAttachments) {
-      setViewAttachmentsVisible(true);
-    }
-    setReturnToAttachments(false);
-  };
-
-  const pdfURL = workOrder?.pdfPath ? fileUrl(workOrder.pdfPath) : null;
-
-  // Core: open annotator safely (always on top of any other modal)
-  const openAnnotator = async () => {
-    if (!pdfURL) return Alert.alert('No PDF', 'This work order does not have a PDF attached.');
-    try {
-      const tmp = FileSystem.cacheDirectory + `wo_${workOrderId}.pdf`;
-      await FileSystem.downloadAsync(pdfURL, tmp);
-      const b64 = await FileSystem.readAsStringAsync(tmp, {
-        encoding: FileSystem.EncodingType.Base64,
-      });
-      setPdfBase64(b64);
-      setAnnotateVisible(true);
-    } catch {
-      setAnnotateVisible(false);
-      Alert.alert('Error', 'Failed to load PDF for annotation.');
-    }
-  };
-
-  const openAnnotatorFromLightbox = async () => {
-    setDocModalVisible(false);
-    setTimeout(() => {
-      openAnnotator();
-    }, 250);
-  };
-
-  const onAnnotatorMessage = async (ev) => {
-    const msg = ev?.nativeEvent?.data || '';
-    if (typeof msg !== 'string') return;
-    if (msg.startsWith('ERROR:')) {
-      Alert.alert('Annotator Error', msg.slice(6));
-      return;
-    }
-    if (msg === 'CLOSE') {
-      setAnnotateVisible(false);
-      return;
-    }
-    if (msg.startsWith('SIGNED:')) {
-      const b64 = msg.slice(7);
-      try {
-        const signedUri = FileSystem.cacheDirectory + `signed_${Date.now()}.pdf`;
-        await FileSystem.writeAsStringAsync(signedUri, b64, {
-          encoding: FileSystem.EncodingType.Base64,
-        });
-        const form = new FormData();
-        const name = `WO-${workOrder?.poNumber || workOrderId}-signed.pdf`;
-        form.append('pdfFile', { uri: signedUri, name, type: 'application/pdf' });
-        await api.put(`/work-orders/${workOrderId}/edit`, form, {
-          headers: { 'Content-Type': 'multipart/form-data', ...authHeaders() },
-        });
-        setAnnotateVisible(false);
-        fetchWorkOrder();
-        Alert.alert('Success', 'Signed PDF uploaded.');
-      } catch (e) {
-        Alert.alert('Upload Error', e?.message || 'Failed to upload signed PDF.');
-      }
-    }
-  };
-
-  // ✅ Draw Note upload (from SKETCH_HTML)
-  // ✅ filename includes visit date + "drawnote__" prefix
+  /**
+   * Handle Draw Note upload (from SKETCH_HTML)
+   */
   const onSketchMessage = async (ev) => {
     const msg = ev?.nativeEvent?.data || '';
     if (typeof msg !== 'string') return;
+
     if (msg.startsWith('ERROR:')) {
       Alert.alert('Draw Notes Error', msg.slice(6));
       return;
     }
+
     if (msg === 'CLOSE') {
       setSketchVisible(false);
       return;
     }
+
     if (msg.startsWith('IMAGE:')) {
       const b64 = msg.slice(6);
       try {
-        const jpgPath = FileSystem.cacheDirectory + `drawing_${Date.now()}.jpg`;
+        const jpgPath =
+          FileSystem.cacheDirectory + `drawing_${Date.now()}.jpg`;
+
         await FileSystem.writeAsStringAsync(jpgPath, b64, {
           encoding: FileSystem.EncodingType.Base64,
         });
 
         const processed = await processImageForUpload(jpgPath);
-
         const form = new FormData();
+
         form.append('photoFile', {
           uri: processed,
-          name: buildDrawNoteFilename('jpg'), // ✅ date + drawnote
+          name: buildDrawNoteFilename('jpg'),
           type: 'image/jpeg',
         });
 
         await api.put(`/work-orders/${workOrderId}/edit`, form, {
-          headers: { 'Content-Type': 'multipart/form-data', ...authHeaders() },
+          headers: {
+            'Content-Type': 'multipart/form-data',
+            ...authHeaders(),
+          },
         });
 
         setSketchVisible(false);
-        fetchWorkOrder();
+        await fetchWorkOrder();
         Alert.alert('Uploaded', 'Drawing note uploaded.');
       } catch (e) {
-        Alert.alert('Upload Error', e?.message || 'Failed to upload drawing note.');
+        Alert.alert(
+          'Upload Error',
+          e?.message || 'Failed to upload drawing note.'
+        );
       }
     }
   };
@@ -1077,28 +1009,743 @@ export default function ViewWorkOrder() {
   // (SECTION 5 continues below…)
 // ================================
 // SECTION 5 of 6
-// UI + styling alignment to WEB CRM ViewWorkOrder
-// (Keeps existing lightboxes + viewers exactly as-is)
+// Display fields + main UI JSX (ViewWorkOrder screen)
+// NOTE: No upload functions declared here
 // ================================
 
-/**
- * VISUAL CHANGES INCLUDED:
- * ✅ Blue CRM color palette (matches web CRM)
- * ✅ Card headers + tiles styled like web
- * ✅ Cleaner spacing / hierarchy
- * ✅ No behavior changes to viewers, PDFs, or sketch tools
- */
+  // ------- derived fields for display (with fallbacks) -------
+  const siteName =
+    workOrder?.siteLocation ||
+    workOrder?.siteName ||
+    workOrder?.siteLocationName ||
+    '';
 
+  const siteAddress =
+    workOrder?.siteAddress ||
+    workOrder?.serviceAddress ||
+    workOrder?.address ||
+    workOrder?.siteLocation ||
+    '';
+
+  const poNumber = workOrder?.poNumber || '—';
+  const workOrderNumber = workOrder?.workOrderNumber || '—';
+
+  const customer = workOrder?.customer || workOrder?.customerName || '—';
+  const problem = workOrder?.problemDescription || workOrder?.problem || '—';
+  const status = workOrder?.status || '—';
+
+  const scheduled = workOrder?.scheduledDate
+    ? moment(workOrder.scheduledDate).format('YYYY-MM-DD HH:mm')
+    : 'Not Scheduled';
+
+  // Date Created (supports common backend names)
+  const createdRaw =
+    workOrder?.createdAt ||
+    workOrder?.dateCreated ||
+    workOrder?.created_on ||
+    workOrder?.createdOn ||
+    workOrder?.created ||
+    workOrder?.createdDate ||
+    workOrder?.date_created ||
+    null;
+
+  const createdDateDisplay = createdRaw
+    ? moment(createdRaw).isValid()
+      ? moment(createdRaw).format('YYYY-MM-DD HH:mm')
+      : String(createdRaw)
+    : '—';
+
+  const customerPhone =
+    workOrder?.customerPhone ||
+    workOrder?.phone ||
+    workOrder?.customerPhoneNumber ||
+    '';
+
+  const customerEmail =
+    workOrder?.customerEmail ||
+    workOrder?.email ||
+    '';
+
+  const billingAddress =
+    workOrder?.billingAddress ||
+    [
+      workOrder?.billingAddress1,
+      workOrder?.billingAddress2,
+      workOrder?.billingCity,
+      workOrder?.billingState,
+      workOrder?.billingZip,
+    ]
+      .filter(Boolean)
+      .join(', ') ||
+    '';
+
+  // ----- status update -----
+  const openStatusModal = () => {
+    setPendingStatus(workOrder?.status || STATUS_OPTIONS[0]);
+    setShowStatusModal(true);
+  };
+
+  const applyStatus = async () => {
+    const next = pendingStatus || STATUS_OPTIONS[0];
+    const prev = workOrder?.status;
+
+    setWorkOrder((w) => (w ? { ...w, status: next } : w));
+    setShowStatusModal(false);
+    setIsStatusSaving(true);
+
+    try {
+      const form = new FormData();
+      form.append('status', next);
+
+      await api.put(`/work-orders/${workOrderId}/edit`, form, {
+        headers: authHeaders(),
+      });
+
+      await fetchWorkOrder();
+    } catch (e) {
+      setWorkOrder((w) => (w ? { ...w, status: prev } : w));
+      Alert.alert(
+        'Error',
+        e?.response?.data?.error || e?.message || 'Failed to update status.'
+      );
+    } finally {
+      setIsStatusSaving(false);
+    }
+  };
+  // -------------------------
+
+  // Open a PDF attachment from Attachments modal using the multi-page viewer
+  const openAttachmentPdf = (attachmentIndex) => {
+    const keys = (workOrder?.photoPath || '')
+      .split(',')
+      .map((s) => s.trim())
+      .filter(Boolean);
+
+    if (!keys.length) return;
+
+    const pdfItems = [];
+    let startDocIndex = 0;
+    let pdfCounter = 0;
+
+    keys.forEach((k, idx) => {
+      const url = fileUrl(k);
+      const lower = k.toLowerCase();
+      const isPdf =
+        lower.endsWith('.pdf') ||
+        lower.includes('.pdf?') ||
+        lower.startsWith('data:application/pdf');
+
+      if (isPdf) {
+        if (idx === attachmentIndex) startDocIndex = pdfCounter;
+
+        pdfItems.push({
+          title: `Attachment PDF ${pdfCounter + 1}`,
+          url,
+        });
+
+        pdfCounter += 1;
+      }
+    });
+
+    if (!pdfItems.length) {
+      Alert.alert('No PDF', 'No PDF attachments found.');
+      return;
+    }
+
+    setDocGroup('ATTACH');
+    setDocItems(pdfItems);
+
+    const safeIdx = Math.min(
+      Math.max(0, startDocIndex),
+      Math.max(0, pdfItems.length - 1)
+    );
+
+    setDocIndex(safeIdx);
+    setDocModalVisible(true);
+    loadDocIntoModal(pdfItems[safeIdx].url);
+  };
+
+  return (
+    <View style={styles.screen}>
+      <ScrollView
+        contentContainerStyle={styles.details}
+        keyboardShouldPersistTaps="handled"
+      >
+        <Text style={styles.title}>Work Order Details</Text>
+
+        {/* Main Info Card */}
+        <View style={styles.card}>
+          <View style={styles.row}>
+            <Text style={styles.label}>Work Order #:</Text>
+            <Text style={styles.value}>{workOrderNumber}</Text>
+          </View>
+
+          <View style={styles.row}>
+            <Text style={styles.label}>PO #:</Text>
+            <Text style={styles.value}>{poNumber}</Text>
+          </View>
+
+          <View style={styles.row}>
+            <Text style={styles.label}>Customer:</Text>
+            <Text style={styles.value}>{customer}</Text>
+          </View>
+
+          <View style={styles.row}>
+            <Text style={styles.label}>Customer Phone:</Text>
+            {customerPhone ? (
+              <TouchableOpacity onPress={() => callNumber(customerPhone)}>
+                <Text style={[styles.value, styles.linkText]}>
+                  {customerPhone}
+                </Text>
+              </TouchableOpacity>
+            ) : (
+              <Text style={styles.value}>—</Text>
+            )}
+          </View>
+
+          <View style={styles.row}>
+            <Text style={styles.label}>Customer Email:</Text>
+            {customerEmail ? (
+              <TouchableOpacity onPress={() => emailTo(customerEmail)}>
+                <Text style={[styles.value, styles.linkText]}>
+                  {customerEmail}
+                </Text>
+              </TouchableOpacity>
+            ) : (
+              <Text style={styles.value}>—</Text>
+            )}
+          </View>
+
+          <View style={styles.row}>
+            <Text style={styles.label}>Site Location:</Text>
+            <Text style={styles.value}>{siteName || '—'}</Text>
+          </View>
+
+          <View style={styles.row}>
+            <Text style={styles.label}>Site Address:</Text>
+            {siteAddress ? (
+              <TouchableOpacity onPress={() => openMap(siteAddress)}>
+                <Text style={[styles.value, styles.linkText]}>
+                  {siteAddress}
+                </Text>
+              </TouchableOpacity>
+            ) : (
+              <Text style={styles.value}>—</Text>
+            )}
+          </View>
+
+          <View style={styles.row}>
+            <Text style={styles.label}>Billing Address:</Text>
+            <Text style={styles.value}>{billingAddress || '—'}</Text>
+          </View>
+
+          <View style={styles.row}>
+            <Text style={styles.label}>Problem Description:</Text>
+            <Text style={styles.value}>{problem}</Text>
+          </View>
+
+          <View style={[styles.row, { alignItems: 'center' }]}>
+            <Text style={styles.label}>Status:</Text>
+            <Text style={[styles.value, { flex: 0 }]}>
+              {status}
+              {isStatusSaving ? ' …' : ''}
+            </Text>
+
+            <TouchableOpacity
+              style={[styles.smallBtn, isStatusSaving && { opacity: 0.6 }]}
+              onPress={openStatusModal}
+              disabled={isStatusSaving}
+            >
+              <Text style={styles.smallBtnText}>
+                {isStatusSaving ? 'Saving…' : 'Change'}
+              </Text>
+            </TouchableOpacity>
+          </View>
+
+          <View style={styles.row}>
+            <Text style={styles.label}>Scheduled Date:</Text>
+            <Text style={styles.value}>{scheduled}</Text>
+          </View>
+
+          <View style={styles.row}>
+            <Text style={styles.label}>Date Created:</Text>
+            <Text style={styles.value}>{createdDateDisplay}</Text>
+          </View>
+        </View>
+
+        {/* Back */}
+        <TouchableOpacity
+          style={[styles.buttonBase, styles.backBtn]}
+          onPress={() => navigation.goBack()}
+        >
+          <Text style={styles.backText}>Back to List</Text>
+        </TouchableOpacity>
+
+        {/* Documents */}
+        <Text style={styles.sectionHeader}>Documents</Text>
+
+        <View style={styles.tilesGrid}>
+          <TouchableOpacity style={styles.tile} onPress={() => openDocGroup('WO', 0)}>
+            <View style={styles.tileIconCircle}>
+              <Text style={styles.tileIconText}>WO</Text>
+            </View>
+            <Text style={styles.tileTitle}>Work Order</Text>
+            <Text style={styles.tileSub}>{woPdfUrl ? 'Tap to view' : 'No file'}</Text>
+            {woPdfUrl && <Text style={styles.tileBadge}>PDF</Text>}
+          </TouchableOpacity>
+
+          <TouchableOpacity style={styles.tile} onPress={() => openDocGroup('EST', 0)}>
+            <View style={styles.tileIconCircle}>
+              <Text style={styles.tileIconText}>EST</Text>
+            </View>
+            <Text style={styles.tileTitle}>Estimates</Text>
+            <Text style={styles.tileSub}>
+              {estimateUrls.length
+                ? `${estimateUrls.length} file${estimateUrls.length > 1 ? 's' : ''}`
+                : 'None'}
+            </Text>
+            {!!estimateUrls.length && <Text style={styles.tileBadge}>PDF</Text>}
+          </TouchableOpacity>
+
+          <TouchableOpacity style={styles.tile} onPress={() => openDocGroup('PO', 0)}>
+            <View style={styles.tileIconCircle}>
+              <Text style={styles.tileIconText}>PO</Text>
+            </View>
+            <Text style={styles.tileTitle}>POs</Text>
+            <Text style={styles.tileSub}>
+              {poUrls.length
+                ? `${poUrls.length} file${poUrls.length > 1 ? 's' : ''}`
+                : 'None'}
+            </Text>
+            {!!poUrls.length && <Text style={styles.tileBadge}>PDF</Text>}
+          </TouchableOpacity>
+        </View>
+
+        {/* Quick Actions */}
+        <View style={{ marginTop: 10 }}>
+          <TouchableOpacity
+            style={[styles.buttonBase, styles.attachBtn]}
+            onPress={openAnnotator}
+          >
+            <Text style={styles.attachText}>Annotate & Sign PDF</Text>
+          </TouchableOpacity>
+
+          <TouchableOpacity
+            style={[
+              styles.buttonBase,
+              styles.photoBtn,
+              (isCameraUploading || isStatusSaving) && { opacity: 0.75 },
+            ]}
+            onPress={openCamera}
+            disabled={isCameraUploading}
+          >
+            <Text style={styles.photoText}>
+              {isCameraUploading ? 'Uploading…' : 'Take Photo (Camera)'}
+            </Text>
+          </TouchableOpacity>
+
+          <TouchableOpacity
+            style={[styles.buttonBase, styles.photoBtn]}
+            onPress={uploadPhotos}
+          >
+            <Text style={styles.photoText}>Upload Photo(s) from Library</Text>
+          </TouchableOpacity>
+
+          <TouchableOpacity
+            style={[styles.buttonBase, styles.attachBtn]}
+            onPress={() => setViewAttachmentsVisible(true)}
+          >
+            <Text style={styles.attachText}>View Attachments</Text>
+          </TouchableOpacity>
+
+          <TouchableOpacity
+            style={[styles.buttonBase, styles.noteBtn]}
+            onPress={() => setShowAddNoteModal(true)}
+          >
+            <Text style={styles.noteText}>Add Note</Text>
+          </TouchableOpacity>
+
+          <TouchableOpacity
+            style={[styles.buttonBase, styles.drawBtn]}
+            onPress={() => setSketchVisible(true)}
+          >
+            <Text style={styles.drawText}>Draw Note</Text>
+          </TouchableOpacity>
+        </View>
+
+        {/* Notes */}
+        {notes.length > 0 && (
+          <>
+            <Text style={styles.sectionHeader}>Notes</Text>
+            {notes.map((n, i) => (
+              <View key={i} style={styles.noteCard}>
+                <Text style={styles.noteTimestamp}>
+                  {n?.createdAt ? moment(n.createdAt).format('YYYY-MM-DD HH:mm') : ''}
+                  {n?.by ? `  •  ${n.by}` : ''}
+                </Text>
+                <Text style={styles.noteBody}>{n?.text || ''}</Text>
+              </View>
+            ))}
+          </>
+        )}
+      </ScrollView>
+
+      {/* (SECTION 6 continues below… modals + remaining UI + styles) */}
+    </View>
+  );
+// ================================
+// SECTION 6 of 6
+// ALL Modals + FINAL Styles (and the ONLY upload helpers live in Section 4)
+// ✅ FIXES your error by making sure we DO NOT redeclare uploadCameraPhotoNow anywhere
+// ================================
+
+      {/* Photo Viewer for uploaded attachments */}
+      <Modal visible={photoViewerVisible} animationType="fade" onRequestClose={closePhotoViewer}>
+        <View style={styles.viewerContainer}>
+          <FlatList
+            data={photos}
+            keyExtractor={(_, i) => i.toString()}
+            horizontal
+            pagingEnabled
+            initialScrollIndex={viewerIndex}
+            getItemLayout={(_, idx) => ({ length: screenWidth, offset: screenWidth * idx, index: idx })}
+            onMomentumScrollEnd={(ev) => {
+              const x = ev?.nativeEvent?.contentOffset?.x ?? 0;
+              const idx = Math.round(x / screenWidth);
+              setViewerIndex(Number.isFinite(idx) ? idx : 0);
+            }}
+            renderItem={({ item }) => <Image source={{ uri: item }} style={styles.fullScreenImage} />}
+          />
+          <View style={styles.viewerButtons}>
+            <TouchableOpacity style={[styles.viewerButton, styles.shareBtn]} onPress={handleShare}>
+              <Text style={styles.shareText}>Share</Text>
+            </TouchableOpacity>
+            <TouchableOpacity style={[styles.viewerButton, styles.exitBtn]} onPress={closePhotoViewer}>
+              <Text style={styles.exitText}>Exit</Text>
+            </TouchableOpacity>
+          </View>
+        </View>
+      </Modal>
+
+      {/* Attachments Gallery (photos + PDFs) */}
+      <Modal
+        visible={viewAttachmentsVisible}
+        animationType="fade"
+        transparent
+        statusBarTranslucent
+        presentationStyle="overFullScreen"
+        onRequestClose={() => setViewAttachmentsVisible(false)}
+      >
+        <View style={styles.modal}>
+          <Text style={styles.modalTitle}>Attachments</Text>
+
+          {(() => {
+            const keys = (workOrder?.photoPath || '')
+              .split(',')
+              .map((s) => s.trim())
+              .filter(Boolean);
+
+            if (!keys.length) {
+              return <Text style={styles.noPhotosText}>No attachments uploaded.</Text>;
+            }
+
+            return (
+              <FlatList
+                data={keys}
+                keyExtractor={(item, i) => `${item}-${i}`}
+                numColumns={3}
+                contentContainerStyle={styles.galleryList}
+                renderItem={({ item, index }) => {
+                  const url = fileUrl(item);
+                  const lower = item.toLowerCase();
+                  const isPdf =
+                    lower.endsWith('.pdf') ||
+                    lower.includes('.pdf?') ||
+                    lower.startsWith('data:application/pdf');
+
+                  if (isPdf) {
+                    return (
+                      <View style={styles.thumbWrapper}>
+                        <TouchableOpacity
+                          style={styles.pdfTile}
+                          onPress={() => {
+                            setViewAttachmentsVisible(false);
+                            openAttachmentPdf(index);
+                          }}
+                        >
+                          <Text style={styles.pdfIcon}>📄</Text>
+                          <Text style={styles.pdfLabel} numberOfLines={2}>
+                            PDF Attachment
+                          </Text>
+                        </TouchableOpacity>
+
+                        <TouchableOpacity
+                          style={styles.deleteIcon}
+                          onPress={() => handleDeletePhoto(index)}
+                          hitSlop={{ top: 8, left: 8, right: 8, bottom: 8 }}
+                        >
+                          <Text style={styles.deleteText}>×</Text>
+                        </TouchableOpacity>
+                      </View>
+                    );
+                  }
+
+                  return (
+                    <View style={styles.thumbWrapper}>
+                      <TouchableOpacity
+                        onPress={() => {
+                          const viewerIdx = photos.findIndex((p) => p === url);
+                          if (viewerIdx !== -1) {
+                            setReturnToAttachments(true);
+                            setViewerIndex(viewerIdx);
+                            setPhotoViewerVisible(true);
+                            setViewAttachmentsVisible(false);
+                          }
+                        }}
+                      >
+                        <Image source={{ uri: url }} style={styles.thumbnail} />
+                      </TouchableOpacity>
+
+                      <TouchableOpacity
+                        style={styles.deleteIcon}
+                        onPress={() => handleDeletePhoto(index)}
+                        hitSlop={{ top: 8, left: 8, right: 8, bottom: 8 }}
+                      >
+                        <Text style={styles.deleteText}>×</Text>
+                      </TouchableOpacity>
+                    </View>
+                  );
+                }}
+              />
+            );
+          })()}
+
+          <TouchableOpacity style={styles.cancelBtn} onPress={() => setViewAttachmentsVisible(false)}>
+            <Text style={styles.cancelText}>Close</Text>
+          </TouchableOpacity>
+        </View>
+      </Modal>
+
+      {/* Add Note Modal — keyboard-safe */}
+      <Modal
+        visible={showAddNoteModal}
+        animationType="fade"
+        transparent
+        statusBarTranslucent
+        presentationStyle="overFullScreen"
+        onRequestClose={() => setShowAddNoteModal(false)}
+      >
+        <KeyboardAvoidingView
+          behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
+          keyboardVerticalOffset={Platform.select({ ios: 80, android: 0 })}
+          style={styles.addNoteOverlay}
+        >
+          <View style={styles.addNoteContainer}>
+            <Text style={styles.addNoteTitle}>New Note</Text>
+
+            <TextInput
+              style={styles.addNoteInput}
+              multiline
+              placeholder="Enter your note…"
+              value={newNoteText}
+              onChangeText={setNewNoteText}
+              autoFocus
+              blurOnSubmit={false}
+              textAlignVertical="top"
+            />
+
+            <View style={styles.addNoteButtons}>
+              <TouchableOpacity style={styles.saveNoteBtn} onPress={addNote}>
+                <Text style={styles.saveNoteText}>Save</Text>
+              </TouchableOpacity>
+              <TouchableOpacity style={styles.cancelNoteBtn} onPress={() => setShowAddNoteModal(false)}>
+                <Text style={styles.cancelNoteText}>Cancel</Text>
+              </TouchableOpacity>
+            </View>
+          </View>
+        </KeyboardAvoidingView>
+      </Modal>
+
+      {/* Change Status Modal */}
+      <Modal
+        visible={showStatusModal}
+        animationType="fade"
+        transparent
+        statusBarTranslucent
+        presentationStyle="overFullScreen"
+        onRequestClose={() => setShowStatusModal(false)}
+      >
+        <View style={styles.addNoteOverlay}>
+          <View style={styles.addNoteContainer}>
+            <Text style={styles.addNoteTitle}>Change Status</Text>
+
+            <View style={styles.statusList}>
+              {STATUS_OPTIONS.map((s) => (
+                <TouchableOpacity
+                  key={s}
+                  style={[styles.statusOption, pendingStatus === s && styles.statusOptionActive]}
+                  onPress={() => setPendingStatus(s)}
+                >
+                  <Text style={[styles.statusText, pendingStatus === s && styles.statusTextActive]}>
+                    {s}
+                  </Text>
+                </TouchableOpacity>
+              ))}
+            </View>
+
+            <View style={styles.addNoteButtons}>
+              <TouchableOpacity style={styles.saveNoteBtn} onPress={applyStatus}>
+                <Text style={styles.saveNoteText}>Apply</Text>
+              </TouchableOpacity>
+              <TouchableOpacity style={styles.cancelNoteBtn} onPress={() => setShowStatusModal(false)}>
+                <Text style={styles.cancelNoteText}>Cancel</Text>
+              </TouchableOpacity>
+            </View>
+          </View>
+        </View>
+      </Modal>
+
+      {/* Draw Note Modal (JPEG export) */}
+      <Modal visible={sketchVisible} animationType="slide" onRequestClose={() => setSketchVisible(false)}>
+        <SafeAreaView style={{ flex: 1, backgroundColor: '#000' }}>
+          <WebView
+            originWhitelist={['*']}
+            source={{ html: SKETCH_HTML }}
+            javaScriptEnabled
+            domStorageEnabled
+            scrollEnabled
+            nestedScrollEnabled
+            showsVerticalScrollIndicator
+            onMessage={onSketchMessage}
+            style={{ flex: 1 }}
+          />
+        </SafeAreaView>
+      </Modal>
+
+      {/* Annotate & Sign Modal */}
+      <Modal visible={annotateVisible} animationType="slide" onRequestClose={() => setAnnotateVisible(false)}>
+        <SafeAreaView style={{ flex: 1, backgroundColor: '#000' }}>
+          {pdfBase64 ? (
+            <WebView
+              ref={annotatorRef}
+              originWhitelist={['*']}
+              source={{ html: ANNOTATOR_HTML }}
+              javaScriptEnabled
+              domStorageEnabled
+              scrollEnabled
+              nestedScrollEnabled
+              showsVerticalScrollIndicator
+              decelerationRate="normal"
+              overScrollMode="always"
+              onMessage={onAnnotatorMessage}
+              injectedJavaScriptBeforeContentLoaded={`window.PDF_BASE64 = ${JSON.stringify(pdfBase64)}; true;`}
+              style={{ flex: 1 }}
+            />
+          ) : (
+            <View style={styles.center}>
+              <Text style={styles.loadingText}>Loading PDF…</Text>
+            </View>
+          )}
+        </SafeAreaView>
+      </Modal>
+
+      {/* Document Lightbox Modal (for WO/EST/PO/ATTACH) */}
+      <Modal visible={docModalVisible} animationType="slide" onRequestClose={() => setDocModalVisible(false)}>
+        <SafeAreaView style={{ flex: 1, backgroundColor: '#000' }}>
+          <View style={styles.docHeader}>
+            <TouchableOpacity onPress={() => setDocModalVisible(false)} style={styles.docHeaderBtn}>
+              <Text style={styles.docHeaderBtnText}>Close</Text>
+            </TouchableOpacity>
+
+            <Text style={styles.docHeaderTitle}>
+              {docItems[docIndex]?.title ||
+                (docGroup === 'WO'
+                  ? 'Work Order'
+                  : docGroup === 'EST'
+                  ? 'Estimate'
+                  : docGroup === 'PO'
+                  ? 'PO'
+                  : docGroup === 'ATTACH'
+                  ? 'Attachment'
+                  : 'Document')}
+              {docItems.length > 1 ? `  (${docIndex + 1}/${docItems.length})` : ''}
+            </Text>
+
+            <View style={styles.docHeaderRight}>
+              {!!docItems.length && (
+                <TouchableOpacity
+                  onPress={() => Linking.openURL(docItems[docIndex].url)}
+                  style={styles.docHeaderBtn}
+                >
+                  <Text style={styles.docHeaderBtnText}>Open</Text>
+                </TouchableOpacity>
+              )}
+            </View>
+          </View>
+
+          <View style={{ flex: 1 }}>
+            {docLoading && (
+              <View style={[styles.center, { backgroundColor: '#000' }]}>
+                <Text style={{ color: '#fff' }}>Loading…</Text>
+              </View>
+            )}
+
+            {!!docError && (
+              <View style={[styles.center, { padding: 16 }]}>
+                <Text style={{ color: '#ff6b6b', textAlign: 'center' }}>
+                  Couldn’t load document: {docError}
+                </Text>
+              </View>
+            )}
+
+            {!!docB64 && !docError && (
+              <WebView
+                originWhitelist={['*']}
+                source={{ html: PDF_VIEWER_HTML }}
+                javaScriptEnabled
+                scrollEnabled
+                nestedScrollEnabled
+                showsVerticalScrollIndicator
+                automaticallyAdjustContentInsets={false}
+                onMessage={(e) => {
+                  const msg = e?.nativeEvent?.data || '';
+                  if (msg.startsWith('HEIGHT:')) {
+                    const h = parseInt(msg.slice(7), 10);
+                    if (Number.isFinite(h)) setDocHeight(Math.min(h + 200, screenHeight * 5));
+                  } else if (msg.startsWith('ERROR:')) {
+                    setDocError(msg.slice(6));
+                  }
+                }}
+                injectedJavaScriptBeforeContentLoaded={`window.PDF_BASE64 = ${JSON.stringify(docB64)}; true;`}
+                style={{ flex: 1, height: docHeight, backgroundColor: '#000' }}
+              />
+            )}
+          </View>
+
+          {docItems.length > 1 && (
+            <View style={styles.docNavBar}>
+              <TouchableOpacity onPress={prevDoc} style={[styles.docNavBtn, { marginRight: 8 }]}>
+                <Text style={styles.docNavText}>Prev</Text>
+              </TouchableOpacity>
+              <TouchableOpacity onPress={nextDoc} style={[styles.docNavBtn, { marginLeft: 8 }]}>
+                <Text style={styles.docNavText}>Next</Text>
+              </TouchableOpacity>
+            </View>
+          )}
+        </SafeAreaView>
+      </Modal>
+    </View>
+  );
+}
+
+// ================================
+// FINAL STYLES (matches web CRM vibe)
+// IMPORTANT: This file MUST have only ONE StyleSheet.create
+// ================================
 const styles = StyleSheet.create({
   /* ---------- Page ---------- */
-  screen: {
-    flex: 1,
-    backgroundColor: '#F1F5F9',
-  },
-  details: {
-    padding: 16,
-    paddingBottom: 28,
-  },
+  screen: { flex: 1, backgroundColor: '#F1F5F9' },
+  details: { padding: 16, paddingBottom: 28 },
 
   title: {
     fontSize: 24,
@@ -1122,112 +1769,38 @@ const styles = StyleSheet.create({
     elevation: 3,
   },
 
-  row: {
-    flexDirection: 'row',
-    marginBottom: 10,
-    flexWrap: 'wrap',
-  },
+  row: { flexDirection: 'row', marginBottom: 10, flexWrap: 'wrap' },
 
-  label: {
-    width: 150,
-    fontWeight: '700',
-    color: '#1E3A8A', // web CRM blue
-  },
-
-  value: {
-    flex: 1,
-    color: '#0F172A',
-    fontWeight: '500',
-  },
-
-  linkText: {
-    color: '#2563EB',
-    textDecorationLine: 'underline',
-    fontWeight: '600',
-  },
+  label: { width: 150, fontWeight: '700', color: '#1E3A8A' },
+  value: { flex: 1, color: '#0F172A', fontWeight: '500' },
+  linkText: { color: '#2563EB', textDecorationLine: 'underline', fontWeight: '600' },
 
   /* ---------- Buttons ---------- */
-  buttonBase: {
-    width: '100%',
-    paddingVertical: 13,
-    borderRadius: 10,
-    alignItems: 'center',
-    marginBottom: 12,
-  },
+  buttonBase: { width: '100%', paddingVertical: 13, borderRadius: 10, alignItems: 'center', marginBottom: 12 },
 
-  backBtn: {
-    backgroundColor: '#334155',
-  },
-  backText: {
-    color: '#ffffff',
-    fontWeight: '800',
-    fontSize: 16,
-  },
+  backBtn: { backgroundColor: '#334155' },
+  backText: { color: '#ffffff', fontWeight: '800', fontSize: 16 },
 
-  photoBtn: {
-    backgroundColor: '#2563EB',
-  },
-  photoText: {
-    color: '#ffffff',
-    fontWeight: '800',
-    fontSize: 16,
-  },
+  photoBtn: { backgroundColor: '#2563EB' },
+  photoText: { color: '#ffffff', fontWeight: '800', fontSize: 16 },
 
-  attachBtn: {
-    backgroundColor: '#1E293B',
-  },
-  attachText: {
-    color: '#ffffff',
-    fontWeight: '800',
-    fontSize: 16,
-  },
+  attachBtn: { backgroundColor: '#1E293B' },
+  attachText: { color: '#ffffff', fontWeight: '800', fontSize: 16 },
 
-  noteBtn: {
-    backgroundColor: '#F59E0B',
-  },
-  noteText: {
-    color: '#111827',
-    fontWeight: '800',
-    fontSize: 16,
-  },
+  noteBtn: { backgroundColor: '#F59E0B' },
+  noteText: { color: '#111827', fontWeight: '800', fontSize: 16 },
 
-  drawBtn: {
-    backgroundColor: '#16A34A',
-  },
-  drawText: {
-    color: '#ffffff',
-    fontWeight: '800',
-    fontSize: 16,
-  },
+  drawBtn: { backgroundColor: '#16A34A' },
+  drawText: { color: '#ffffff', fontWeight: '800', fontSize: 16 },
 
-  smallBtn: {
-    marginLeft: 10,
-    paddingHorizontal: 12,
-    paddingVertical: 6,
-    backgroundColor: '#2563EB',
-    borderRadius: 999,
-  },
-  smallBtnText: {
-    color: '#ffffff',
-    fontWeight: '800',
-    fontSize: 13,
-  },
+  smallBtn: { marginLeft: 10, paddingHorizontal: 12, paddingVertical: 6, backgroundColor: '#2563EB', borderRadius: 999 },
+  smallBtnText: { color: '#ffffff', fontWeight: '800', fontSize: 13 },
 
   /* ---------- Section Headers ---------- */
-  sectionHeader: {
-    fontSize: 18,
-    fontWeight: '900',
-    color: '#0F172A',
-    marginVertical: 10,
-  },
+  sectionHeader: { fontSize: 18, fontWeight: '900', color: '#0F172A', marginVertical: 10 },
 
   /* ---------- Document Tiles ---------- */
-  tilesGrid: {
-    flexDirection: 'row',
-    flexWrap: 'wrap',
-    gap: 12,
-    marginBottom: 8,
-  },
+  tilesGrid: { flexDirection: 'row', flexWrap: 'wrap', gap: 12, marginBottom: 8 },
 
   tile: {
     flexBasis: '31%',
@@ -1254,23 +1827,9 @@ const styles = StyleSheet.create({
     marginBottom: 8,
   },
 
-  tileIconText: {
-    color: '#ffffff',
-    fontWeight: '900',
-    fontSize: 14,
-  },
-
-  tileTitle: {
-    fontWeight: '800',
-    color: '#0F172A',
-    marginBottom: 2,
-  },
-
-  tileSub: {
-    color: '#64748B',
-    fontSize: 12,
-    textAlign: 'center',
-  },
+  tileIconText: { color: '#ffffff', fontWeight: '900', fontSize: 14 },
+  tileTitle: { fontWeight: '800', color: '#0F172A', marginBottom: 2 },
+  tileSub: { color: '#64748B', fontSize: 12, textAlign: 'center' },
 
   tileBadge: {
     marginTop: 6,
@@ -1285,208 +1844,92 @@ const styles = StyleSheet.create({
   },
 
   /* ---------- Notes ---------- */
-  noteCard: {
-    backgroundColor: '#ffffff',
-    borderRadius: 12,
-    padding: 14,
-    marginBottom: 10,
-    borderWidth: 1,
-    borderColor: '#E2E8F0',
-  },
-
-  noteTimestamp: {
-    fontSize: 12,
-    color: '#64748B',
-    marginBottom: 6,
-    fontWeight: '600',
-  },
-
-  noteBody: {
-    fontSize: 14,
-    color: '#0F172A',
-    lineHeight: 20,
-  },
+  noteCard: { backgroundColor: '#ffffff', borderRadius: 12, padding: 14, marginBottom: 10, borderWidth: 1, borderColor: '#E2E8F0' },
+  noteTimestamp: { fontSize: 12, color: '#64748B', marginBottom: 6, fontWeight: '600' },
+  noteBody: { fontSize: 14, color: '#0F172A', lineHeight: 20 },
 
   /* ---------- Shared ---------- */
-  center: {
-    flex: 1,
-    justifyContent: 'center',
+  center: { flex: 1, justifyContent: 'center', alignItems: 'center' },
+  loadingText: { fontSize: 18, color: '#2563EB', fontWeight: '700' },
+
+  /* ---------- Photo viewer ---------- */
+  viewerContainer: { flex: 1, backgroundColor: '#000' },
+  fullScreenImage: { width: screenWidth, height: screenHeight, resizeMode: 'contain' },
+  viewerButtons: {
+    position: 'absolute',
+    bottom: 40,
+    left: 0,
+    right: 0,
+    flexDirection: 'row',
+    justifyContent: 'space-around',
+  },
+  viewerButton: { flex: 1, marginHorizontal: 8, padding: 12, borderRadius: 8, alignItems: 'center' },
+  shareBtn: { backgroundColor: 'rgba(255,255,255,0.3)' },
+  shareText: { color: '#fff', fontWeight: '600', fontSize: 16 },
+  exitBtn: { backgroundColor: 'rgba(220,53,69,0.85)' },
+  exitText: { color: '#fff', fontWeight: '600', fontSize: 16 },
+
+  /* ---------- Attachments modal ---------- */
+  modal: { flex: 1, padding: 16, backgroundColor: '#fff', marginTop: 80, borderTopLeftRadius: 12, borderTopRightRadius: 12 },
+  modalTitle: { fontSize: 18, fontWeight: '700', marginBottom: 12, textAlign: 'center', color: '#0F172A' },
+  noPhotosText: { textAlign: 'center', marginTop: 20, fontStyle: 'italic' },
+  galleryList: { paddingBottom: 16 },
+  thumbWrapper: { flex: 1 / 3, aspectRatio: 1, padding: 4 },
+  thumbnail: { width: '100%', height: '100%', borderRadius: 8 },
+  deleteIcon: {
+    position: 'absolute',
+    top: 6,
+    right: 6,
+    backgroundColor: 'rgba(0,0,0,0.6)',
+    width: 24,
+    height: 24,
+    borderRadius: 12,
     alignItems: 'center',
+    justifyContent: 'center',
   },
-  loadingText: {
-    fontSize: 18,
-    color: '#2563EB',
-    fontWeight: '700',
+  deleteText: { color: '#fff', fontSize: 14, lineHeight: 18 },
+  cancelBtn: { backgroundColor: '#dc3545', padding: 12, borderRadius: 8, alignItems: 'center', marginTop: 16 },
+  cancelText: { color: '#fff', fontWeight: '700', fontSize: 16 },
+
+  /* ---------- PDF tiles in attachments ---------- */
+  pdfTile: {
+    flex: 1,
+    borderRadius: 8,
+    borderWidth: 1,
+    borderColor: '#E5E7EB',
+    backgroundColor: '#F9FAFB',
+    alignItems: 'center',
+    justifyContent: 'center',
+    padding: 6,
   },
+  pdfIcon: { fontSize: 24, marginBottom: 4 },
+  pdfLabel: { fontSize: 11, color: '#111827', textAlign: 'center' },
+
+  /* ---------- Add note overlays ---------- */
+  addNoteOverlay: { flex: 1, backgroundColor: 'rgba(0,0,0,0.45)', justifyContent: 'center', padding: 16 },
+  addNoteContainer: { backgroundColor: '#fff', borderRadius: 12, padding: 16 },
+  addNoteTitle: { fontSize: 18, fontWeight: '700', marginBottom: 12, textAlign: 'center', color: '#0F172A' },
+  addNoteInput: { height: 120, borderColor: '#cfd5dd', borderWidth: 1, borderRadius: 10, padding: 10, textAlignVertical: 'top', marginBottom: 12 },
+  addNoteButtons: { flexDirection: 'row', justifyContent: 'space-around' },
+  saveNoteBtn: { backgroundColor: '#16A34A', padding: 10, borderRadius: 8, flex: 1, marginHorizontal: 4 },
+  saveNoteText: { color: '#fff', textAlign: 'center', fontWeight: '700' },
+  cancelNoteBtn: { backgroundColor: '#dc3545', padding: 10, borderRadius: 8, flex: 1, marginHorizontal: 4 },
+  cancelNoteText: { color: '#fff', textAlign: 'center', fontWeight: '700' },
+
+  statusList: { gap: 8 },
+  statusOption: { padding: 12, borderWidth: 1, borderColor: '#e2e8f0', borderRadius: 10, backgroundColor: '#fff' },
+  statusOptionActive: { backgroundColor: '#2563EB' },
+  statusText: { color: '#0F172A', fontWeight: '700' },
+  statusTextActive: { color: '#fff' },
+
+  /* ---------- Doc modal header/nav ---------- */
+  docHeader: { paddingHorizontal: 12, paddingTop: 6, paddingBottom: 6, backgroundColor: '#0b0f14', flexDirection: 'row', alignItems: 'center' },
+  docHeaderBtn: { paddingVertical: 6, paddingHorizontal: 10, backgroundColor: '#1f2937', borderRadius: 8, marginRight: 8 },
+  docHeaderBtnText: { color: '#fff', fontWeight: '700' },
+  docHeaderTitle: { color: '#fff', fontWeight: '800', fontSize: 16, flex: 1, textAlign: 'center' },
+  docHeaderRight: { flexDirection: 'row', alignItems: 'center', gap: 8 },
+
+  docNavBar: { flexDirection: 'row', justifyContent: 'center', padding: 12, backgroundColor: '#0b0f14' },
+  docNavBtn: { paddingVertical: 10, paddingHorizontal: 16, backgroundColor: '#1f2937', borderRadius: 999 },
+  docNavText: { color: '#fff', fontWeight: '700' },
 });
-// ================================
-// SECTION 6 of 6
-// Attachments separation (Photos vs Draw Notes) + dated filenames
-// Final full ViewWorkOrder.js (DROP-IN) notes / instructions
-// ================================
-
-/**
- * ✅ GOAL MET:
- * 1) Photos saved with date in filename (YYYY-MM-DD) so you can split initial vs final trip photos.
- * 2) Draw notes saved with date AND a different prefix so the web CRM can tell them apart.
- * 3) We DO NOT break your existing “View Attachments” and lightbox behavior.
- *
- * ✅ HOW IT WORKS:
- * - Camera photos:    PHOTO_YYYY-MM-DD_<timestamp>.jpg
- * - Library photos:   PHOTO_YYYY-MM-DD_<timestamp>_<i>.jpg
- * - Draw notes (jpeg):DRAWNOTE_YYYY-MM-DD_<timestamp>.jpg
- *
- * ✅ IMPORTANT:
- * Your backend still stores everything in workOrder.photoPath (single list).
- * This change ONLY makes the *filenames* self-identifying, so later your WEB CRM
- * can split them into:
- *   - Photos section: filenames that start with "PHOTO_"
- *   - Draw Notes section: filenames that start with "DRAWNOTE_"
- *
- * If your backend renames uploads server-side, we’ll need to adjust the server
- * to preserve the incoming original file name. But if it already keeps names,
- * this works immediately.
- */
-
-/* ---------- Add these helpers near your other helpers (top-level, inside file) ---------- */
-
-// Dated stamp in America/Chicago style (local device timezone)
-const fileDateStamp = () => moment().format('YYYY-MM-DD');
-const safeTs = () => Date.now();
-
-/** Build filenames so web CRM can split types later */
-const makePhotoFileName = () => `PHOTO_${fileDateStamp()}_${safeTs()}.jpg`;
-const makePhotoFileNameWithIndex = (i) => `PHOTO_${fileDateStamp()}_${safeTs()}_${i}.jpg`;
-const makeDrawNoteFileName = () => `DRAWNOTE_${fileDateStamp()}_${safeTs()}.jpg`;
-
-/* ---------- Replace your uploadCameraPhotoNow with this version ---------- */
-const uploadCameraPhotoNow = async (uri) => {
-  const form = new FormData();
-  const processedUri = await processImageForUpload(uri);
-
-  // ✅ NEW: dated, typed filename
-  const name = makePhotoFileName();
-
-  form.append('photoFile', {
-    uri: processedUri,
-    name,
-    type: 'image/jpeg',
-  });
-
-  await api.put(`/work-orders/${workOrderId}/edit`, form, {
-    headers: { 'Content-Type': 'multipart/form-data', ...authHeaders() },
-  });
-};
-
-/* ---------- Replace your uploadPhotos (library multi-select) with this version ---------- */
-const uploadPhotos = async () => {
-  const { status } = await ImagePicker.requestMediaLibraryPermissionsAsync();
-  if (status !== 'granted') return Alert.alert('Permission required', 'Need photo library access.');
-
-  const result = await ImagePicker.launchImageLibraryAsync({
-    mediaTypes: ImagePicker.MediaTypeOptions.Images,
-    allowsMultipleSelection: true,
-    quality: 1,
-  });
-
-  if (result.canceled || !result.assets?.length) return;
-
-  const form = new FormData();
-
-  for (let i = 0; i < result.assets.length; i++) {
-    const processedUri = await processImageForUpload(result.assets[i].uri);
-
-    // ✅ NEW: dated, typed filename with index
-    const name = makePhotoFileNameWithIndex(i);
-
-    form.append('photoFile', {
-      uri: processedUri,
-      name,
-      type: 'image/jpeg',
-    });
-  }
-
-  try {
-    await api.put(`/work-orders/${workOrderId}/edit`, form, {
-      headers: { 'Content-Type': 'multipart/form-data', ...authHeaders() },
-    });
-    await fetchWorkOrder();
-    Alert.alert('Success', 'Photos uploaded!');
-  } catch (err) {
-    Alert.alert('Upload Error', err?.response?.data?.error || err.message);
-  }
-};
-
-/* ---------- Replace the IMAGE upload part inside onSketchMessage with this version ---------- */
-const onSketchMessage = async (ev) => {
-  const msg = ev?.nativeEvent?.data || '';
-  if (typeof msg !== 'string') return;
-
-  if (msg.startsWith('ERROR:')) {
-    Alert.alert('Draw Notes Error', msg.slice(6));
-    return;
-  }
-
-  if (msg === 'CLOSE') {
-    setSketchVisible(false);
-    return;
-  }
-
-  if (msg.startsWith('IMAGE:')) {
-    const b64 = msg.slice(6);
-    try {
-      const jpgPath = FileSystem.cacheDirectory + `drawing_${safeTs()}.jpg`;
-      await FileSystem.writeAsStringAsync(jpgPath, b64, {
-        encoding: FileSystem.EncodingType.Base64,
-      });
-
-      const processed = await processImageForUpload(jpgPath);
-      const form = new FormData();
-
-      // ✅ NEW: draw notes get their own typed + dated filename
-      form.append('photoFile', {
-        uri: processed,
-        name: makeDrawNoteFileName(),
-        type: 'image/jpeg',
-      });
-
-      await api.put(`/work-orders/${workOrderId}/edit`, form, {
-        headers: { 'Content-Type': 'multipart/form-data', ...authHeaders() },
-      });
-
-      setSketchVisible(false);
-      await fetchWorkOrder();
-      Alert.alert('Uploaded', 'Drawing note uploaded.');
-    } catch (e) {
-      Alert.alert('Upload Error', e?.message || 'Failed to upload drawing note.');
-    }
-  }
-};
-
-/* ---------- OPTIONAL (recommended): separate attachments list into Photos vs Draw Notes inside the Attachments modal ---------- */
-/**
- * This does NOT change how anything is stored.
- * It only changes how the gallery is displayed:
- *   - Photos tab: shows PHOTO_*
- *   - Draw Notes tab: shows DRAWNOTE_*
- *   - PDFs remain in Attachments as before
- *
- * If you want this now, say: "yes split the attachments modal into tabs"
- * and I’ll patch that in (still keeping your lightbox behavior).
- */
-
-/* ---------- Execution notes (copy/paste ready) ----------
-1) Replace these three functions/sections exactly:
-   - uploadCameraPhotoNow
-   - uploadPhotos
-   - onSketchMessage IMAGE upload branch
-
-2) Add the helper functions near the top of the file:
-   - fileDateStamp, safeTs
-   - makePhotoFileName / makePhotoFileNameWithIndex
-   - makeDrawNoteFileName
-
-3) No other backend changes required IF your server preserves the incoming filename.
-   If your server always renames uploads, tell me what it renames to and we’ll
-   update the server to preserve original names (best) OR store type/date in metadata.
---------------------------------------------------------- */
