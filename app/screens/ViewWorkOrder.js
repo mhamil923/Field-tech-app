@@ -65,15 +65,16 @@ const authHeaders = () => {
  * ✅ Attachment filename conventions (Photos vs Draw Notes)
  *
  * Goal:
- * - Photos and Draw Notes both upload via the same backend field today (photoFile),
- *   BUT we can tell them apart later in the web CRM by the filename.
- * - Include the *visit date* in filenames so you can split "initial" vs "final" visit.
+ * - Photos + Draw Notes upload through same backend field "photoFile"
+ * - We differentiate later using filename (PHOTO vs DRAW)
+ * - Include visit date in filename so you can separate initial vs final trip
  *
  * Format:
  *   WO-<identifier>_<YYYY-MM-DD>_<TYPE>_<timestamp>.jpg
  * TYPE:
  *   PHOTO or DRAW
  * -------------------------------------------------------------------------- */
+
 const safeSlug = (v) =>
   String(v ?? '')
     .trim()
@@ -83,6 +84,9 @@ const safeSlug = (v) =>
 
 const dateStamp = (d = new Date()) => moment(d).format('YYYY-MM-DD');
 
+/**
+ * Generic attachment filename builder
+ */
 const buildAttachmentName = ({ workOrderNumberOrId, type, dateObj }) => {
   const wo = safeSlug(workOrderNumberOrId || 'WO');
   const date = dateStamp(dateObj || new Date());
@@ -90,6 +94,18 @@ const buildAttachmentName = ({ workOrderNumberOrId, type, dateObj }) => {
   const t = String(type || 'PHOTO').toUpperCase() === 'DRAW' ? 'DRAW' : 'PHOTO';
   return `WO-${wo}_${date}_${t}_${ts}.jpg`;
 };
+
+/**
+ * NOTE:
+ * Your Section 4 currently calls buildPhotoFilename() / buildDrawNoteFilename().
+ * Those did NOT exist in your code — that causes runtime errors.
+ * These wrappers keep the naming consistent and avoid missing-function bugs.
+ */
+const buildPhotoFilename = (workOrderNumberOrId, dateObj = new Date()) =>
+  buildAttachmentName({ workOrderNumberOrId, type: 'PHOTO', dateObj });
+
+const buildDrawNoteFilename = (workOrderNumberOrId, dateObj = new Date()) =>
+  buildAttachmentName({ workOrderNumberOrId, type: 'DRAW', dateObj });
 
 /* --------------------------------------------------------------------------
  * Notes parsing/formatting (JSON array OR legacy TEXT log)
@@ -541,48 +557,46 @@ export default function ViewWorkOrder() {
   const [docError, setDocError] = useState(null);
   const [docLoading, setDocLoading] = useState(false);
 
-  // NEW: camera upload state (uploads immediately on "Use Photo")
+  // Camera upload state
   const [isCameraUploading, setIsCameraUploading] = useState(false);
 
   // (SECTION 3 continues below…)
 // ================================
 // SECTION 3 of 6
 // Helpers, fetchWorkOrder, doc lightbox loader, addNote,
-// and image processing
+// image processing, and filename builders used in Section 4
 // ================================
 
   // -------- helpers for contact actions & address --------
   const normPhone = (p) => String(p || '').replace(/[^\d+]/g, '');
+
   const callNumber = (p) => {
     const n = normPhone(p);
     if (!n) return;
-    Linking.openURL(`tel:${n}`).catch(() =>
-      Alert.alert('Error', 'Unable to open Phone app.')
-    );
+    Linking.openURL(`tel:${n}`).catch(() => Alert.alert('Error', 'Unable to open Phone app.'));
   };
+
   const emailTo = (e) => {
     const addr = String(e || '').trim();
     if (!addr) return;
-    Linking.openURL(`mailto:${addr}`).catch(() =>
-      Alert.alert('Error', 'Unable to open Mail app.')
-    );
+    Linking.openURL(`mailto:${addr}`).catch(() => Alert.alert('Error', 'Unable to open Mail app.'));
   };
+
   const openMap = (loc) => {
     const q = encodeURIComponent(loc || '');
     if (!q) return;
+
     const googleAppUrl = Platform.select({
       ios: `comgooglemaps://?q=${q}`,
       android: `geo:0,0?q=${q}`,
       default: `https://www.google.com/maps/search/?api=1&query=${q}`,
     });
+
     const googleWebUrl = `https://www.google.com/maps/search/?api=1&query=${q}`;
+
     Linking.canOpenURL(googleAppUrl)
-      .then((supported) =>
-        supported ? Linking.openURL(googleAppUrl) : Linking.openURL(googleWebUrl)
-      )
-      .catch(() =>
-        Alert.alert('Error', 'Unable to open Google Maps.')
-      );
+      .then((supported) => (supported ? Linking.openURL(googleAppUrl) : Linking.openURL(googleWebUrl)))
+      .catch(() => Alert.alert('Error', 'Unable to open Google Maps.'));
   };
   // -------------------------------------------------------
 
@@ -600,14 +614,41 @@ export default function ViewWorkOrder() {
     return [];
   };
 
+  // ✅ Filename helpers used by Section 4 (NO duplicates)
+  const getVisitDateForFilename = () => {
+    const raw = workOrder?.scheduledDate || null;
+    if (raw && moment(raw).isValid()) return moment(raw).toDate();
+    return new Date();
+  };
+
+  const getIdForFilename = () => {
+    const wo = String(workOrder?.workOrderNumber || '').trim();
+    const po = String(workOrder?.poNumber || '').trim();
+    if (wo) return `WO-${safeSlug(wo)}`;
+    if (po) return `PO-${safeSlug(po)}`;
+    return `ID-${safeSlug(workOrderId)}`;
+  };
+
+  const buildPhotoFilename = (ext = 'jpg') => {
+    const day = dateStamp(getVisitDateForFilename());
+    const ts = Date.now();
+    const id = getIdForFilename();
+    return `photo__${day}__${id}__${ts}.${ext}`;
+  };
+
+  const buildDrawNoteFilename = (ext = 'jpg') => {
+    const day = dateStamp(getVisitDateForFilename());
+    const ts = Date.now();
+    const id = getIdForFilename();
+    return `drawnote__${day}__${id}__${ts}.${ext}`;
+  };
+
   // Fetch work order
   const fetchWorkOrder = useCallback(async () => {
     if (!workOrderId) return;
+
     try {
-      const { data } = await api.get(
-        `/work-orders/${workOrderId}`,
-        { headers: authHeaders() }
-      );
+      const { data } = await api.get(`/work-orders/${workOrderId}`, { headers: authHeaders() });
       setWorkOrder(data);
 
       // Notes (supports array or legacy TEXT)
@@ -622,7 +663,7 @@ export default function ViewWorkOrder() {
 
       const allUrls = rawKeys.map((k) => fileUrl(k));
 
-      // Only keep *image* URLs in `photos`
+      // Only keep image URLs in `photos`
       const imageUrls = allUrls.filter((u) => {
         const lower = u.toLowerCase();
         return !(
@@ -634,10 +675,7 @@ export default function ViewWorkOrder() {
 
       setPhotos(imageUrls);
     } catch (err) {
-      Alert.alert(
-        'Error',
-        err?.response?.data?.error || 'Failed to load work order.'
-      );
+      Alert.alert('Error', err?.response?.data?.error || 'Failed to load work order.');
     }
   }, [workOrderId]);
 
@@ -669,6 +707,7 @@ export default function ViewWorkOrder() {
       setDocError('Missing file URL');
       return;
     }
+
     try {
       setDocLoading(true);
       setDocError(null);
@@ -697,39 +736,27 @@ export default function ViewWorkOrder() {
         Alert.alert('No PDF', 'This work order does not have a PDF attached.');
         return;
       }
-      items = [
-        {
-          title: `Work Order ${workOrder?.workOrderNumber || workOrderId}`,
-          url: woPdfUrl,
-        },
-      ];
+      items = [{ title: `Work Order ${workOrder?.workOrderNumber || workOrderId}`, url: woPdfUrl }];
     } else if (group === 'EST') {
       if (!estimateUrls.length) {
         Alert.alert('No Estimates', 'No Estimate PDFs found for this job.');
         return;
       }
-      items = estimateUrls.map((u, i) => ({
-        title: `Estimate ${i + 1}`,
-        url: u,
-      }));
+      items = estimateUrls.map((u, i) => ({ title: `Estimate ${i + 1}`, url: u }));
     } else if (group === 'PO') {
       if (!poUrls.length) {
         Alert.alert('No POs', 'No PO PDFs found for this job.');
         return;
       }
-      items = poUrls.map((u, i) => ({
-        title: `PO ${i + 1}`,
-        url: u,
-      }));
+      items = poUrls.map((u, i) => ({ title: `PO ${i + 1}`, url: u }));
     }
 
     setDocGroup(group);
     setDocItems(items);
-    const safeIdx = Math.min(
-      Math.max(0, startIndex),
-      Math.max(0, items.length - 1)
-    );
+
+    const safeIdx = Math.min(Math.max(0, startIndex), Math.max(0, items.length - 1));
     setDocIndex(safeIdx);
+
     setDocModalVisible(true);
     loadDocIntoModal(items[safeIdx].url);
   };
@@ -771,6 +798,8 @@ export default function ViewWorkOrder() {
           'Error',
           err2?.response?.data?.error ||
             err1?.response?.data?.error ||
+            err2?.message ||
+            err1?.message ||
             'Failed to add note.'
         );
         return;
@@ -788,10 +817,7 @@ export default function ViewWorkOrder() {
       const manip = await ImageManipulator.manipulateAsync(
         uri,
         [{ resize: { width: 1600 } }],
-        {
-          compress: 0.7,
-          format: ImageManipulator.SaveFormat.JPEG,
-        }
+        { compress: 0.7, format: ImageManipulator.SaveFormat.JPEG }
       );
       return manip.uri;
     } catch {
@@ -802,7 +828,7 @@ export default function ViewWorkOrder() {
   // (SECTION 4 continues below…)
 // ================================
 // SECTION 4 of 6
-// Upload logic for Photos + Draw Notes
+// Upload logic for Photos + Draw Notes + Annotated PDF
 // IMPORTANT: uploadCameraPhotoNow is defined ONLY ONCE
 // ================================
 
@@ -816,7 +842,7 @@ export default function ViewWorkOrder() {
     const form = new FormData();
     const processedUri = await processImageForUpload(uri);
 
-    // Build dated + typed filename
+    // ✅ dated + typed filename
     const name = buildPhotoFilename('jpg');
 
     form.append('photoFile', {
@@ -867,11 +893,7 @@ export default function ViewWorkOrder() {
         await uploadCameraPhotoNow(asset.uri);
         await fetchWorkOrder();
       } catch (err) {
-        const msg =
-          err?.response?.data?.error ||
-          err?.message ||
-          'Failed to upload photo.';
-
+        const msg = err?.response?.data?.error || err?.message || 'Failed to upload photo.';
         await new Promise((resolve) => {
           Alert.alert('Upload Error', msg, [
             {
@@ -882,10 +904,7 @@ export default function ViewWorkOrder() {
                 resolve();
               },
             },
-            {
-              text: 'Continue',
-              onPress: resolve,
-            },
+            { text: 'Continue', onPress: () => resolve() },
           ]);
         });
       } finally {
@@ -898,14 +917,9 @@ export default function ViewWorkOrder() {
    * Upload photos from library (multi-select)
    */
   const uploadPhotos = async () => {
-    const { status } =
-      await ImagePicker.requestMediaLibraryPermissionsAsync();
-
+    const { status } = await ImagePicker.requestMediaLibraryPermissionsAsync();
     if (status !== 'granted') {
-      return Alert.alert(
-        'Permission required',
-        'Need photo library access.'
-      );
+      return Alert.alert('Permission required', 'Need photo library access.');
     }
 
     const result = await ImagePicker.launchImageLibraryAsync({
@@ -919,13 +933,11 @@ export default function ViewWorkOrder() {
     const form = new FormData();
 
     for (let i = 0; i < result.assets.length; i++) {
-      const processedUri = await processImageForUpload(
-        result.assets[i].uri
-      );
+      const processedUri = await processImageForUpload(result.assets[i].uri);
 
       // Ensure unique filename per image
       const base = buildPhotoFilename('jpg').replace(/\.jpg$/i, '');
-      const name = `${base}_${i + 1}.jpg`;
+      const name = `${base}__${i + 1}.jpg`;
 
       form.append('photoFile', {
         uri: processedUri,
@@ -944,15 +956,132 @@ export default function ViewWorkOrder() {
       await fetchWorkOrder();
       Alert.alert('Success', 'Photos uploaded!');
     } catch (err) {
-      Alert.alert(
-        'Upload Error',
-        err?.response?.data?.error || err.message
-      );
+      Alert.alert('Upload Error', err?.response?.data?.error || err?.message || 'Upload failed.');
     }
   };
 
   /**
-   * Handle Draw Note upload (from SKETCH_HTML)
+   * Delete attachment by index from photoPath list
+   * (works for images + pdfs since backend stores keys)
+   */
+  const handleDeletePhoto = (idx) => {
+    const keys = (workOrder?.photoPath || '')
+      .split(',')
+      .map((s) => s.trim())
+      .filter(Boolean);
+
+    if (idx < 0 || idx >= keys.length) return;
+
+    Alert.alert('Delete Attachment?', 'This will permanently remove it.', [
+      { text: 'Cancel, keep it', style: 'cancel' },
+      {
+        text: 'Delete',
+        style: 'destructive',
+        onPress: async () => {
+          try {
+            await api.delete(`/work-orders/${workOrderId}/attachments`, {
+              data: { key: keys[idx] },
+              headers: { 'Content-Type': 'application/json', ...authHeaders() },
+            });
+            await fetchWorkOrder();
+            Alert.alert('Deleted');
+          } catch (err) {
+            Alert.alert('Error', err?.response?.data?.error || err?.message || 'Delete failed.');
+          }
+        },
+      },
+    ]);
+  };
+
+  /**
+   * Share currently viewed photo (viewerIndex from photo viewer)
+   */
+  const handleShare = async () => {
+    if (!photos.length) return;
+    const safeIndex = Math.min(Math.max(0, viewerIndex), Math.max(0, photos.length - 1));
+    const url = photos[safeIndex];
+    try {
+      await Share.share({ url, message: url });
+    } catch {}
+  };
+
+  const closePhotoViewer = () => {
+    setPhotoViewerVisible(false);
+    if (returnToAttachments) setViewAttachmentsVisible(true);
+    setReturnToAttachments(false);
+  };
+
+  /**
+   * Annotate & Sign (existing WO PDF)
+   */
+  const pdfURL = workOrder?.pdfPath ? fileUrl(workOrder.pdfPath) : null;
+
+  const openAnnotator = async () => {
+    if (!pdfURL) return Alert.alert('No PDF', 'This work order does not have a PDF attached.');
+    try {
+      const tmp = FileSystem.cacheDirectory + `wo_${workOrderId}.pdf`;
+      await FileSystem.downloadAsync(pdfURL, tmp);
+
+      const b64 = await FileSystem.readAsStringAsync(tmp, {
+        encoding: FileSystem.EncodingType.Base64,
+      });
+
+      setPdfBase64(b64);
+      setAnnotateVisible(true);
+    } catch {
+      setAnnotateVisible(false);
+      Alert.alert('Error', 'Failed to load PDF for annotation.');
+    }
+  };
+
+  const onAnnotatorMessage = async (ev) => {
+    const msg = ev?.nativeEvent?.data || '';
+    if (typeof msg !== 'string') return;
+
+    if (msg.startsWith('ERROR:')) {
+      Alert.alert('Annotator Error', msg.slice(6));
+      return;
+    }
+
+    if (msg === 'CLOSE') {
+      setAnnotateVisible(false);
+      return;
+    }
+
+    if (msg.startsWith('SIGNED:')) {
+      const b64 = msg.slice(7);
+      try {
+        const signedUri = FileSystem.cacheDirectory + `signed_${Date.now()}.pdf`;
+
+        await FileSystem.writeAsStringAsync(signedUri, b64, {
+          encoding: FileSystem.EncodingType.Base64,
+        });
+
+        const form = new FormData();
+        const name = `WO-${workOrder?.poNumber || workOrderId}-signed.pdf`;
+
+        form.append('pdfFile', {
+          uri: signedUri,
+          name,
+          type: 'application/pdf',
+        });
+
+        await api.put(`/work-orders/${workOrderId}/edit`, form, {
+          headers: { 'Content-Type': 'multipart/form-data', ...authHeaders() },
+        });
+
+        setAnnotateVisible(false);
+        await fetchWorkOrder();
+        Alert.alert('Success', 'Signed PDF uploaded.');
+      } catch (e) {
+        Alert.alert('Upload Error', e?.message || 'Failed to upload signed PDF.');
+      }
+    }
+  };
+
+  /**
+   * Draw Note upload (from SKETCH_HTML)
+   * ✅ filename includes visit date + "drawnote__" prefix
    */
   const onSketchMessage = async (ev) => {
     const msg = ev?.nativeEvent?.data || '';
@@ -971,16 +1100,15 @@ export default function ViewWorkOrder() {
     if (msg.startsWith('IMAGE:')) {
       const b64 = msg.slice(6);
       try {
-        const jpgPath =
-          FileSystem.cacheDirectory + `drawing_${Date.now()}.jpg`;
+        const jpgPath = FileSystem.cacheDirectory + `drawing_${Date.now()}.jpg`;
 
         await FileSystem.writeAsStringAsync(jpgPath, b64, {
           encoding: FileSystem.EncodingType.Base64,
         });
 
         const processed = await processImageForUpload(jpgPath);
-        const form = new FormData();
 
+        const form = new FormData();
         form.append('photoFile', {
           uri: processed,
           name: buildDrawNoteFilename('jpg'),
@@ -998,10 +1126,7 @@ export default function ViewWorkOrder() {
         await fetchWorkOrder();
         Alert.alert('Uploaded', 'Drawing note uploaded.');
       } catch (e) {
-        Alert.alert(
-          'Upload Error',
-          e?.message || 'Failed to upload drawing note.'
-        );
+        Alert.alert('Upload Error', e?.message || 'Failed to upload drawing note.');
       }
     }
   };
@@ -1010,7 +1135,10 @@ export default function ViewWorkOrder() {
 // ================================
 // SECTION 5 of 6
 // Display fields + main UI JSX (ViewWorkOrder screen)
-// NOTE: No upload functions declared here
+// IMPORTANT:
+// - This section OPENS the return ( ... )
+// - DO NOT add any modals after the component ends
+// - Section 6 will paste the modals BEFORE we close the return
 // ================================
 
   // ------- derived fields for display (with fallbacks) -------
@@ -1165,6 +1293,18 @@ export default function ViewWorkOrder() {
     loadDocIntoModal(pdfItems[safeIdx].url);
   };
 
+  // If still loading
+  if (!workOrder) {
+    return (
+      <View style={styles.center}>
+        <Text style={styles.loadingText}>Loading…</Text>
+      </View>
+    );
+  }
+
+  // ✅ IMPORTANT:
+  // We OPEN the return here and KEEP IT OPEN.
+  // Section 6 will paste all modals INSIDE this same return before we close it.
   return (
     <View style={styles.screen}>
       <ScrollView
@@ -1388,19 +1528,25 @@ export default function ViewWorkOrder() {
             ))}
           </>
         )}
+
       </ScrollView>
 
-      {/* (SECTION 6 continues below… modals + remaining UI + styles) */}
-    </View>
-  );
+      {/* ✅ DO NOT CLOSE RETURN YET.
+          Section 6 will paste ALL MODALS here, then close the return + component. */}
+
+      {/* (SECTION 6 continues below…) */}
 // ================================
 // SECTION 6 of 6
-// ALL Modals + FINAL Styles (and the ONLY upload helpers live in Section 4)
-// ✅ FIXES your error by making sure we DO NOT redeclare uploadCameraPhotoNow anywhere
+// ALL Modals + close the return + component + FINAL styles
+// ✅ FIX: Modals MUST be inside the return, not after it
 // ================================
 
       {/* Photo Viewer for uploaded attachments */}
-      <Modal visible={photoViewerVisible} animationType="fade" onRequestClose={closePhotoViewer}>
+      <Modal
+        visible={photoViewerVisible}
+        animationType="fade"
+        onRequestClose={closePhotoViewer}
+      >
         <View style={styles.viewerContainer}>
           <FlatList
             data={photos}
@@ -1408,19 +1554,31 @@ export default function ViewWorkOrder() {
             horizontal
             pagingEnabled
             initialScrollIndex={viewerIndex}
-            getItemLayout={(_, idx) => ({ length: screenWidth, offset: screenWidth * idx, index: idx })}
+            getItemLayout={(_, idx) => ({
+              length: screenWidth,
+              offset: screenWidth * idx,
+              index: idx,
+            })}
             onMomentumScrollEnd={(ev) => {
               const x = ev?.nativeEvent?.contentOffset?.x ?? 0;
               const idx = Math.round(x / screenWidth);
               setViewerIndex(Number.isFinite(idx) ? idx : 0);
             }}
-            renderItem={({ item }) => <Image source={{ uri: item }} style={styles.fullScreenImage} />}
+            renderItem={({ item }) => (
+              <Image source={{ uri: item }} style={styles.fullScreenImage} />
+            )}
           />
           <View style={styles.viewerButtons}>
-            <TouchableOpacity style={[styles.viewerButton, styles.shareBtn]} onPress={handleShare}>
+            <TouchableOpacity
+              style={[styles.viewerButton, styles.shareBtn]}
+              onPress={handleShare}
+            >
               <Text style={styles.shareText}>Share</Text>
             </TouchableOpacity>
-            <TouchableOpacity style={[styles.viewerButton, styles.exitBtn]} onPress={closePhotoViewer}>
+            <TouchableOpacity
+              style={[styles.viewerButton, styles.exitBtn]}
+              onPress={closePhotoViewer}
+            >
               <Text style={styles.exitText}>Exit</Text>
             </TouchableOpacity>
           </View>
@@ -1446,7 +1604,9 @@ export default function ViewWorkOrder() {
               .filter(Boolean);
 
             if (!keys.length) {
-              return <Text style={styles.noPhotosText}>No attachments uploaded.</Text>;
+              return (
+                <Text style={styles.noPhotosText}>No attachments uploaded.</Text>
+              );
             }
 
             return (
@@ -1520,7 +1680,10 @@ export default function ViewWorkOrder() {
             );
           })()}
 
-          <TouchableOpacity style={styles.cancelBtn} onPress={() => setViewAttachmentsVisible(false)}>
+          <TouchableOpacity
+            style={styles.cancelBtn}
+            onPress={() => setViewAttachmentsVisible(false)}
+          >
             <Text style={styles.cancelText}>Close</Text>
           </TouchableOpacity>
         </View>
@@ -1558,7 +1721,10 @@ export default function ViewWorkOrder() {
               <TouchableOpacity style={styles.saveNoteBtn} onPress={addNote}>
                 <Text style={styles.saveNoteText}>Save</Text>
               </TouchableOpacity>
-              <TouchableOpacity style={styles.cancelNoteBtn} onPress={() => setShowAddNoteModal(false)}>
+              <TouchableOpacity
+                style={styles.cancelNoteBtn}
+                onPress={() => setShowAddNoteModal(false)}
+              >
                 <Text style={styles.cancelNoteText}>Cancel</Text>
               </TouchableOpacity>
             </View>
@@ -1583,10 +1749,18 @@ export default function ViewWorkOrder() {
               {STATUS_OPTIONS.map((s) => (
                 <TouchableOpacity
                   key={s}
-                  style={[styles.statusOption, pendingStatus === s && styles.statusOptionActive]}
+                  style={[
+                    styles.statusOption,
+                    pendingStatus === s && styles.statusOptionActive,
+                  ]}
                   onPress={() => setPendingStatus(s)}
                 >
-                  <Text style={[styles.statusText, pendingStatus === s && styles.statusTextActive]}>
+                  <Text
+                    style={[
+                      styles.statusText,
+                      pendingStatus === s && styles.statusTextActive,
+                    ]}
+                  >
                     {s}
                   </Text>
                 </TouchableOpacity>
@@ -1597,7 +1771,10 @@ export default function ViewWorkOrder() {
               <TouchableOpacity style={styles.saveNoteBtn} onPress={applyStatus}>
                 <Text style={styles.saveNoteText}>Apply</Text>
               </TouchableOpacity>
-              <TouchableOpacity style={styles.cancelNoteBtn} onPress={() => setShowStatusModal(false)}>
+              <TouchableOpacity
+                style={styles.cancelNoteBtn}
+                onPress={() => setShowStatusModal(false)}
+              >
                 <Text style={styles.cancelNoteText}>Cancel</Text>
               </TouchableOpacity>
             </View>
@@ -1606,7 +1783,11 @@ export default function ViewWorkOrder() {
       </Modal>
 
       {/* Draw Note Modal (JPEG export) */}
-      <Modal visible={sketchVisible} animationType="slide" onRequestClose={() => setSketchVisible(false)}>
+      <Modal
+        visible={sketchVisible}
+        animationType="slide"
+        onRequestClose={() => setSketchVisible(false)}
+      >
         <SafeAreaView style={{ flex: 1, backgroundColor: '#000' }}>
           <WebView
             originWhitelist={['*']}
@@ -1623,7 +1804,11 @@ export default function ViewWorkOrder() {
       </Modal>
 
       {/* Annotate & Sign Modal */}
-      <Modal visible={annotateVisible} animationType="slide" onRequestClose={() => setAnnotateVisible(false)}>
+      <Modal
+        visible={annotateVisible}
+        animationType="slide"
+        onRequestClose={() => setAnnotateVisible(false)}
+      >
         <SafeAreaView style={{ flex: 1, backgroundColor: '#000' }}>
           {pdfBase64 ? (
             <WebView
@@ -1638,7 +1823,9 @@ export default function ViewWorkOrder() {
               decelerationRate="normal"
               overScrollMode="always"
               onMessage={onAnnotatorMessage}
-              injectedJavaScriptBeforeContentLoaded={`window.PDF_BASE64 = ${JSON.stringify(pdfBase64)}; true;`}
+              injectedJavaScriptBeforeContentLoaded={`window.PDF_BASE64 = ${JSON.stringify(
+                pdfBase64
+              )}; true;`}
               style={{ flex: 1 }}
             />
           ) : (
@@ -1650,10 +1837,17 @@ export default function ViewWorkOrder() {
       </Modal>
 
       {/* Document Lightbox Modal (for WO/EST/PO/ATTACH) */}
-      <Modal visible={docModalVisible} animationType="slide" onRequestClose={() => setDocModalVisible(false)}>
+      <Modal
+        visible={docModalVisible}
+        animationType="slide"
+        onRequestClose={() => setDocModalVisible(false)}
+      >
         <SafeAreaView style={{ flex: 1, backgroundColor: '#000' }}>
           <View style={styles.docHeader}>
-            <TouchableOpacity onPress={() => setDocModalVisible(false)} style={styles.docHeaderBtn}>
+            <TouchableOpacity
+              onPress={() => setDocModalVisible(false)}
+              style={styles.docHeaderBtn}
+            >
               <Text style={styles.docHeaderBtnText}>Close</Text>
             </TouchableOpacity>
 
@@ -1668,7 +1862,9 @@ export default function ViewWorkOrder() {
                   : docGroup === 'ATTACH'
                   ? 'Attachment'
                   : 'Document')}
-              {docItems.length > 1 ? `  (${docIndex + 1}/${docItems.length})` : ''}
+              {docItems.length > 1
+                ? `  (${docIndex + 1}/${docItems.length})`
+                : ''}
             </Text>
 
             <View style={styles.docHeaderRight}>
@@ -1711,23 +1907,36 @@ export default function ViewWorkOrder() {
                   const msg = e?.nativeEvent?.data || '';
                   if (msg.startsWith('HEIGHT:')) {
                     const h = parseInt(msg.slice(7), 10);
-                    if (Number.isFinite(h)) setDocHeight(Math.min(h + 200, screenHeight * 5));
+                    if (Number.isFinite(h))
+                      setDocHeight(Math.min(h + 200, screenHeight * 5));
                   } else if (msg.startsWith('ERROR:')) {
                     setDocError(msg.slice(6));
                   }
                 }}
-                injectedJavaScriptBeforeContentLoaded={`window.PDF_BASE64 = ${JSON.stringify(docB64)}; true;`}
-                style={{ flex: 1, height: docHeight, backgroundColor: '#000' }}
+                injectedJavaScriptBeforeContentLoaded={`window.PDF_BASE64 = ${JSON.stringify(
+                  docB64
+                )}; true;`}
+                style={{
+                  flex: 1,
+                  height: docHeight,
+                  backgroundColor: '#000',
+                }}
               />
             )}
           </View>
 
           {docItems.length > 1 && (
             <View style={styles.docNavBar}>
-              <TouchableOpacity onPress={prevDoc} style={[styles.docNavBtn, { marginRight: 8 }]}>
+              <TouchableOpacity
+                onPress={prevDoc}
+                style={[styles.docNavBtn, { marginRight: 8 }]}
+              >
                 <Text style={styles.docNavText}>Prev</Text>
               </TouchableOpacity>
-              <TouchableOpacity onPress={nextDoc} style={[styles.docNavBtn, { marginLeft: 8 }]}>
+              <TouchableOpacity
+                onPress={nextDoc}
+                style={[styles.docNavBtn, { marginLeft: 8 }]}
+              >
                 <Text style={styles.docNavText}>Next</Text>
               </TouchableOpacity>
             </View>
@@ -1736,7 +1945,8 @@ export default function ViewWorkOrder() {
       </Modal>
     </View>
   );
-}
+} // ✅ END ViewWorkOrder component
+
 
 // ================================
 // FINAL STYLES (matches web CRM vibe)
@@ -1773,10 +1983,20 @@ const styles = StyleSheet.create({
 
   label: { width: 150, fontWeight: '700', color: '#1E3A8A' },
   value: { flex: 1, color: '#0F172A', fontWeight: '500' },
-  linkText: { color: '#2563EB', textDecorationLine: 'underline', fontWeight: '600' },
+  linkText: {
+    color: '#2563EB',
+    textDecorationLine: 'underline',
+    fontWeight: '600',
+  },
 
   /* ---------- Buttons ---------- */
-  buttonBase: { width: '100%', paddingVertical: 13, borderRadius: 10, alignItems: 'center', marginBottom: 12 },
+  buttonBase: {
+    width: '100%',
+    paddingVertical: 13,
+    borderRadius: 10,
+    alignItems: 'center',
+    marginBottom: 12,
+  },
 
   backBtn: { backgroundColor: '#334155' },
   backText: { color: '#ffffff', fontWeight: '800', fontSize: 16 },
@@ -1793,11 +2013,22 @@ const styles = StyleSheet.create({
   drawBtn: { backgroundColor: '#16A34A' },
   drawText: { color: '#ffffff', fontWeight: '800', fontSize: 16 },
 
-  smallBtn: { marginLeft: 10, paddingHorizontal: 12, paddingVertical: 6, backgroundColor: '#2563EB', borderRadius: 999 },
+  smallBtn: {
+    marginLeft: 10,
+    paddingHorizontal: 12,
+    paddingVertical: 6,
+    backgroundColor: '#2563EB',
+    borderRadius: 999,
+  },
   smallBtnText: { color: '#ffffff', fontWeight: '800', fontSize: 13 },
 
   /* ---------- Section Headers ---------- */
-  sectionHeader: { fontSize: 18, fontWeight: '900', color: '#0F172A', marginVertical: 10 },
+  sectionHeader: {
+    fontSize: 18,
+    fontWeight: '900',
+    color: '#0F172A',
+    marginVertical: 10,
+  },
 
   /* ---------- Document Tiles ---------- */
   tilesGrid: { flexDirection: 'row', flexWrap: 'wrap', gap: 12, marginBottom: 8 },
@@ -1844,8 +2075,20 @@ const styles = StyleSheet.create({
   },
 
   /* ---------- Notes ---------- */
-  noteCard: { backgroundColor: '#ffffff', borderRadius: 12, padding: 14, marginBottom: 10, borderWidth: 1, borderColor: '#E2E8F0' },
-  noteTimestamp: { fontSize: 12, color: '#64748B', marginBottom: 6, fontWeight: '600' },
+  noteCard: {
+    backgroundColor: '#ffffff',
+    borderRadius: 12,
+    padding: 14,
+    marginBottom: 10,
+    borderWidth: 1,
+    borderColor: '#E2E8F0',
+  },
+  noteTimestamp: {
+    fontSize: 12,
+    color: '#64748B',
+    marginBottom: 6,
+    fontWeight: '600',
+  },
   noteBody: { fontSize: 14, color: '#0F172A', lineHeight: 20 },
 
   /* ---------- Shared ---------- */
@@ -1863,15 +2106,34 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     justifyContent: 'space-around',
   },
-  viewerButton: { flex: 1, marginHorizontal: 8, padding: 12, borderRadius: 8, alignItems: 'center' },
+  viewerButton: {
+    flex: 1,
+    marginHorizontal: 8,
+    padding: 12,
+    borderRadius: 8,
+    alignItems: 'center',
+  },
   shareBtn: { backgroundColor: 'rgba(255,255,255,0.3)' },
   shareText: { color: '#fff', fontWeight: '600', fontSize: 16 },
   exitBtn: { backgroundColor: 'rgba(220,53,69,0.85)' },
   exitText: { color: '#fff', fontWeight: '600', fontSize: 16 },
 
   /* ---------- Attachments modal ---------- */
-  modal: { flex: 1, padding: 16, backgroundColor: '#fff', marginTop: 80, borderTopLeftRadius: 12, borderTopRightRadius: 12 },
-  modalTitle: { fontSize: 18, fontWeight: '700', marginBottom: 12, textAlign: 'center', color: '#0F172A' },
+  modal: {
+    flex: 1,
+    padding: 16,
+    backgroundColor: '#fff',
+    marginTop: 80,
+    borderTopLeftRadius: 12,
+    borderTopRightRadius: 12,
+  },
+  modalTitle: {
+    fontSize: 18,
+    fontWeight: '700',
+    marginBottom: 12,
+    textAlign: 'center',
+    color: '#0F172A',
+  },
   noPhotosText: { textAlign: 'center', marginTop: 20, fontStyle: 'italic' },
   galleryList: { paddingBottom: 16 },
   thumbWrapper: { flex: 1 / 3, aspectRatio: 1, padding: 4 },
@@ -1888,7 +2150,13 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
   },
   deleteText: { color: '#fff', fontSize: 14, lineHeight: 18 },
-  cancelBtn: { backgroundColor: '#dc3545', padding: 12, borderRadius: 8, alignItems: 'center', marginTop: 16 },
+  cancelBtn: {
+    backgroundColor: '#dc3545',
+    padding: 12,
+    borderRadius: 8,
+    alignItems: 'center',
+    marginTop: 16,
+  },
   cancelText: { color: '#fff', fontWeight: '700', fontSize: 16 },
 
   /* ---------- PDF tiles in attachments ---------- */
@@ -1906,30 +2174,96 @@ const styles = StyleSheet.create({
   pdfLabel: { fontSize: 11, color: '#111827', textAlign: 'center' },
 
   /* ---------- Add note overlays ---------- */
-  addNoteOverlay: { flex: 1, backgroundColor: 'rgba(0,0,0,0.45)', justifyContent: 'center', padding: 16 },
+  addNoteOverlay: {
+    flex: 1,
+    backgroundColor: 'rgba(0,0,0,0.45)',
+    justifyContent: 'center',
+    padding: 16,
+  },
   addNoteContainer: { backgroundColor: '#fff', borderRadius: 12, padding: 16 },
-  addNoteTitle: { fontSize: 18, fontWeight: '700', marginBottom: 12, textAlign: 'center', color: '#0F172A' },
-  addNoteInput: { height: 120, borderColor: '#cfd5dd', borderWidth: 1, borderRadius: 10, padding: 10, textAlignVertical: 'top', marginBottom: 12 },
+  addNoteTitle: {
+    fontSize: 18,
+    fontWeight: '700',
+    marginBottom: 12,
+    textAlign: 'center',
+    color: '#0F172A',
+  },
+  addNoteInput: {
+    height: 120,
+    borderColor: '#cfd5dd',
+    borderWidth: 1,
+    borderRadius: 10,
+    padding: 10,
+    textAlignVertical: 'top',
+    marginBottom: 12,
+  },
   addNoteButtons: { flexDirection: 'row', justifyContent: 'space-around' },
-  saveNoteBtn: { backgroundColor: '#16A34A', padding: 10, borderRadius: 8, flex: 1, marginHorizontal: 4 },
+  saveNoteBtn: {
+    backgroundColor: '#16A34A',
+    padding: 10,
+    borderRadius: 8,
+    flex: 1,
+    marginHorizontal: 4,
+  },
   saveNoteText: { color: '#fff', textAlign: 'center', fontWeight: '700' },
-  cancelNoteBtn: { backgroundColor: '#dc3545', padding: 10, borderRadius: 8, flex: 1, marginHorizontal: 4 },
+  cancelNoteBtn: {
+    backgroundColor: '#dc3545',
+    padding: 10,
+    borderRadius: 8,
+    flex: 1,
+    marginHorizontal: 4,
+  },
   cancelNoteText: { color: '#fff', textAlign: 'center', fontWeight: '700' },
 
   statusList: { gap: 8 },
-  statusOption: { padding: 12, borderWidth: 1, borderColor: '#e2e8f0', borderRadius: 10, backgroundColor: '#fff' },
+  statusOption: {
+    padding: 12,
+    borderWidth: 1,
+    borderColor: '#e2e8f0',
+    borderRadius: 10,
+    backgroundColor: '#fff',
+  },
   statusOptionActive: { backgroundColor: '#2563EB' },
   statusText: { color: '#0F172A', fontWeight: '700' },
   statusTextActive: { color: '#fff' },
 
   /* ---------- Doc modal header/nav ---------- */
-  docHeader: { paddingHorizontal: 12, paddingTop: 6, paddingBottom: 6, backgroundColor: '#0b0f14', flexDirection: 'row', alignItems: 'center' },
-  docHeaderBtn: { paddingVertical: 6, paddingHorizontal: 10, backgroundColor: '#1f2937', borderRadius: 8, marginRight: 8 },
+  docHeader: {
+    paddingHorizontal: 12,
+    paddingTop: 6,
+    paddingBottom: 6,
+    backgroundColor: '#0b0f14',
+    flexDirection: 'row',
+    alignItems: 'center',
+  },
+  docHeaderBtn: {
+    paddingVertical: 6,
+    paddingHorizontal: 10,
+    backgroundColor: '#1f2937',
+    borderRadius: 8,
+    marginRight: 8,
+  },
   docHeaderBtnText: { color: '#fff', fontWeight: '700' },
-  docHeaderTitle: { color: '#fff', fontWeight: '800', fontSize: 16, flex: 1, textAlign: 'center' },
+  docHeaderTitle: {
+    color: '#fff',
+    fontWeight: '800',
+    fontSize: 16,
+    flex: 1,
+    textAlign: 'center',
+  },
   docHeaderRight: { flexDirection: 'row', alignItems: 'center', gap: 8 },
 
-  docNavBar: { flexDirection: 'row', justifyContent: 'center', padding: 12, backgroundColor: '#0b0f14' },
-  docNavBtn: { paddingVertical: 10, paddingHorizontal: 16, backgroundColor: '#1f2937', borderRadius: 999 },
+  docNavBar: {
+    flexDirection: 'row',
+    justifyContent: 'center',
+    padding: 12,
+    backgroundColor: '#0b0f14',
+  },
+  docNavBtn: {
+    paddingVertical: 10,
+    paddingHorizontal: 16,
+    backgroundColor: '#1f2937',
+    borderRadius: 999,
+  },
   docNavText: { color: '#fff', fontWeight: '700' },
 });
