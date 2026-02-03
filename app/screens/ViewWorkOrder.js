@@ -1,9 +1,4 @@
 // File: app/screens/ViewWorkOrder.js
-// ================================
-// SECTION 1 of 6
-// Imports, constants, helpers, and attachment filename rules (NO duplicates)
-// ================================
-
 import React, { useRef, useState, useEffect, useCallback, useMemo } from 'react';
 import {
   View,
@@ -50,12 +45,11 @@ const STATUS_OPTIONS = [
   'Completed',
 ];
 
-/* ---------- auth header (match web) ---------- */
+/* ---------- auth header (kept harmless; axios instance may already attach) ---------- */
 const authHeaders = () => {
   try {
     const token =
       typeof localStorage !== 'undefined' ? localStorage.getItem('jwt') : null;
-    // RN doesn't have localStorage; if your axios instance already attaches token, this is harmless.
     return token ? { Authorization: `Bearer ${token}` } : {};
   } catch {
     return {};
@@ -63,19 +57,13 @@ const authHeaders = () => {
 };
 
 /* --------------------------------------------------------------------------
- * ✅ Attachment filename conventions (Photos vs Draw Notes)
- *
- * Goal:
- * - Photos + Draw Notes upload through same backend field "photoFile"
- * - We differentiate them later using filename TYPE tag: PHOTO vs DRAW
- * - Include visit date in filename so you can separate trips/visits
+ * Attachment filename conventions
  *
  * Format:
  *   WO-<identifier>__<YYYY-MM-DD>__<TYPE>__<timestamp>.jpg
  * TYPE:
  *   PHOTO or DRAW
  * -------------------------------------------------------------------------- */
-
 const safeSlug = (v) =>
   String(v ?? '')
     .trim()
@@ -85,40 +73,35 @@ const safeSlug = (v) =>
 
 const dateStamp = (d = new Date()) => moment(d).format('YYYY-MM-DD');
 
-const buildAttachmentName = ({ workOrderNumberOrId, type, dateObj, ext = 'jpg' }) => {
+const buildAttachmentName = ({
+  workOrderNumberOrId,
+  type,
+  dateObj,
+  ext = 'jpg',
+  extra = '',
+}) => {
   const wo = safeSlug(workOrderNumberOrId || 'WO');
   const date = dateStamp(dateObj || new Date());
   const ts = Date.now();
   const t = String(type || 'PHOTO').toUpperCase() === 'DRAW' ? 'DRAW' : 'PHOTO';
   const e = String(ext || 'jpg').toLowerCase().replace('.', '') || 'jpg';
-  return `WO-${wo}__${date}__${t}__${ts}.${e}`;
+  const x = extra ? `__${safeSlug(extra)}` : '';
+  return `WO-${wo}__${date}__${t}__${ts}${x}.${e}`;
 };
 
-/**
- * ✅ Use these everywhere (camera upload, library upload, draw-note upload)
- */
-const buildPhotoFilename = (workOrderNumberOrId, dateObj = new Date()) =>
-  buildAttachmentName({ workOrderNumberOrId, type: 'PHOTO', dateObj, ext: 'jpg' });
-
-const buildDrawNoteFilename = (workOrderNumberOrId, dateObj = new Date()) =>
-  buildAttachmentName({ workOrderNumberOrId, type: 'DRAW', dateObj, ext: 'jpg' });
-
-/**
- * Detect type from saved key/filename (for UI labels)
- * Supports:
- * - Our new naming: __PHOTO__ / __DRAW__
- * - Legacy naming you used earlier: photo__ / drawnote__
- */
-const detectAttachmentType = (keyOrUrl) => {
+const detectKindFromKeyOrUrl = (keyOrUrl) => {
   const s = String(keyOrUrl || '').toLowerCase();
-  if (s.includes('__draw__') || s.includes('drawnote__')) return 'DRAW';
-  if (s.includes('__photo__') || s.includes('photo__')) return 'PHOTO';
-  return 'PHOTO'; // default
-};
 
-const isPdfKeyOrUrl = (keyOrUrl) => {
-  const s = String(keyOrUrl || '').toLowerCase();
-  return s.endsWith('.pdf') || s.includes('.pdf?') || s.startsWith('data:application/pdf');
+  // PDF?
+  const isPdf =
+    s.endsWith('.pdf') || s.includes('.pdf?') || s.startsWith('data:application/pdf');
+  if (isPdf) return 'pdf';
+
+  // Draw vs Photo (new + legacy)
+  if (s.includes('__draw__') || s.includes('drawnote__') || s.includes('_draw_')) return 'draw';
+  if (s.includes('__photo__') || s.includes('photo__') || s.includes('_photo_')) return 'photo';
+
+  return 'image';
 };
 
 /* --------------------------------------------------------------------------
@@ -247,12 +230,6 @@ const PDF_VIEWER_HTML = `
 </body>
 </html>
 `;
-
-// (SECTION 2 continues below…)
-// ================================
-// SECTION 2 of 6
-// Annotator HTML, Sketch HTML, and component state/hooks
-// ================================
 
 /**
  * PDF Annotator (used for "Annotate & Sign PDF")
@@ -642,15 +619,6 @@ export default function ViewWorkOrder() {
 
   const [workOrder, setWorkOrder] = useState(null);
 
-  /**
-   * ✅ Instead of a single "photos" array only,
-   * we’ll keep BOTH:
-   * - attachmentKeys: raw keys from photoPath (this is what delete uses)
-   * - attachmentItems: normalized objects with type + url, used for UI
-   */
-  const [attachmentKeys, setAttachmentKeys] = useState([]); // raw keys from backend photoPath
-  const [attachmentItems, setAttachmentItems] = useState([]); // [{ key, url, kind: 'PDF'|'PHOTO'|'DRAW' }]
-
   // Notes
   const [notes, setNotes] = useState([]);
 
@@ -691,13 +659,6 @@ export default function ViewWorkOrder() {
 
   // Camera upload state
   const [isCameraUploading, setIsCameraUploading] = useState(false);
-
-  // (SECTION 3 continues below…)
-// ================================
-// ✅ DROP-IN REPLACEMENT for SECTION 3 of 6
-// Helpers, fetchWorkOrder, doc lightbox loader, addNote,
-// image processing, and ✅ attachment parsing + delete helper
-// ================================
 
   // -------- helpers for contact actions & address --------
   const normPhone = (p) => String(p || '').replace(/[^\d+]/g, '');
@@ -746,42 +707,20 @@ export default function ViewWorkOrder() {
     return [];
   };
 
-  // ✅ Visit date + ID used for filename builders (keeps PHOTO vs DRAW clear)
-  const getVisitDateForFilename = () => {
+  // ✅ Visit date + ID used for filename builders
+  const getVisitDateForFilename = useCallback(() => {
     const raw = workOrder?.scheduledDate || null;
     if (raw && moment(raw).isValid()) return moment(raw).toDate();
     return new Date();
-  };
+  }, [workOrder?.scheduledDate]);
 
-  const getIdForFilename = () => {
+  const getIdForFilename = useCallback(() => {
     const wo = String(workOrder?.workOrderNumber || '').trim();
     const po = String(workOrder?.poNumber || '').trim();
     if (wo) return `WO-${safeSlug(wo)}`;
     if (po) return `PO-${safeSlug(po)}`;
     return `ID-${safeSlug(workOrderId)}`;
-  };
-
-  /**
-   * ✅ IMPORTANT:
-   * We KEEP these legacy builders because Section 4 calls them.
-   * They produce:
-   *   photo__YYYY-MM-DD__<ID>__<ts>.jpg
-   *   drawnote__YYYY-MM-DD__<ID>__<ts>.jpg
-   * And we detect draw/photo later by prefix.
-   */
-  const buildPhotoFilename = (ext = 'jpg') => {
-    const day = dateStamp(getVisitDateForFilename());
-    const ts = Date.now();
-    const id = getIdForFilename();
-    return `photo__${day}__${id}__${ts}.${ext}`;
-  };
-
-  const buildDrawNoteFilename = (ext = 'jpg') => {
-    const day = dateStamp(getVisitDateForFilename());
-    const ts = Date.now();
-    const id = getIdForFilename();
-    return `drawnote__${day}__${id}__${ts}.${ext}`;
-  };
+  }, [workOrder?.workOrderNumber, workOrder?.poNumber, workOrderId]);
 
   // Fetch work order
   const fetchWorkOrder = useCallback(async () => {
@@ -794,31 +733,6 @@ export default function ViewWorkOrder() {
       // Notes (supports array or legacy TEXT)
       const parsed = parseNotesArrayOrText(data?.notes);
       setNotes(sortNotesDesc(parsed));
-
-      /**
-       * Attachments:
-       * Backend stores keys in photoPath (csv).
-       * We do NOT store the raw keys in state; we derive from workOrder so delete indexes stay correct.
-       * But we DO keep `photos` state as "image URLs only" since the Photo Viewer uses imageItems now.
-       */
-      const rawKeys = (data?.photoPath || '')
-        .split(',')
-        .map((s) => s.trim())
-        .filter(Boolean);
-
-      const allUrls = rawKeys.map((k) => fileUrl(k));
-
-      // Only images (exclude PDFs)
-      const imageUrls = allUrls.filter((u) => {
-        const lower = u.toLowerCase();
-        return !(
-          lower.endsWith('.pdf') ||
-          lower.includes('.pdf?') ||
-          lower.startsWith('data:application/pdf')
-        );
-      });
-
-      setPhotos(imageUrls);
     } catch (err) {
       Alert.alert('Error', err?.response?.data?.error || 'Failed to load work order.');
     }
@@ -832,19 +746,54 @@ export default function ViewWorkOrder() {
   const woPdfUrl = workOrder?.pdfPath ? fileUrl(workOrder.pdfPath) : null;
 
   // Estimates
-  const estimateUrls = [
-    ...toUrlArray(workOrder?.estimatePdfPaths),
-    ...toUrlArray(workOrder?.estimatePaths),
-    ...toUrlArray(workOrder?.estimatesPdf),
-    ...toUrlArray(workOrder?.estimatePdfPath),
-  ];
+  const estimateUrls = useMemo(
+    () => [
+      ...toUrlArray(workOrder?.estimatePdfPaths),
+      ...toUrlArray(workOrder?.estimatePaths),
+      ...toUrlArray(workOrder?.estimatesPdf),
+      ...toUrlArray(workOrder?.estimatePdfPath),
+    ],
+    [
+      workOrder?.estimatePdfPaths,
+      workOrder?.estimatePaths,
+      workOrder?.estimatesPdf,
+      workOrder?.estimatePdfPath,
+    ]
+  );
 
   // Purchase Orders
-  const poUrls = [
-    ...toUrlArray(workOrder?.poPdfPaths),
-    ...toUrlArray(workOrder?.poPaths),
-    ...toUrlArray(workOrder?.poPdfPath),
-  ];
+  const poUrls = useMemo(
+    () => [
+      ...toUrlArray(workOrder?.poPdfPaths),
+      ...toUrlArray(workOrder?.poPaths),
+      ...toUrlArray(workOrder?.poPdfPath),
+    ],
+    [workOrder?.poPdfPaths, workOrder?.poPaths, workOrder?.poPdfPath]
+  );
+
+  // ✅ Component-scope attachment lists derived from workOrder.photoPath (no duplicate state)
+  const attachmentKeys = useMemo(() => {
+    const raw = workOrder?.photoPath || '';
+    return raw
+      .split(',')
+      .map((s) => s.trim())
+      .filter(Boolean);
+  }, [workOrder?.photoPath]);
+
+  const attachmentItems = useMemo(
+    () =>
+      attachmentKeys.map((k) => ({
+        key: k,
+        url: fileUrl(k),
+        kind: detectKindFromKeyOrUrl(k), // 'pdf' | 'draw' | 'photo' | 'image'
+      })),
+    [attachmentKeys]
+  );
+
+  const imageItems = useMemo(
+    () => attachmentItems.filter((a) => a.kind !== 'pdf'),
+    [attachmentItems]
+  );
 
   // Lightbox loader
   const loadDocIntoModal = useCallback(async (url) => {
@@ -970,35 +919,8 @@ export default function ViewWorkOrder() {
     }
   };
 
-  const getKindFromKey = (k) => {
-    const s = String(k || '').toLowerCase();
-
-    // PDFs
-    const isPdf =
-      s.endsWith('.pdf') || s.includes('.pdf?') || s.startsWith('data:application/pdf');
-    if (isPdf) return 'pdf';
-
-    // Draw vs Photo from naming conventions
-    // preferred: _DRAW_ / _PHOTO_ (newer)
-    if (s.includes('_draw_') || s.includes('drawnote__') || s.includes('__draw__')) return 'draw';
-    if (s.includes('_photo_') || s.includes('photo__') || s.includes('__photo__')) return 'photo';
-
-    return 'image';
-  };
-
-  const attachmentItems = attachmentKeys.map((k) => ({
-    key: k,
-    url: fileUrl(k),
-    kind: getKindFromKey(k),
-  }));
-
-  // images only (includes draw notes + photos)
-  const imageItems = attachmentItems.filter((a) => a.kind !== 'pdf');
-
   /**
-   * ✅ Correct delete:
-   * attachmentIndex is the index in attachmentKeys/attachmentItems (NOT imageItems)
-   * so it always matches backend photoPath order.
+   * ✅ Correct delete (index MUST match backend photoPath order)
    */
   const handleDeleteAttachment = (attachmentIndex) => {
     if (attachmentIndex < 0 || attachmentIndex >= attachmentKeys.length) return;
@@ -1024,16 +946,8 @@ export default function ViewWorkOrder() {
     ]);
   };
 
-  // (SECTION 4 continues below…)
-// ================================
-// SECTION 4 of 6
-// Upload logic for Photos + Draw Notes + Annotated PDF
-// IMPORTANT: uploadCameraPhotoNow is defined ONLY ONCE
-// ================================
-
   /**
    * Upload ONE camera photo immediately
-   * (called each time user captures a shot)
    */
   const uploadCameraPhotoNow = async (uri) => {
     if (!workOrderId) return;
@@ -1041,8 +955,12 @@ export default function ViewWorkOrder() {
     const form = new FormData();
     const processedUri = await processImageForUpload(uri);
 
-    // ✅ PHOTO filename (contains PHOTO marker)
-    const name = makePhotoName();
+    const name = buildAttachmentName({
+      workOrderNumberOrId: getIdForFilename(),
+      type: 'PHOTO',
+      dateObj: getVisitDateForFilename(),
+      ext: 'jpg',
+    });
 
     form.append('photoFile', {
       uri: processedUri,
@@ -1078,7 +996,6 @@ export default function ViewWorkOrder() {
         allowsEditing: false,
       });
 
-      // Cancel exits loop
       if (result.canceled || !result.assets?.length) {
         keepCapturing = false;
         break;
@@ -1134,10 +1051,13 @@ export default function ViewWorkOrder() {
     for (let i = 0; i < result.assets.length; i++) {
       const processedUri = await processImageForUpload(result.assets[i].uri);
 
-      // ✅ PHOTO filename per image (unique)
-      // Use makePhotoName() and add a suffix to avoid collisions when selected fast
-      const base = makePhotoName().replace(/\.jpg$/i, '');
-      const name = `${base}__${i + 1}.jpg`;
+      const name = buildAttachmentName({
+        workOrderNumberOrId: getIdForFilename(),
+        type: 'PHOTO',
+        dateObj: getVisitDateForFilename(),
+        ext: 'jpg',
+        extra: String(i + 1),
+      });
 
       form.append('photoFile', {
         uri: processedUri,
@@ -1162,38 +1082,7 @@ export default function ViewWorkOrder() {
   };
 
   /**
-   * Delete attachment by index from attachmentKeys
-   * (works for images + pdfs since backend stores keys)
-   */
-  const handleDeleteAttachment = (idx) => {
-    if (!attachmentKeys?.length) return;
-    if (idx < 0 || idx >= attachmentKeys.length) return;
-
-    const key = attachmentKeys[idx];
-
-    Alert.alert('Delete Attachment?', 'This will permanently remove it.', [
-      { text: 'Cancel', style: 'cancel' },
-      {
-        text: 'Delete',
-        style: 'destructive',
-        onPress: async () => {
-          try {
-            await api.delete(`/work-orders/${workOrderId}/attachments`, {
-              data: { key },
-              headers: { 'Content-Type': 'application/json', ...authHeaders() },
-            });
-            await fetchWorkOrder();
-            Alert.alert('Deleted');
-          } catch (err) {
-            Alert.alert('Error', err?.response?.data?.error || err?.message || 'Delete failed.');
-          }
-        },
-      },
-    ]);
-  };
-
-  /**
-   * Share currently viewed image (viewerIndex from swipe viewer)
+   * Share currently viewed image (viewerIndex)
    */
   const handleShare = async () => {
     if (!imageItems.length) return;
@@ -1260,7 +1149,6 @@ export default function ViewWorkOrder() {
 
         const form = new FormData();
 
-        // ✅ Consistent signed PDF name
         const woTag =
           String(workOrder?.workOrderNumber || '').trim() ||
           String(workOrder?.poNumber || '').trim() ||
@@ -1290,7 +1178,7 @@ export default function ViewWorkOrder() {
 
   /**
    * Draw Note upload (from SKETCH_HTML)
-   * ✅ ALWAYS saved as DRAW (contains DRAW marker)
+   * ✅ ALWAYS saved as DRAW
    */
   const onSketchMessage = async (ev) => {
     const msg = ev?.nativeEvent?.data || '';
@@ -1320,8 +1208,12 @@ export default function ViewWorkOrder() {
         const form = new FormData();
         form.append('photoFile', {
           uri: processed,
-          // ✅ DRAW filename (contains DRAW marker)
-          name: makeDrawName(),
+          name: buildAttachmentName({
+            workOrderNumberOrId: getIdForFilename(),
+            type: 'DRAW',
+            dateObj: getVisitDateForFilename(),
+            ext: 'jpg',
+          }),
           type: 'image/jpeg',
         });
 
@@ -1341,15 +1233,56 @@ export default function ViewWorkOrder() {
     }
   };
 
-  // (SECTION 5 continues below…)
-// ================================
-// SECTION 5 of 6
-// Display fields + main UI JSX (ViewWorkOrder screen)
-// IMPORTANT:
-// - This section OPENS the return ( ... )
-// - DO NOT add any modals after the component ends
-// - Section 6 will paste the modals BEFORE we close the return
-// ================================
+  // ----- status update -----
+  const openStatusModal = () => {
+    setPendingStatus(workOrder?.status || STATUS_OPTIONS[0]);
+    setShowStatusModal(true);
+  };
+
+  const applyStatus = async () => {
+    const next = pendingStatus || STATUS_OPTIONS[0];
+    const prev = workOrder?.status;
+
+    setWorkOrder((w) => (w ? { ...w, status: next } : w));
+    setShowStatusModal(false);
+    setIsStatusSaving(true);
+
+    try {
+      const form = new FormData();
+      form.append('status', next);
+
+      await api.put(`/work-orders/${workOrderId}/edit`, form, {
+        headers: authHeaders(),
+      });
+
+      await fetchWorkOrder();
+    } catch (e) {
+      setWorkOrder((w) => (w ? { ...w, status: prev } : w));
+      Alert.alert('Error', e?.response?.data?.error || e?.message || 'Failed to update status.');
+    } finally {
+      setIsStatusSaving(false);
+    }
+  };
+  // -------------------------
+
+  // Open a PDF attachment using the multi-page viewer (by attachment index)
+  const openAttachmentPdf = (attachmentIndex) => {
+    const item = attachmentItems?.[attachmentIndex];
+    if (!item || item.kind !== 'pdf') {
+      Alert.alert('No PDF', 'That attachment is not a PDF.');
+      return;
+    }
+
+    const pdfItems = attachmentItems.filter((a) => a.kind === 'pdf');
+    const start = Math.max(0, pdfItems.findIndex((p) => p.url === item.url));
+
+    setDocGroup('ATTACH');
+    setDocItems(pdfItems.map((p, i) => ({ title: `Attachment PDF ${i + 1}`, url: p.url })));
+
+    setDocIndex(start);
+    setDocModalVisible(true);
+    loadDocIntoModal(pdfItems[start].url);
+  };
 
   // ------- derived fields for display (with fallbacks) -------
   const siteName =
@@ -1417,70 +1350,6 @@ export default function ViewWorkOrder() {
       .join(', ') ||
     '';
 
-  // ----- status update -----
-  const openStatusModal = () => {
-    setPendingStatus(workOrder?.status || STATUS_OPTIONS[0]);
-    setShowStatusModal(true);
-  };
-
-  const applyStatus = async () => {
-    const next = pendingStatus || STATUS_OPTIONS[0];
-    const prev = workOrder?.status;
-
-    setWorkOrder((w) => (w ? { ...w, status: next } : w));
-    setShowStatusModal(false);
-    setIsStatusSaving(true);
-
-    try {
-      const form = new FormData();
-      form.append('status', next);
-
-      await api.put(`/work-orders/${workOrderId}/edit`, form, {
-        headers: authHeaders(),
-      });
-
-      await fetchWorkOrder();
-    } catch (e) {
-      setWorkOrder((w) => (w ? { ...w, status: prev } : w));
-      Alert.alert('Error', e?.response?.data?.error || e?.message || 'Failed to update status.');
-    } finally {
-      setIsStatusSaving(false);
-    }
-  };
-  // -------------------------
-
-  // Open a PDF attachment from Attachments modal using the multi-page viewer
-  const openAttachmentPdf = (attachmentIndex) => {
-    if (!attachmentItems?.length) return;
-
-    const pdfItems = attachmentItems.filter((a) => a.kind === 'pdf');
-    if (!pdfItems.length) {
-      Alert.alert('No PDF', 'No PDF attachments found.');
-      return;
-    }
-
-    // map attachmentIndex -> pdf index
-    const targetKey = attachmentKeys?.[attachmentIndex];
-    let startDocIndex = 0;
-    if (targetKey) {
-      const matchUrl = fileUrl(targetKey);
-      const idx = pdfItems.findIndex((p) => p.url === matchUrl);
-      startDocIndex = idx >= 0 ? idx : 0;
-    }
-
-    setDocGroup('ATTACH');
-    setDocItems(pdfItems.map((p, i) => ({ title: `Attachment PDF ${i + 1}`, url: p.url })));
-
-    const safeIdx = Math.min(
-      Math.max(0, startDocIndex),
-      Math.max(0, pdfItems.length - 1)
-    );
-
-    setDocIndex(safeIdx);
-    setDocModalVisible(true);
-    loadDocIntoModal(pdfItems[safeIdx].url);
-  };
-
   // If still loading
   if (!workOrder) {
     return (
@@ -1490,15 +1359,9 @@ export default function ViewWorkOrder() {
     );
   }
 
-  // ✅ IMPORTANT:
-  // We OPEN the return here and KEEP IT OPEN.
-  // Section 6 will paste all modals INSIDE this same return before we close it.
   return (
     <View style={styles.screen}>
-      <ScrollView
-        contentContainerStyle={styles.details}
-        keyboardShouldPersistTaps="handled"
-      >
+      <ScrollView contentContainerStyle={styles.details} keyboardShouldPersistTaps="handled">
         {/* Header */}
         <View style={styles.header}>
           <Text style={styles.headerTitle}>Work Order</Text>
@@ -1601,10 +1464,7 @@ export default function ViewWorkOrder() {
             <Text style={styles.value}>{problem}</Text>
           </View>
 
-          <TouchableOpacity
-            style={styles.backRow}
-            onPress={() => navigation.goBack()}
-          >
+          <TouchableOpacity style={styles.backRow} onPress={() => navigation.goBack()}>
             <Text style={styles.backRowText}>← Back to List</Text>
           </TouchableOpacity>
         </View>
@@ -1641,9 +1501,7 @@ export default function ViewWorkOrder() {
             </View>
             <Text style={styles.tileTitle}>POs</Text>
             <Text style={styles.tileSub}>
-              {poUrls.length
-                ? `${poUrls.length} file${poUrls.length > 1 ? 's' : ''}`
-                : 'None'}
+              {poUrls.length ? `${poUrls.length} file${poUrls.length > 1 ? 's' : ''}` : 'None'}
             </Text>
             {!!poUrls.length && <Text style={styles.tileBadge}>PDF</Text>}
           </TouchableOpacity>
@@ -1712,9 +1570,8 @@ export default function ViewWorkOrder() {
             <Text style={styles.sectionHeader}>Photos & Draw Notes</Text>
             <View style={styles.previewGrid}>
               {imageItems.slice(0, 12).map((it, i) => {
-                const kind = it?.kind; // 'photo' | 'draw' | 'image'
                 const badge =
-                  kind === 'draw' ? 'DRAW' : kind === 'photo' ? 'PHOTO' : 'IMG';
+                  it.kind === 'draw' ? 'DRAW' : it.kind === 'photo' ? 'PHOTO' : 'IMG';
 
                 return (
                   <TouchableOpacity
@@ -1725,7 +1582,6 @@ export default function ViewWorkOrder() {
                       setPhotoViewerVisible(true);
                     }}
                     onLongPress={() => {
-                      // find original attachment index for delete
                       const attachIdx = attachmentItems.findIndex((a) => a.url === it.url);
                       if (attachIdx >= 0) handleDeleteAttachment(attachIdx);
                     }}
@@ -1740,9 +1596,7 @@ export default function ViewWorkOrder() {
             </View>
 
             {imageItems.length > 12 && (
-              <Text style={styles.previewHint}>
-                Showing first 12 — open Attachments to see all.
-              </Text>
+              <Text style={styles.previewHint}>Showing first 12 — open Attachments to see all.</Text>
             )}
           </>
         )}
@@ -1764,38 +1618,8 @@ export default function ViewWorkOrder() {
         )}
       </ScrollView>
 
-      {/* ✅ DO NOT CLOSE RETURN YET.
-          Section 6 will paste ALL MODALS here, then close the return + component. */}
-
-      {/* (SECTION 6 continues below…) */}
-// ================================
-// SECTION 6 of 6
-// ALL Modals + close the return + component + FINAL styles
-// ✅ FIX: Adds attachment parsing + new viewer + updated tiles UI
-// ================================
-
-      {/*
-        ─────────────────────────────────────────────────────────────
-        ATTACHMENT PARSING (needed for new UI + badges + correct delete)
-        - attachmentKeys: raw backend keys in original order
-        - attachmentItems: normalized items aligned with attachmentKeys index
-        - imageItems: image-only list (photos + draw notes)
-        - badges derived from filename conventions:
-           - new: WO-<id>_<date>_PHOTO_... / _DRAW_...
-           - legacy: photo__... / drawnote__...
-        ─────────────────────────────────────────────────────────────
-      */}
-      {(() => {
-        // NO RENDER OUTPUT – this IIFE only ensures variables exist in scope for modals
-        return null;
-      })()}
-
-      {/* Photo Viewer for uploaded image attachments (PHOTO + DRAW) */}
-      <Modal
-        visible={photoViewerVisible}
-        animationType="fade"
-        onRequestClose={closePhotoViewer}
-      >
+      {/* Photo Viewer */}
+      <Modal visible={photoViewerVisible} animationType="fade" onRequestClose={closePhotoViewer}>
         <View style={styles.viewerContainer}>
           <FlatList
             data={imageItems}
@@ -1817,37 +1641,18 @@ export default function ViewWorkOrder() {
               <View style={{ width: screenWidth, height: screenHeight }}>
                 <Image source={{ uri: item?.url }} style={styles.fullScreenImage} />
                 <View style={styles.viewerBadge}>
-                  <Text style={styles.viewerBadgeText}>
-                    {(item?.kind || '').toUpperCase()}
-                  </Text>
+                  <Text style={styles.viewerBadgeText}>{(item?.kind || '').toUpperCase()}</Text>
                 </View>
               </View>
             )}
           />
 
           <View style={styles.viewerButtons}>
-            <TouchableOpacity
-              style={[styles.viewerButton, styles.shareBtn]}
-              onPress={async () => {
-                if (!imageItems.length) return;
-                const safeIndex = Math.min(
-                  Math.max(0, viewerIndex),
-                  Math.max(0, imageItems.length - 1)
-                );
-                const url = imageItems[safeIndex]?.url;
-                if (!url) return;
-                try {
-                  await Share.share({ url, message: url });
-                } catch {}
-              }}
-            >
+            <TouchableOpacity style={[styles.viewerButton, styles.shareBtn]} onPress={handleShare}>
               <Text style={styles.shareText}>Share</Text>
             </TouchableOpacity>
 
-            <TouchableOpacity
-              style={[styles.viewerButton, styles.exitBtn]}
-              onPress={closePhotoViewer}
-            >
+            <TouchableOpacity style={[styles.viewerButton, styles.exitBtn]} onPress={closePhotoViewer}>
               <Text style={styles.exitText}>Exit</Text>
             </TouchableOpacity>
           </View>
@@ -1867,123 +1672,46 @@ export default function ViewWorkOrder() {
           <View style={styles.sheet}>
             <View style={styles.sheetHeader}>
               <Text style={styles.sheetTitle}>Attachments</Text>
-              <TouchableOpacity
-                style={styles.sheetClose}
-                onPress={() => setViewAttachmentsVisible(false)}
-              >
+              <TouchableOpacity style={styles.sheetClose} onPress={() => setViewAttachmentsVisible(false)}>
                 <Text style={styles.sheetCloseText}>Close</Text>
               </TouchableOpacity>
             </View>
 
-            {(() => {
-              // Build keys + items ON DEMAND so it always matches latest workOrder.photoPath
-              const keys = (workOrder?.photoPath || '')
-                .split(',')
-                .map((s) => s.trim())
-                .filter(Boolean);
+            {!attachmentItems.length ? (
+              <View style={{ paddingVertical: 18 }}>
+                <Text style={styles.emptyText}>No attachments uploaded.</Text>
+              </View>
+            ) : (
+              <FlatList
+                data={attachmentItems}
+                keyExtractor={(it, i) => `${it.key}-${i}`}
+                numColumns={3}
+                contentContainerStyle={styles.galleryList}
+                renderItem={({ item, index }) => {
+                  const isPdf = item.kind === 'pdf';
+                  const badge =
+                    item.kind === 'draw'
+                      ? 'DRAW'
+                      : item.kind === 'photo'
+                      ? 'PHOTO'
+                      : isPdf
+                      ? 'PDF'
+                      : 'IMG';
 
-              const getKindFromKeyOrUrl = (kOrUrl) => {
-                const s = String(kOrUrl || '').toLowerCase();
-
-                // PDFs
-                const isPdf =
-                  s.endsWith('.pdf') ||
-                  s.includes('.pdf?') ||
-                  s.startsWith('data:application/pdf');
-
-                if (isPdf) return 'pdf';
-
-                // Draw vs Photo from naming
-                // preferred: _DRAW_ or _PHOTO_
-                if (s.includes('_draw_') || s.includes('drawnote__') || s.includes('__draw__'))
-                  return 'draw';
-                if (s.includes('_photo_') || s.includes('photo__') || s.includes('__photo__'))
-                  return 'photo';
-
-                // fallback
-                return 'image';
-              };
-
-              const items = keys.map((k) => {
-                const url = fileUrl(k);
-                const kind = getKindFromKeyOrUrl(k);
-                return { key: k, url, kind };
-              });
-
-              // Provide the variables expected by Section 5 (safe no-op if already exist)
-              // NOTE: these are function-scoped; Section 5 expects them at component scope.
-              // So we ALSO create component-scope fallbacks below (see "Component-scope attachment lists").
-              if (!keys.length) {
-                return (
-                  <View style={{ paddingVertical: 18 }}>
-                    <Text style={styles.emptyText}>No attachments uploaded.</Text>
-                  </View>
-                );
-              }
-
-              return (
-                <FlatList
-                  data={items}
-                  keyExtractor={(it, i) => `${it.key}-${i}`}
-                  numColumns={3}
-                  contentContainerStyle={styles.galleryList}
-                  renderItem={({ item, index }) => {
-                    const isPdf = item.kind === 'pdf';
-                    const badge =
-                      item.kind === 'draw'
-                        ? 'DRAW'
-                        : item.kind === 'photo'
-                        ? 'PHOTO'
-                        : isPdf
-                        ? 'PDF'
-                        : 'IMG';
-
-                    if (isPdf) {
-                      return (
-                        <View style={styles.thumbWrapper}>
-                          <TouchableOpacity
-                            style={styles.pdfTile}
-                            onPress={() => {
-                              setViewAttachmentsVisible(false);
-                              openAttachmentPdf(index);
-                            }}
-                          >
-                            <Text style={styles.pdfIcon}>📄</Text>
-                            <Text style={styles.pdfLabel} numberOfLines={2}>
-                              PDF
-                            </Text>
-                            <View style={styles.thumbBadge}>
-                              <Text style={styles.thumbBadgeText}>{badge}</Text>
-                            </View>
-                          </TouchableOpacity>
-
-                          <TouchableOpacity
-                            style={styles.deleteIcon}
-                            onPress={() => handleDeleteAttachment(index)}
-                            hitSlop={{ top: 8, left: 8, right: 8, bottom: 8 }}
-                          >
-                            <Text style={styles.deleteText}>×</Text>
-                          </TouchableOpacity>
-                        </View>
-                      );
-                    }
-
-                    // IMAGE (PHOTO/DRAW)
+                  if (isPdf) {
                     return (
                       <View style={styles.thumbWrapper}>
                         <TouchableOpacity
+                          style={styles.pdfTile}
                           onPress={() => {
-                            const viewerIdx = imageItems.findIndex((p) => p.url === item.url);
-                            if (viewerIdx !== -1) {
-                              setReturnToAttachments(true);
-                              setViewerIndex(viewerIdx);
-                              setPhotoViewerVisible(true);
-                              setViewAttachmentsVisible(false);
-                            }
+                            setViewAttachmentsVisible(false);
+                            openAttachmentPdf(index);
                           }}
-                          style={{ flex: 1 }}
                         >
-                          <Image source={{ uri: item.url }} style={styles.thumbnail} />
+                          <Text style={styles.pdfIcon}>📄</Text>
+                          <Text style={styles.pdfLabel} numberOfLines={2}>
+                            PDF
+                          </Text>
                           <View style={styles.thumbBadge}>
                             <Text style={styles.thumbBadgeText}>{badge}</Text>
                           </View>
@@ -1998,10 +1726,41 @@ export default function ViewWorkOrder() {
                         </TouchableOpacity>
                       </View>
                     );
-                  }}
-                />
-              );
-            })()}
+                  }
+
+                  // IMAGE (PHOTO/DRAW)
+                  return (
+                    <View style={styles.thumbWrapper}>
+                      <TouchableOpacity
+                        onPress={() => {
+                          const viewerIdx = imageItems.findIndex((p) => p.url === item.url);
+                          if (viewerIdx !== -1) {
+                            setReturnToAttachments(true);
+                            setViewerIndex(viewerIdx);
+                            setPhotoViewerVisible(true);
+                            setViewAttachmentsVisible(false);
+                          }
+                        }}
+                        style={{ flex: 1 }}
+                      >
+                        <Image source={{ uri: item.url }} style={styles.thumbnail} />
+                        <View style={styles.thumbBadge}>
+                          <Text style={styles.thumbBadgeText}>{badge}</Text>
+                        </View>
+                      </TouchableOpacity>
+
+                      <TouchableOpacity
+                        style={styles.deleteIcon}
+                        onPress={() => handleDeleteAttachment(index)}
+                        hitSlop={{ top: 8, left: 8, right: 8, bottom: 8 }}
+                      >
+                        <Text style={styles.deleteText}>×</Text>
+                      </TouchableOpacity>
+                    </View>
+                  );
+                }}
+              />
+            )}
           </View>
         </View>
       </Modal>
@@ -2038,10 +1797,7 @@ export default function ViewWorkOrder() {
               <TouchableOpacity style={styles.saveNoteBtn} onPress={addNote}>
                 <Text style={styles.saveNoteText}>Save</Text>
               </TouchableOpacity>
-              <TouchableOpacity
-                style={styles.cancelNoteBtn}
-                onPress={() => setShowAddNoteModal(false)}
-              >
+              <TouchableOpacity style={styles.cancelNoteBtn} onPress={() => setShowAddNoteModal(false)}>
                 <Text style={styles.cancelNoteText}>Cancel</Text>
               </TouchableOpacity>
             </View>
@@ -2066,18 +1822,10 @@ export default function ViewWorkOrder() {
               {STATUS_OPTIONS.map((s) => (
                 <TouchableOpacity
                   key={s}
-                  style={[
-                    styles.statusOption,
-                    pendingStatus === s && styles.statusOptionActive,
-                  ]}
+                  style={[styles.statusOption, pendingStatus === s && styles.statusOptionActive]}
                   onPress={() => setPendingStatus(s)}
                 >
-                  <Text
-                    style={[
-                      styles.statusText,
-                      pendingStatus === s && styles.statusTextActive,
-                    ]}
-                  >
+                  <Text style={[styles.statusText, pendingStatus === s && styles.statusTextActive]}>
                     {s}
                   </Text>
                 </TouchableOpacity>
@@ -2088,10 +1836,7 @@ export default function ViewWorkOrder() {
               <TouchableOpacity style={styles.saveNoteBtn} onPress={applyStatus}>
                 <Text style={styles.saveNoteText}>Apply</Text>
               </TouchableOpacity>
-              <TouchableOpacity
-                style={styles.cancelNoteBtn}
-                onPress={() => setShowStatusModal(false)}
-              >
+              <TouchableOpacity style={styles.cancelNoteBtn} onPress={() => setShowStatusModal(false)}>
                 <Text style={styles.cancelNoteText}>Cancel</Text>
               </TouchableOpacity>
             </View>
@@ -2100,11 +1845,7 @@ export default function ViewWorkOrder() {
       </Modal>
 
       {/* Draw Note Modal (JPEG export) */}
-      <Modal
-        visible={sketchVisible}
-        animationType="slide"
-        onRequestClose={() => setSketchVisible(false)}
-      >
+      <Modal visible={sketchVisible} animationType="slide" onRequestClose={() => setSketchVisible(false)}>
         <SafeAreaView style={{ flex: 1, backgroundColor: '#000' }}>
           <WebView
             originWhitelist={['*']}
@@ -2121,11 +1862,7 @@ export default function ViewWorkOrder() {
       </Modal>
 
       {/* Annotate & Sign Modal */}
-      <Modal
-        visible={annotateVisible}
-        animationType="slide"
-        onRequestClose={() => setAnnotateVisible(false)}
-      >
+      <Modal visible={annotateVisible} animationType="slide" onRequestClose={() => setAnnotateVisible(false)}>
         <SafeAreaView style={{ flex: 1, backgroundColor: '#000' }}>
           {pdfBase64 ? (
             <WebView
@@ -2140,9 +1877,7 @@ export default function ViewWorkOrder() {
               decelerationRate="normal"
               overScrollMode="always"
               onMessage={onAnnotatorMessage}
-              injectedJavaScriptBeforeContentLoaded={`window.PDF_BASE64 = ${JSON.stringify(
-                pdfBase64
-              )}; true;`}
+              injectedJavaScriptBeforeContentLoaded={`window.PDF_BASE64 = ${JSON.stringify(pdfBase64)}; true;`}
               style={{ flex: 1 }}
             />
           ) : (
@@ -2154,17 +1889,10 @@ export default function ViewWorkOrder() {
       </Modal>
 
       {/* Document Lightbox Modal (for WO/EST/PO/ATTACH) */}
-      <Modal
-        visible={docModalVisible}
-        animationType="slide"
-        onRequestClose={() => setDocModalVisible(false)}
-      >
+      <Modal visible={docModalVisible} animationType="slide" onRequestClose={() => setDocModalVisible(false)}>
         <SafeAreaView style={{ flex: 1, backgroundColor: '#000' }}>
           <View style={styles.docHeader}>
-            <TouchableOpacity
-              onPress={() => setDocModalVisible(false)}
-              style={styles.docHeaderBtn}
-            >
+            <TouchableOpacity onPress={() => setDocModalVisible(false)} style={styles.docHeaderBtn}>
               <Text style={styles.docHeaderBtnText}>Close</Text>
             </TouchableOpacity>
 
@@ -2227,9 +1955,7 @@ export default function ViewWorkOrder() {
                     setDocError(msg.slice(6));
                   }
                 }}
-                injectedJavaScriptBeforeContentLoaded={`window.PDF_BASE64 = ${JSON.stringify(
-                  docB64
-                )}; true;`}
+                injectedJavaScriptBeforeContentLoaded={`window.PDF_BASE64 = ${JSON.stringify(docB64)}; true;`}
                 style={{
                   flex: 1,
                   height: docHeight,
@@ -2253,24 +1979,11 @@ export default function ViewWorkOrder() {
       </Modal>
     </View>
   );
-} // ✅ END ViewWorkOrder component
+}
 
-// ================================
-// ✅ COMPONENT-SCOPE attachment lists + delete helper
-// Put these RIGHT ABOVE StyleSheet.create (still inside file scope)
-// (If you already created these in Section 3, keep ONE version only.)
-// ================================
-
-// NOTE: These helpers MUST live inside the component in your final file.
-// If you already added them in Section 3, DO NOT duplicate them.
-// I’m including them here in styles block area as a reminder:
-// - attachmentKeys, attachmentItems, imageItems, handleDeleteAttachment
-
-
-// ================================
-// FINAL STYLES (modern tiles + sheet modal)
-// IMPORTANT: This file MUST have only ONE StyleSheet.create
-// ================================
+/* ================================
+ * FINAL STYLES (single StyleSheet.create)
+ * ================================ */
 const styles = StyleSheet.create({
   /* ---------- Page ---------- */
   screen: { flex: 1, backgroundColor: '#F1F5F9' },
