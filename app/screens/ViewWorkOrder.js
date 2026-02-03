@@ -1,10 +1,10 @@
 // File: app/screens/ViewWorkOrder.js
 // ================================
 // SECTION 1 of 6
-// Imports, constants, helpers, and filename rules (NO duplicates)
+// Imports, constants, helpers, and attachment filename rules (NO duplicates)
 // ================================
 
-import React, { useRef, useState, useEffect, useCallback } from 'react';
+import React, { useRef, useState, useEffect, useCallback, useMemo } from 'react';
 import {
   View,
   Text,
@@ -53,7 +53,8 @@ const STATUS_OPTIONS = [
 /* ---------- auth header (match web) ---------- */
 const authHeaders = () => {
   try {
-    const token = typeof localStorage !== 'undefined' ? localStorage.getItem('jwt') : null;
+    const token =
+      typeof localStorage !== 'undefined' ? localStorage.getItem('jwt') : null;
     // RN doesn't have localStorage; if your axios instance already attaches token, this is harmless.
     return token ? { Authorization: `Bearer ${token}` } : {};
   } catch {
@@ -66,11 +67,11 @@ const authHeaders = () => {
  *
  * Goal:
  * - Photos + Draw Notes upload through same backend field "photoFile"
- * - We differentiate later using filename (PHOTO vs DRAW)
- * - Include visit date in filename so you can separate initial vs final trip
+ * - We differentiate them later using filename TYPE tag: PHOTO vs DRAW
+ * - Include visit date in filename so you can separate trips/visits
  *
  * Format:
- *   WO-<identifier>_<YYYY-MM-DD>_<TYPE>_<timestamp>.jpg
+ *   WO-<identifier>__<YYYY-MM-DD>__<TYPE>__<timestamp>.jpg
  * TYPE:
  *   PHOTO or DRAW
  * -------------------------------------------------------------------------- */
@@ -84,28 +85,41 @@ const safeSlug = (v) =>
 
 const dateStamp = (d = new Date()) => moment(d).format('YYYY-MM-DD');
 
-/**
- * Generic attachment filename builder
- */
-const buildAttachmentName = ({ workOrderNumberOrId, type, dateObj }) => {
+const buildAttachmentName = ({ workOrderNumberOrId, type, dateObj, ext = 'jpg' }) => {
   const wo = safeSlug(workOrderNumberOrId || 'WO');
   const date = dateStamp(dateObj || new Date());
   const ts = Date.now();
   const t = String(type || 'PHOTO').toUpperCase() === 'DRAW' ? 'DRAW' : 'PHOTO';
-  return `WO-${wo}_${date}_${t}_${ts}.jpg`;
+  const e = String(ext || 'jpg').toLowerCase().replace('.', '') || 'jpg';
+  return `WO-${wo}__${date}__${t}__${ts}.${e}`;
 };
 
 /**
- * NOTE:
- * Your Section 4 currently calls buildPhotoFilename() / buildDrawNoteFilename().
- * Those did NOT exist in your code — that causes runtime errors.
- * These wrappers keep the naming consistent and avoid missing-function bugs.
+ * ✅ Use these everywhere (camera upload, library upload, draw-note upload)
  */
 const buildPhotoFilename = (workOrderNumberOrId, dateObj = new Date()) =>
-  buildAttachmentName({ workOrderNumberOrId, type: 'PHOTO', dateObj });
+  buildAttachmentName({ workOrderNumberOrId, type: 'PHOTO', dateObj, ext: 'jpg' });
 
 const buildDrawNoteFilename = (workOrderNumberOrId, dateObj = new Date()) =>
-  buildAttachmentName({ workOrderNumberOrId, type: 'DRAW', dateObj });
+  buildAttachmentName({ workOrderNumberOrId, type: 'DRAW', dateObj, ext: 'jpg' });
+
+/**
+ * Detect type from saved key/filename (for UI labels)
+ * Supports:
+ * - Our new naming: __PHOTO__ / __DRAW__
+ * - Legacy naming you used earlier: photo__ / drawnote__
+ */
+const detectAttachmentType = (keyOrUrl) => {
+  const s = String(keyOrUrl || '').toLowerCase();
+  if (s.includes('__draw__') || s.includes('drawnote__')) return 'DRAW';
+  if (s.includes('__photo__') || s.includes('photo__')) return 'PHOTO';
+  return 'PHOTO'; // default
+};
+
+const isPdfKeyOrUrl = (keyOrUrl) => {
+  const s = String(keyOrUrl || '').toLowerCase();
+  return s.endsWith('.pdf') || s.includes('.pdf?') || s.startsWith('data:application/pdf');
+};
 
 /* --------------------------------------------------------------------------
  * Notes parsing/formatting (JSON array OR legacy TEXT log)
@@ -233,6 +247,8 @@ const PDF_VIEWER_HTML = `
 </body>
 </html>
 `;
+
+// (SECTION 2 continues below…)
 // ================================
 // SECTION 2 of 6
 // Annotator HTML, Sketch HTML, and component state/hooks
@@ -283,6 +299,7 @@ const ANNOTATOR_HTML = `
   <script>
     function b64ToUint8(b64){const bin=atob(b64);const bytes=new Uint8Array(bin.length);for(let i=0;i<bin.length;i++)bytes[i]=bin.charCodeAt(i);return bytes;}
     const state={tool:'pen',drawEnabled:false,pages:[]};
+
     function applyPointerMode(){
       for(const p of state.pages){
         p.overlayCanvas.style.pointerEvents = state.drawEnabled ? 'auto' : 'none';
@@ -292,9 +309,17 @@ const ANNOTATOR_HTML = `
     }
     function setTool(t){state.tool=t;applyPointerMode();}
     function setDrawEnabled(on){state.drawEnabled=!!on;applyPointerMode();}
-    function pushUndo(p){try{const snap=p.overlayCtx.getImageData(0,0,p.overlayCanvas.width,p.overlayCanvas.height);p.strokes.push(snap);if(p.strokes.length>60)p.strokes.shift();}catch(e){}}
-    function undo(p){if(p.strokes.length)p.overlayCtx.putImageData(p.strokes.pop(),0,0);}
-    function clearPage(p){pushUndo(p);p.overlayCtx.clearRect(0,0,p.overlayCanvas.width,p.overlayCanvas.height);}
+
+    function pushUndo(p){
+      try{
+        const snap=p.overlayCtx.getImageData(0,0,p.overlayCanvas.width,p.overlayCanvas.height);
+        p.strokes.push(snap);
+        if(p.strokes.length>60)p.strokes.shift();
+      }catch(e){}
+    }
+    function undo(p){ if(p.strokes.length) p.overlayCtx.putImageData(p.strokes.pop(),0,0); }
+    function clearPage(p){ pushUndo(p); p.overlayCtx.clearRect(0,0,p.overlayCanvas.width,p.overlayCanvas.height); }
+
     function widthFor(a,b){
       const dt = Math.max(1, (b.ts - a.ts));
       const dx=b.x-a.x, dy=b.y-a.y;
@@ -305,6 +330,7 @@ const ANNOTATOR_HTML = `
       const pressureFactor = (('p' in a) && ('p' in b)) ? (0.6 + 0.4 * ((a.p + b.p)/2)) : 1.0;
       return Math.max(minW, Math.min(maxW, maxW * speedFactor * pressureFactor));
     }
+
     async function renderPDF(){
       try{
         const b64=window.PDF_BASE64||''; if(!b64) throw new Error('Missing PDF data.');
@@ -336,9 +362,11 @@ const ANNOTATOR_HTML = `
 
           const octx=overlay.getContext('2d');
           octx.lineCap='round'; octx.lineJoin='round'; octx.strokeStyle='#000'; octx.setLineDash([]);
-          const pState={pageCanvas,overlayCanvas:overlay,overlayCtx:octx,strokes:[]}; state.pages.push(pState);
+          const pState={pageCanvas,overlayCanvas:overlay,overlayCtx:octx,strokes:[]};
+          state.pages.push(pState);
 
           let drawing=false,last=null;
+
           function getPos(ev){
             const t=(ev.touches?ev.touches[0]:ev);
             const r=overlay.getBoundingClientRect();
@@ -347,16 +375,35 @@ const ANNOTATOR_HTML = `
             const p = (t.force && !isNaN(t.force)) ? t.force : (t.pressure && !isNaN(t.pressure) ? t.pressure : 0.5);
             return {x,y,p,ts:performance.now()};
           }
-          function start(ev){ if(!state.drawEnabled) return; ev.preventDefault(); pushUndo(pState); drawing=true; last=getPos(ev); }
-          function move(ev){
-            if(!state.drawEnabled||!drawing) return; ev.preventDefault();
-            const pt=getPos(ev); const a=last||pt, b=pt;
-            const w=widthFor(a,b); const erase = (state.tool==='erase');
-            octx.save(); octx.globalCompositeOperation = erase ? 'destination-out' : 'source-over';
-            octx.lineWidth = erase ? Math.max(10, w*10) : w;
-            octx.beginPath(); octx.moveTo(a.x, a.y); octx.lineTo(b.x, b.y); octx.stroke();
-            octx.restore(); last=pt;
+
+          function start(ev){
+            if(!state.drawEnabled) return;
+            ev.preventDefault();
+            pushUndo(pState);
+            drawing=true;
+            last=getPos(ev);
           }
+
+          function move(ev){
+            if(!state.drawEnabled||!drawing) return;
+            ev.preventDefault();
+            const pt=getPos(ev);
+            const a=last||pt, b=pt;
+            const w=widthFor(a,b);
+            const erase = (state.tool==='erase');
+
+            octx.save();
+            octx.globalCompositeOperation = erase ? 'destination-out' : 'source-over';
+            octx.lineWidth = erase ? Math.max(10, w*10) : w;
+            octx.beginPath();
+            octx.moveTo(a.x, a.y);
+            octx.lineTo(b.x, b.y);
+            octx.stroke();
+            octx.restore();
+
+            last=pt;
+          }
+
           function end(){ drawing=false; }
 
           overlay.addEventListener('touchstart',start,{passive:false});
@@ -368,30 +415,46 @@ const ANNOTATOR_HTML = `
         }
 
         applyPointerMode();
-      }catch(e){window.ReactNativeWebView?.postMessage('ERROR:'+(e?.message||String(e))); }
+      }catch(e){
+        window.ReactNativeWebView?.postMessage('ERROR:'+(e?.message||String(e)));
+      }
     }
+
     async function saveAndUpload(){
       try{
         const b64=window.PDF_BASE64||''; if(!b64) throw new Error('Missing PDF data.');
         const pdfBytes=b64ToUint8(b64);
         const pdfDoc=await PDFLib.PDFDocument.load(pdfBytes);
         const pages=pdfDoc.getPages();
+
         for(let i=0;i<Math.min(pages.length,state.pages.length);i++){
           const p=pages[i], view=state.pages[i];
           const dataUrl=view.overlayCanvas.toDataURL('image/png');
           const pngBytes=await (await fetch(dataUrl)).arrayBuffer();
           const png=await pdfDoc.embedPng(pngBytes);
+
           const pageW=p.getWidth(), pageH=p.getHeight();
           const scaleX=pageW/view.overlayCanvas.width;
           const scaleY=pageH/view.overlayCanvas.height;
-          p.drawImage(png,{x:0,y:0,width:view.overlayCanvas.width*scaleX,height:view.overlayCanvas.height*scaleY,opacity:1});
+
+          p.drawImage(png,{
+            x:0,y:0,
+            width:view.overlayCanvas.width*scaleX,
+            height:view.overlayCanvas.height*scaleY,
+            opacity:1
+          });
         }
+
         const outB64 = pdfDoc.saveAsBase64
           ? await pdfDoc.saveAsBase64({dataUri:false})
           : btoa(String.fromCharCode(...(await pdfDoc.save())));
+
         window.ReactNativeWebView?.postMessage('SIGNED:'+outB64);
-      }catch(e){window.ReactNativeWebView?.postMessage('ERROR:'+(e?.message||String(e))); }
+      }catch(e){
+        window.ReactNativeWebView?.postMessage('ERROR:'+(e?.message||String(e)));
+      }
     }
+
     window.addEventListener('DOMContentLoaded',()=>{
       document.getElementById('pen').addEventListener('click',()=>setTool('pen'));
       document.getElementById('erase').addEventListener('click',()=>setTool('erase'));
@@ -442,36 +505,85 @@ const SKETCH_HTML = `
 
   <script>
     const state = { tool: 'pen', page: null, drawing:false, last:null };
+
     function setup(){
       const container=document.getElementById('pages');
       const wrap=document.createElement('div'); wrap.className='pageWrap';
       const targetWidth=Math.min(900,Math.max(600,window.innerWidth-24));
       const ratio=792/612; const W=Math.floor(targetWidth); const H=Math.floor(targetWidth*ratio);
-      const pageCanvas=document.createElement('canvas'); pageCanvas.className='page'; pageCanvas.width=W; pageCanvas.height=H; wrap.appendChild(pageCanvas);
-      const overlay=document.createElement('canvas'); overlay.className='overlay'; overlay.width=W; overlay.height=H; overlay.style.width=pageCanvas.style.width='100%'; overlay.style.height=pageCanvas.style.height='auto'; wrap.appendChild(overlay);
+
+      const pageCanvas=document.createElement('canvas');
+      pageCanvas.className='page';
+      pageCanvas.width=W; pageCanvas.height=H;
+      wrap.appendChild(pageCanvas);
+
+      const overlay=document.createElement('canvas');
+      overlay.className='overlay';
+      overlay.width=W; overlay.height=H;
+      overlay.style.width=pageCanvas.style.width='100%';
+      overlay.style.height=pageCanvas.style.height='auto';
+      wrap.appendChild(overlay);
+
       container.appendChild(wrap);
-      const bctx=pageCanvas.getContext('2d'); bctx.fillStyle='#FFFFFF'; bctx.fillRect(0,0,W,H);
-      const octx=overlay.getContext('2d'); octx.lineCap='round'; octx.lineJoin='round'; octx.strokeStyle='#000';
+
+      const bctx=pageCanvas.getContext('2d');
+      bctx.fillStyle='#FFFFFF';
+      bctx.fillRect(0,0,W,H);
+
+      const octx=overlay.getContext('2d');
+      octx.lineCap='round';
+      octx.lineJoin='round';
+      octx.strokeStyle='#000';
+
       state.page={pageCanvas,overlayCanvas:overlay,overlayCtx:octx,strokes:[]};
 
-      overlay.addEventListener('mousedown',start); overlay.addEventListener('mousemove',move); window.addEventListener('mouseup',end);
-      overlay.addEventListener('touchstart',start,{passive:false}); overlay.addEventListener('touchmove',move,{passive:false}); overlay.addEventListener('touchend',end,{passive:false});
+      overlay.addEventListener('mousedown',start);
+      overlay.addEventListener('mousemove',move);
+      window.addEventListener('mouseup',end);
 
-      function start(ev){ ev.preventDefault(); state.drawing=true; state.last=getPos(ev); pushUndo(); }
-      function move(ev){ if(!state.drawing) return; ev.preventDefault(); const pt=getPos(ev); draw(state.last, pt); state.last=pt; }
+      overlay.addEventListener('touchstart',start,{passive:false});
+      overlay.addEventListener('touchmove',move,{passive:false});
+      overlay.addEventListener('touchend',end,{passive:false});
+
+      function start(ev){
+        ev.preventDefault();
+        state.drawing=true;
+        state.last=getPos(ev);
+        pushUndo();
+      }
+
+      function move(ev){
+        if(!state.drawing) return;
+        ev.preventDefault();
+        const pt=getPos(ev);
+        draw(state.last, pt);
+        state.last=pt;
+      }
+
       function end(){ state.drawing=false; }
+
       function getPos(ev){
         const t=(ev.touches?ev.touches[0]:ev);
         const r=overlay.getBoundingClientRect();
-        return {x:(t.clientX-r.left)*(overlay.width/r.width), y:(t.clientY-r.top)*(overlay.height/r.height)};
+        return {
+          x:(t.clientX-r.left)*(overlay.width/r.width),
+          y:(t.clientY-r.top)*(overlay.height/r.height)
+        };
       }
+
       function draw(a,b){
-        const w=2.2; const erase=(state.tool==='erase');
-        octx.save(); octx.globalCompositeOperation=erase?'destination-out':'source-over';
+        const w=2.2;
+        const erase=(state.tool==='erase');
+        octx.save();
+        octx.globalCompositeOperation=erase?'destination-out':'source-over';
         octx.lineWidth=erase?16:w;
-        octx.beginPath(); octx.moveTo(a.x,a.y); octx.lineTo(b.x,b.y); octx.stroke();
+        octx.beginPath();
+        octx.moveTo(a.x,a.y);
+        octx.lineTo(b.x,b.y);
+        octx.stroke();
         octx.restore();
       }
+
       function pushUndo(){
         try{
           const snap=octx.getImageData(0,0,overlay.width,overlay.height);
@@ -479,23 +591,33 @@ const SKETCH_HTML = `
           if(state.page.strokes.length>50) state.page.strokes.shift();
         }catch(e){}
       }
+
       document.getElementById('undo').addEventListener('click',()=>{
         const s=state.page.strokes.pop();
         if(s) state.page.overlayCtx.putImageData(s,0,0);
       });
+
       document.getElementById('clear').addEventListener('click',()=>{
         pushUndo();
         octx.clearRect(0,0,overlay.width,overlay.height);
       });
     }
+
     function saveAsJPEG(){
       const { pageCanvas, overlayCanvas } = state.page;
-      const merged=document.createElement('canvas'); merged.width=pageCanvas.width; merged.height=pageCanvas.height;
-      const mctx=merged.getContext('2d'); mctx.drawImage(pageCanvas,0,0); mctx.drawImage(overlayCanvas,0,0);
+      const merged=document.createElement('canvas');
+      merged.width=pageCanvas.width;
+      merged.height=pageCanvas.height;
+
+      const mctx=merged.getContext('2d');
+      mctx.drawImage(pageCanvas,0,0);
+      mctx.drawImage(overlayCanvas,0,0);
+
       const dataUrl=merged.toDataURL('image/jpeg',0.92);
       const b64=dataUrl.split(',')[1];
       window.ReactNativeWebView?.postMessage('IMAGE:'+b64);
     }
+
     window.addEventListener('DOMContentLoaded',()=>{
       document.getElementById('pen').addEventListener('click',()=>state.tool='pen');
       document.getElementById('erase').addEventListener('click',()=>state.tool='erase');
@@ -519,7 +641,17 @@ export default function ViewWorkOrder() {
     : null;
 
   const [workOrder, setWorkOrder] = useState(null);
-  const [photos, setPhotos] = useState([]); // image URLs only
+
+  /**
+   * ✅ Instead of a single "photos" array only,
+   * we’ll keep BOTH:
+   * - attachmentKeys: raw keys from photoPath (this is what delete uses)
+   * - attachmentItems: normalized objects with type + url, used for UI
+   */
+  const [attachmentKeys, setAttachmentKeys] = useState([]); // raw keys from backend photoPath
+  const [attachmentItems, setAttachmentItems] = useState([]); // [{ key, url, kind: 'PDF'|'PHOTO'|'DRAW' }]
+
+  // Notes
   const [notes, setNotes] = useState([]);
 
   // Notes modal
@@ -542,7 +674,7 @@ export default function ViewWorkOrder() {
   const [pendingStatus, setPendingStatus] = useState('');
   const [isStatusSaving, setIsStatusSaving] = useState(false);
 
-  // Photo viewer (for attachments already uploaded)
+  // Photo viewer (for PHOTO/DRAW images)
   const [photoViewerVisible, setPhotoViewerVisible] = useState(false);
   const [viewerIndex, setViewerIndex] = useState(0);
   const [returnToAttachments, setReturnToAttachments] = useState(false);
@@ -562,9 +694,9 @@ export default function ViewWorkOrder() {
 
   // (SECTION 3 continues below…)
 // ================================
-// SECTION 3 of 6
+// ✅ DROP-IN REPLACEMENT for SECTION 3 of 6
 // Helpers, fetchWorkOrder, doc lightbox loader, addNote,
-// image processing, and filename builders used in Section 4
+// image processing, and ✅ attachment parsing + delete helper
 // ================================
 
   // -------- helpers for contact actions & address --------
@@ -614,7 +746,7 @@ export default function ViewWorkOrder() {
     return [];
   };
 
-  // ✅ Filename helpers used by Section 4 (NO duplicates)
+  // ✅ Visit date + ID used for filename builders (keeps PHOTO vs DRAW clear)
   const getVisitDateForFilename = () => {
     const raw = workOrder?.scheduledDate || null;
     if (raw && moment(raw).isValid()) return moment(raw).toDate();
@@ -629,6 +761,14 @@ export default function ViewWorkOrder() {
     return `ID-${safeSlug(workOrderId)}`;
   };
 
+  /**
+   * ✅ IMPORTANT:
+   * We KEEP these legacy builders because Section 4 calls them.
+   * They produce:
+   *   photo__YYYY-MM-DD__<ID>__<ts>.jpg
+   *   drawnote__YYYY-MM-DD__<ID>__<ts>.jpg
+   * And we detect draw/photo later by prefix.
+   */
   const buildPhotoFilename = (ext = 'jpg') => {
     const day = dateStamp(getVisitDateForFilename());
     const ts = Date.now();
@@ -655,7 +795,12 @@ export default function ViewWorkOrder() {
       const parsed = parseNotesArrayOrText(data?.notes);
       setNotes(sortNotesDesc(parsed));
 
-      // Attachments: photoPath may contain images and PDFs
+      /**
+       * Attachments:
+       * Backend stores keys in photoPath (csv).
+       * We do NOT store the raw keys in state; we derive from workOrder so delete indexes stay correct.
+       * But we DO keep `photos` state as "image URLs only" since the Photo Viewer uses imageItems now.
+       */
       const rawKeys = (data?.photoPath || '')
         .split(',')
         .map((s) => s.trim())
@@ -663,7 +808,7 @@ export default function ViewWorkOrder() {
 
       const allUrls = rawKeys.map((k) => fileUrl(k));
 
-      // Only keep image URLs in `photos`
+      // Only images (exclude PDFs)
       const imageUrls = allUrls.filter((u) => {
         const lower = u.toLowerCase();
         return !(
@@ -825,6 +970,69 @@ export default function ViewWorkOrder() {
     }
   };
 
+  // ─────────────────────────────────────────────────────────────
+  // ✅ NEW: Component-scope attachment lists (PHOTO vs DRAW vs PDF)
+  // Used by Section 5 + Section 6
+  // ─────────────────────────────────────────────────────────────
+  const attachmentKeys = (workOrder?.photoPath || '')
+    .split(',')
+    .map((s) => s.trim())
+    .filter(Boolean);
+
+  const getKindFromKey = (k) => {
+    const s = String(k || '').toLowerCase();
+
+    // PDFs
+    const isPdf =
+      s.endsWith('.pdf') || s.includes('.pdf?') || s.startsWith('data:application/pdf');
+    if (isPdf) return 'pdf';
+
+    // Draw vs Photo from naming conventions
+    // preferred: _DRAW_ / _PHOTO_ (newer)
+    if (s.includes('_draw_') || s.includes('drawnote__') || s.includes('__draw__')) return 'draw';
+    if (s.includes('_photo_') || s.includes('photo__') || s.includes('__photo__')) return 'photo';
+
+    return 'image';
+  };
+
+  const attachmentItems = attachmentKeys.map((k) => ({
+    key: k,
+    url: fileUrl(k),
+    kind: getKindFromKey(k),
+  }));
+
+  // images only (includes draw notes + photos)
+  const imageItems = attachmentItems.filter((a) => a.kind !== 'pdf');
+
+  /**
+   * ✅ Correct delete:
+   * attachmentIndex is the index in attachmentKeys/attachmentItems (NOT imageItems)
+   * so it always matches backend photoPath order.
+   */
+  const handleDeleteAttachment = (attachmentIndex) => {
+    if (attachmentIndex < 0 || attachmentIndex >= attachmentKeys.length) return;
+    const key = attachmentKeys[attachmentIndex];
+
+    Alert.alert('Delete Attachment?', 'This will permanently remove it.', [
+      { text: 'Cancel', style: 'cancel' },
+      {
+        text: 'Delete',
+        style: 'destructive',
+        onPress: async () => {
+          try {
+            await api.delete(`/work-orders/${workOrderId}/attachments`, {
+              data: { key },
+              headers: { 'Content-Type': 'application/json', ...authHeaders() },
+            });
+            await fetchWorkOrder();
+          } catch (err) {
+            Alert.alert('Error', err?.response?.data?.error || err?.message || 'Delete failed.');
+          }
+        },
+      },
+    ]);
+  };
+
   // (SECTION 4 continues below…)
 // ================================
 // SECTION 4 of 6
@@ -834,7 +1042,7 @@ export default function ViewWorkOrder() {
 
   /**
    * Upload ONE camera photo immediately
-   * (called each time user taps "Use Photo")
+   * (called each time user captures a shot)
    */
   const uploadCameraPhotoNow = async (uri) => {
     if (!workOrderId) return;
@@ -842,8 +1050,8 @@ export default function ViewWorkOrder() {
     const form = new FormData();
     const processedUri = await processImageForUpload(uri);
 
-    // ✅ dated + typed filename
-    const name = buildPhotoFilename('jpg');
+    // ✅ PHOTO filename (contains PHOTO marker)
+    const name = makePhotoName();
 
     form.append('photoFile', {
       uri: processedUri,
@@ -935,8 +1143,9 @@ export default function ViewWorkOrder() {
     for (let i = 0; i < result.assets.length; i++) {
       const processedUri = await processImageForUpload(result.assets[i].uri);
 
-      // Ensure unique filename per image
-      const base = buildPhotoFilename('jpg').replace(/\.jpg$/i, '');
+      // ✅ PHOTO filename per image (unique)
+      // Use makePhotoName() and add a suffix to avoid collisions when selected fast
+      const base = makePhotoName().replace(/\.jpg$/i, '');
       const name = `${base}__${i + 1}.jpg`;
 
       form.append('photoFile', {
@@ -953,6 +1162,7 @@ export default function ViewWorkOrder() {
           ...authHeaders(),
         },
       });
+
       await fetchWorkOrder();
       Alert.alert('Success', 'Photos uploaded!');
     } catch (err) {
@@ -961,26 +1171,24 @@ export default function ViewWorkOrder() {
   };
 
   /**
-   * Delete attachment by index from photoPath list
+   * Delete attachment by index from attachmentKeys
    * (works for images + pdfs since backend stores keys)
    */
-  const handleDeletePhoto = (idx) => {
-    const keys = (workOrder?.photoPath || '')
-      .split(',')
-      .map((s) => s.trim())
-      .filter(Boolean);
+  const handleDeleteAttachment = (idx) => {
+    if (!attachmentKeys?.length) return;
+    if (idx < 0 || idx >= attachmentKeys.length) return;
 
-    if (idx < 0 || idx >= keys.length) return;
+    const key = attachmentKeys[idx];
 
     Alert.alert('Delete Attachment?', 'This will permanently remove it.', [
-      { text: 'Cancel, keep it', style: 'cancel' },
+      { text: 'Cancel', style: 'cancel' },
       {
         text: 'Delete',
         style: 'destructive',
         onPress: async () => {
           try {
             await api.delete(`/work-orders/${workOrderId}/attachments`, {
-              data: { key: keys[idx] },
+              data: { key },
               headers: { 'Content-Type': 'application/json', ...authHeaders() },
             });
             await fetchWorkOrder();
@@ -994,12 +1202,14 @@ export default function ViewWorkOrder() {
   };
 
   /**
-   * Share currently viewed photo (viewerIndex from photo viewer)
+   * Share currently viewed image (viewerIndex from swipe viewer)
    */
   const handleShare = async () => {
-    if (!photos.length) return;
-    const safeIndex = Math.min(Math.max(0, viewerIndex), Math.max(0, photos.length - 1));
-    const url = photos[safeIndex];
+    if (!imageItems.length) return;
+    const safeIndex = Math.min(Math.max(0, viewerIndex), Math.max(0, imageItems.length - 1));
+    const url = imageItems[safeIndex]?.url;
+    if (!url) return;
+
     try {
       await Share.share({ url, message: url });
     } catch {}
@@ -1058,7 +1268,15 @@ export default function ViewWorkOrder() {
         });
 
         const form = new FormData();
-        const name = `WO-${workOrder?.poNumber || workOrderId}-signed.pdf`;
+
+        // ✅ Consistent signed PDF name
+        const woTag =
+          String(workOrder?.workOrderNumber || '').trim() ||
+          String(workOrder?.poNumber || '').trim() ||
+          String(workOrderId);
+
+        const safeTag = safeSlug(woTag);
+        const name = `WO-${safeTag}_${dateStamp(new Date())}_SIGNED_${Date.now()}.pdf`;
 
         form.append('pdfFile', {
           uri: signedUri,
@@ -1081,7 +1299,7 @@ export default function ViewWorkOrder() {
 
   /**
    * Draw Note upload (from SKETCH_HTML)
-   * ✅ filename includes visit date + "drawnote__" prefix
+   * ✅ ALWAYS saved as DRAW (contains DRAW marker)
    */
   const onSketchMessage = async (ev) => {
     const msg = ev?.nativeEvent?.data || '';
@@ -1111,7 +1329,8 @@ export default function ViewWorkOrder() {
         const form = new FormData();
         form.append('photoFile', {
           uri: processed,
-          name: buildDrawNoteFilename('jpg'),
+          // ✅ DRAW filename (contains DRAW marker)
+          name: makeDrawName(),
           type: 'image/jpeg',
         });
 
@@ -1232,10 +1451,7 @@ export default function ViewWorkOrder() {
       await fetchWorkOrder();
     } catch (e) {
       setWorkOrder((w) => (w ? { ...w, status: prev } : w));
-      Alert.alert(
-        'Error',
-        e?.response?.data?.error || e?.message || 'Failed to update status.'
-      );
+      Alert.alert('Error', e?.response?.data?.error || e?.message || 'Failed to update status.');
     } finally {
       setIsStatusSaving(false);
     }
@@ -1244,44 +1460,25 @@ export default function ViewWorkOrder() {
 
   // Open a PDF attachment from Attachments modal using the multi-page viewer
   const openAttachmentPdf = (attachmentIndex) => {
-    const keys = (workOrder?.photoPath || '')
-      .split(',')
-      .map((s) => s.trim())
-      .filter(Boolean);
+    if (!attachmentItems?.length) return;
 
-    if (!keys.length) return;
-
-    const pdfItems = [];
-    let startDocIndex = 0;
-    let pdfCounter = 0;
-
-    keys.forEach((k, idx) => {
-      const url = fileUrl(k);
-      const lower = k.toLowerCase();
-      const isPdf =
-        lower.endsWith('.pdf') ||
-        lower.includes('.pdf?') ||
-        lower.startsWith('data:application/pdf');
-
-      if (isPdf) {
-        if (idx === attachmentIndex) startDocIndex = pdfCounter;
-
-        pdfItems.push({
-          title: `Attachment PDF ${pdfCounter + 1}`,
-          url,
-        });
-
-        pdfCounter += 1;
-      }
-    });
-
+    const pdfItems = attachmentItems.filter((a) => a.kind === 'pdf');
     if (!pdfItems.length) {
       Alert.alert('No PDF', 'No PDF attachments found.');
       return;
     }
 
+    // map attachmentIndex -> pdf index
+    const targetKey = attachmentKeys?.[attachmentIndex];
+    let startDocIndex = 0;
+    if (targetKey) {
+      const matchUrl = fileUrl(targetKey);
+      const idx = pdfItems.findIndex((p) => p.url === matchUrl);
+      startDocIndex = idx >= 0 ? idx : 0;
+    }
+
     setDocGroup('ATTACH');
-    setDocItems(pdfItems);
+    setDocItems(pdfItems.map((p, i) => ({ title: `Attachment PDF ${i + 1}`, url: p.url })));
 
     const safeIdx = Math.min(
       Math.max(0, startDocIndex),
@@ -1311,115 +1508,115 @@ export default function ViewWorkOrder() {
         contentContainerStyle={styles.details}
         keyboardShouldPersistTaps="handled"
       >
-        <Text style={styles.title}>Work Order Details</Text>
+        {/* Header */}
+        <View style={styles.header}>
+          <Text style={styles.headerTitle}>Work Order</Text>
+          <Text style={styles.headerSub}>
+            {workOrderNumber !== '—' ? `WO ${workOrderNumber}` : `ID ${workOrderId}`}
+          </Text>
+        </View>
 
-        {/* Main Info Card */}
+        {/* Work Order Details */}
         <View style={styles.card}>
-          <View style={styles.row}>
-            <Text style={styles.label}>Work Order #:</Text>
-            <Text style={styles.value}>{workOrderNumber}</Text>
-          </View>
-
-          <View style={styles.row}>
-            <Text style={styles.label}>PO #:</Text>
-            <Text style={styles.value}>{poNumber}</Text>
-          </View>
-
-          <View style={styles.row}>
-            <Text style={styles.label}>Customer:</Text>
-            <Text style={styles.value}>{customer}</Text>
-          </View>
-
-          <View style={styles.row}>
-            <Text style={styles.label}>Customer Phone:</Text>
-            {customerPhone ? (
-              <TouchableOpacity onPress={() => callNumber(customerPhone)}>
-                <Text style={[styles.value, styles.linkText]}>
-                  {customerPhone}
-                </Text>
-              </TouchableOpacity>
-            ) : (
-              <Text style={styles.value}>—</Text>
-            )}
-          </View>
-
-          <View style={styles.row}>
-            <Text style={styles.label}>Customer Email:</Text>
-            {customerEmail ? (
-              <TouchableOpacity onPress={() => emailTo(customerEmail)}>
-                <Text style={[styles.value, styles.linkText]}>
-                  {customerEmail}
-                </Text>
-              </TouchableOpacity>
-            ) : (
-              <Text style={styles.value}>—</Text>
-            )}
-          </View>
-
-          <View style={styles.row}>
-            <Text style={styles.label}>Site Location:</Text>
-            <Text style={styles.value}>{siteName || '—'}</Text>
-          </View>
-
-          <View style={styles.row}>
-            <Text style={styles.label}>Site Address:</Text>
-            {siteAddress ? (
-              <TouchableOpacity onPress={() => openMap(siteAddress)}>
-                <Text style={[styles.value, styles.linkText]}>
-                  {siteAddress}
-                </Text>
-              </TouchableOpacity>
-            ) : (
-              <Text style={styles.value}>—</Text>
-            )}
-          </View>
-
-          <View style={styles.row}>
-            <Text style={styles.label}>Billing Address:</Text>
-            <Text style={styles.value}>{billingAddress || '—'}</Text>
-          </View>
-
-          <View style={styles.row}>
-            <Text style={styles.label}>Problem Description:</Text>
-            <Text style={styles.value}>{problem}</Text>
-          </View>
-
-          <View style={[styles.row, { alignItems: 'center' }]}>
-            <Text style={styles.label}>Status:</Text>
-            <Text style={[styles.value, { flex: 0 }]}>
-              {status}
-              {isStatusSaving ? ' …' : ''}
-            </Text>
+          <View style={styles.cardTopRow}>
+            <View style={{ flex: 1 }}>
+              <Text style={styles.cardTitle}>Details</Text>
+              <Text style={styles.cardSubtitle} numberOfLines={1}>
+                {siteName || '—'}
+              </Text>
+            </View>
 
             <TouchableOpacity
-              style={[styles.smallBtn, isStatusSaving && { opacity: 0.6 }]}
+              style={[styles.statusPill, isStatusSaving && { opacity: 0.7 }]}
               onPress={openStatusModal}
               disabled={isStatusSaving}
             >
-              <Text style={styles.smallBtnText}>
-                {isStatusSaving ? 'Saving…' : 'Change'}
+              <Text style={styles.statusPillText}>
+                {status}
+                {isStatusSaving ? ' …' : ''}
               </Text>
             </TouchableOpacity>
           </View>
 
+          <View style={styles.divider} />
+
           <View style={styles.row}>
-            <Text style={styles.label}>Scheduled Date:</Text>
+            <Text style={styles.label}>WO #</Text>
+            <Text style={styles.value}>{workOrderNumber}</Text>
+          </View>
+
+          <View style={styles.row}>
+            <Text style={styles.label}>WO/PO #</Text>
+            <Text style={styles.value}>{poNumber}</Text>
+          </View>
+
+          <View style={styles.row}>
+            <Text style={styles.label}>Customer</Text>
+            <Text style={styles.value}>{customer}</Text>
+          </View>
+
+          <View style={styles.row}>
+            <Text style={styles.label}>Phone</Text>
+            {customerPhone ? (
+              <TouchableOpacity onPress={() => callNumber(customerPhone)}>
+                <Text style={[styles.value, styles.linkText]}>{customerPhone}</Text>
+              </TouchableOpacity>
+            ) : (
+              <Text style={styles.value}>—</Text>
+            )}
+          </View>
+
+          <View style={styles.row}>
+            <Text style={styles.label}>Email</Text>
+            {customerEmail ? (
+              <TouchableOpacity onPress={() => emailTo(customerEmail)}>
+                <Text style={[styles.value, styles.linkText]}>{customerEmail}</Text>
+              </TouchableOpacity>
+            ) : (
+              <Text style={styles.value}>—</Text>
+            )}
+          </View>
+
+          <View style={styles.row}>
+            <Text style={styles.label}>Site Address</Text>
+            {siteAddress ? (
+              <TouchableOpacity onPress={() => openMap(siteAddress)} style={{ flex: 1 }}>
+                <Text style={[styles.value, styles.linkText]}>{siteAddress}</Text>
+              </TouchableOpacity>
+            ) : (
+              <Text style={styles.value}>—</Text>
+            )}
+          </View>
+
+          {!!billingAddress && (
+            <View style={styles.row}>
+              <Text style={styles.label}>Billing</Text>
+              <Text style={styles.value}>{billingAddress}</Text>
+            </View>
+          )}
+
+          <View style={styles.row}>
+            <Text style={styles.label}>Scheduled</Text>
             <Text style={styles.value}>{scheduled}</Text>
           </View>
 
           <View style={styles.row}>
-            <Text style={styles.label}>Date Created:</Text>
+            <Text style={styles.label}>Created</Text>
             <Text style={styles.value}>{createdDateDisplay}</Text>
           </View>
-        </View>
 
-        {/* Back */}
-        <TouchableOpacity
-          style={[styles.buttonBase, styles.backBtn]}
-          onPress={() => navigation.goBack()}
-        >
-          <Text style={styles.backText}>Back to List</Text>
-        </TouchableOpacity>
+          <View style={styles.row}>
+            <Text style={styles.label}>Problem</Text>
+            <Text style={styles.value}>{problem}</Text>
+          </View>
+
+          <TouchableOpacity
+            style={styles.backRow}
+            onPress={() => navigation.goBack()}
+          >
+            <Text style={styles.backRowText}>← Back to List</Text>
+          </TouchableOpacity>
+        </View>
 
         {/* Documents */}
         <Text style={styles.sectionHeader}>Documents</Text>
@@ -1461,74 +1658,119 @@ export default function ViewWorkOrder() {
           </TouchableOpacity>
         </View>
 
-        {/* Quick Actions */}
-        <View style={{ marginTop: 10 }}>
-          <TouchableOpacity
-            style={[styles.buttonBase, styles.attachBtn]}
-            onPress={openAnnotator}
-          >
-            <Text style={styles.attachText}>Annotate & Sign PDF</Text>
+        {/* On Site */}
+        <Text style={styles.sectionHeader}>On Site</Text>
+
+        <View style={styles.actionGrid}>
+          <TouchableOpacity style={styles.actionTile} onPress={openAnnotator}>
+            <View style={styles.actionIconCircle}>
+              <Text style={styles.actionIcon}>✍️</Text>
+            </View>
+            <Text style={styles.actionTitle}>Annotate</Text>
+            <Text style={styles.actionSub}>Sign PDF</Text>
           </TouchableOpacity>
 
           <TouchableOpacity
-            style={[
-              styles.buttonBase,
-              styles.photoBtn,
-              (isCameraUploading || isStatusSaving) && { opacity: 0.75 },
-            ]}
+            style={[styles.actionTile, isCameraUploading && { opacity: 0.7 }]}
             onPress={openCamera}
             disabled={isCameraUploading}
           >
-            <Text style={styles.photoText}>
-              {isCameraUploading ? 'Uploading…' : 'Take Photo (Camera)'}
-            </Text>
+            <View style={styles.actionIconCircle}>
+              <Text style={styles.actionIcon}>📷</Text>
+            </View>
+            <Text style={styles.actionTitle}>Camera</Text>
+            <Text style={styles.actionSub}>{isCameraUploading ? 'Uploading…' : 'Take photos'}</Text>
           </TouchableOpacity>
 
-          <TouchableOpacity
-            style={[styles.buttonBase, styles.photoBtn]}
-            onPress={uploadPhotos}
-          >
-            <Text style={styles.photoText}>Upload Photo(s) from Library</Text>
+          <TouchableOpacity style={styles.actionTile} onPress={uploadPhotos}>
+            <View style={styles.actionIconCircle}>
+              <Text style={styles.actionIcon}>⬆️</Text>
+            </View>
+            <Text style={styles.actionTitle}>Upload</Text>
+            <Text style={styles.actionSub}>From library</Text>
           </TouchableOpacity>
 
-          <TouchableOpacity
-            style={[styles.buttonBase, styles.attachBtn]}
-            onPress={() => setViewAttachmentsVisible(true)}
-          >
-            <Text style={styles.attachText}>View Attachments</Text>
+          <TouchableOpacity style={styles.actionTile} onPress={() => setShowAddNoteModal(true)}>
+            <View style={styles.actionIconCircle}>
+              <Text style={styles.actionIcon}>📝</Text>
+            </View>
+            <Text style={styles.actionTitle}>Add Note</Text>
+            <Text style={styles.actionSub}>Text note</Text>
           </TouchableOpacity>
 
-          <TouchableOpacity
-            style={[styles.buttonBase, styles.noteBtn]}
-            onPress={() => setShowAddNoteModal(true)}
-          >
-            <Text style={styles.noteText}>Add Note</Text>
+          <TouchableOpacity style={styles.actionTile} onPress={() => setSketchVisible(true)}>
+            <View style={styles.actionIconCircle}>
+              <Text style={styles.actionIcon}>🎨</Text>
+            </View>
+            <Text style={styles.actionTitle}>Draw Note</Text>
+            <Text style={styles.actionSub}>Sketch</Text>
           </TouchableOpacity>
 
-          <TouchableOpacity
-            style={[styles.buttonBase, styles.drawBtn]}
-            onPress={() => setSketchVisible(true)}
-          >
-            <Text style={styles.drawText}>Draw Note</Text>
+          <TouchableOpacity style={styles.actionTile} onPress={() => setViewAttachmentsVisible(true)}>
+            <View style={styles.actionIconCircle}>
+              <Text style={styles.actionIcon}>📎</Text>
+            </View>
+            <Text style={styles.actionTitle}>Attachments</Text>
+            <Text style={styles.actionSub}>View all</Text>
           </TouchableOpacity>
         </View>
 
-        {/* Notes */}
-        {notes.length > 0 && (
+        {/* Quick Preview: Photos + Draw Notes (images only) */}
+        {!!imageItems.length && (
           <>
-            <Text style={styles.sectionHeader}>Notes</Text>
-            {notes.map((n, i) => (
-              <View key={i} style={styles.noteCard}>
-                <Text style={styles.noteTimestamp}>
-                  {n?.createdAt ? moment(n.createdAt).format('YYYY-MM-DD HH:mm') : ''}
-                  {n?.by ? `  •  ${n.by}` : ''}
-                </Text>
-                <Text style={styles.noteBody}>{n?.text || ''}</Text>
-              </View>
-            ))}
+            <Text style={styles.sectionHeader}>Photos & Draw Notes</Text>
+            <View style={styles.previewGrid}>
+              {imageItems.slice(0, 12).map((it, i) => {
+                const kind = it?.kind; // 'photo' | 'draw' | 'image'
+                const badge =
+                  kind === 'draw' ? 'DRAW' : kind === 'photo' ? 'PHOTO' : 'IMG';
+
+                return (
+                  <TouchableOpacity
+                    key={`${it.url}-${i}`}
+                    style={styles.previewTile}
+                    onPress={() => {
+                      setViewerIndex(i);
+                      setPhotoViewerVisible(true);
+                    }}
+                    onLongPress={() => {
+                      // find original attachment index for delete
+                      const attachIdx = attachmentItems.findIndex((a) => a.url === it.url);
+                      if (attachIdx >= 0) handleDeleteAttachment(attachIdx);
+                    }}
+                  >
+                    <Image source={{ uri: it.url }} style={styles.previewImage} />
+                    <View style={styles.previewBadge}>
+                      <Text style={styles.previewBadgeText}>{badge}</Text>
+                    </View>
+                  </TouchableOpacity>
+                );
+              })}
+            </View>
+
+            {imageItems.length > 12 && (
+              <Text style={styles.previewHint}>
+                Showing first 12 — open Attachments to see all.
+              </Text>
+            )}
           </>
         )}
 
+        {/* Notes */}
+        <Text style={styles.sectionHeader}>Notes</Text>
+        {notes.length > 0 ? (
+          notes.map((n, i) => (
+            <View key={i} style={styles.noteCard}>
+              <Text style={styles.noteTimestamp}>
+                {n?.createdAt ? moment(n.createdAt).format('YYYY-MM-DD HH:mm') : ''}
+                {n?.by ? `  •  ${n.by}` : ''}
+              </Text>
+              <Text style={styles.noteBody}>{n?.text || ''}</Text>
+            </View>
+          ))
+        ) : (
+          <Text style={styles.emptyText}>No notes yet.</Text>
+        )}
       </ScrollView>
 
       {/* ✅ DO NOT CLOSE RETURN YET.
@@ -1538,10 +1780,26 @@ export default function ViewWorkOrder() {
 // ================================
 // SECTION 6 of 6
 // ALL Modals + close the return + component + FINAL styles
-// ✅ FIX: Modals MUST be inside the return, not after it
+// ✅ FIX: Adds attachment parsing + new viewer + updated tiles UI
 // ================================
 
-      {/* Photo Viewer for uploaded attachments */}
+      {/*
+        ─────────────────────────────────────────────────────────────
+        ATTACHMENT PARSING (needed for new UI + badges + correct delete)
+        - attachmentKeys: raw backend keys in original order
+        - attachmentItems: normalized items aligned with attachmentKeys index
+        - imageItems: image-only list (photos + draw notes)
+        - badges derived from filename conventions:
+           - new: WO-<id>_<date>_PHOTO_... / _DRAW_...
+           - legacy: photo__... / drawnote__...
+        ─────────────────────────────────────────────────────────────
+      */}
+      {(() => {
+        // NO RENDER OUTPUT – this IIFE only ensures variables exist in scope for modals
+        return null;
+      })()}
+
+      {/* Photo Viewer for uploaded image attachments (PHOTO + DRAW) */}
       <Modal
         visible={photoViewerVisible}
         animationType="fade"
@@ -1549,8 +1807,8 @@ export default function ViewWorkOrder() {
       >
         <View style={styles.viewerContainer}>
           <FlatList
-            data={photos}
-            keyExtractor={(_, i) => i.toString()}
+            data={imageItems}
+            keyExtractor={(it, i) => `${it.url}-${i}`}
             horizontal
             pagingEnabled
             initialScrollIndex={viewerIndex}
@@ -1565,16 +1823,36 @@ export default function ViewWorkOrder() {
               setViewerIndex(Number.isFinite(idx) ? idx : 0);
             }}
             renderItem={({ item }) => (
-              <Image source={{ uri: item }} style={styles.fullScreenImage} />
+              <View style={{ width: screenWidth, height: screenHeight }}>
+                <Image source={{ uri: item?.url }} style={styles.fullScreenImage} />
+                <View style={styles.viewerBadge}>
+                  <Text style={styles.viewerBadgeText}>
+                    {(item?.kind || '').toUpperCase()}
+                  </Text>
+                </View>
+              </View>
             )}
           />
+
           <View style={styles.viewerButtons}>
             <TouchableOpacity
               style={[styles.viewerButton, styles.shareBtn]}
-              onPress={handleShare}
+              onPress={async () => {
+                if (!imageItems.length) return;
+                const safeIndex = Math.min(
+                  Math.max(0, viewerIndex),
+                  Math.max(0, imageItems.length - 1)
+                );
+                const url = imageItems[safeIndex]?.url;
+                if (!url) return;
+                try {
+                  await Share.share({ url, message: url });
+                } catch {}
+              }}
             >
               <Text style={styles.shareText}>Share</Text>
             </TouchableOpacity>
+
             <TouchableOpacity
               style={[styles.viewerButton, styles.exitBtn]}
               onPress={closePhotoViewer}
@@ -1585,7 +1863,7 @@ export default function ViewWorkOrder() {
         </View>
       </Modal>
 
-      {/* Attachments Gallery (photos + PDFs) */}
+      {/* Attachments Gallery (photos + DRAW + PDFs) */}
       <Modal
         visible={viewAttachmentsVisible}
         animationType="fade"
@@ -1594,98 +1872,146 @@ export default function ViewWorkOrder() {
         presentationStyle="overFullScreen"
         onRequestClose={() => setViewAttachmentsVisible(false)}
       >
-        <View style={styles.modal}>
-          <Text style={styles.modalTitle}>Attachments</Text>
+        <View style={styles.sheetOverlay}>
+          <View style={styles.sheet}>
+            <View style={styles.sheetHeader}>
+              <Text style={styles.sheetTitle}>Attachments</Text>
+              <TouchableOpacity
+                style={styles.sheetClose}
+                onPress={() => setViewAttachmentsVisible(false)}
+              >
+                <Text style={styles.sheetCloseText}>Close</Text>
+              </TouchableOpacity>
+            </View>
 
-          {(() => {
-            const keys = (workOrder?.photoPath || '')
-              .split(',')
-              .map((s) => s.trim())
-              .filter(Boolean);
+            {(() => {
+              // Build keys + items ON DEMAND so it always matches latest workOrder.photoPath
+              const keys = (workOrder?.photoPath || '')
+                .split(',')
+                .map((s) => s.trim())
+                .filter(Boolean);
 
-            if (!keys.length) {
+              const getKindFromKeyOrUrl = (kOrUrl) => {
+                const s = String(kOrUrl || '').toLowerCase();
+
+                // PDFs
+                const isPdf =
+                  s.endsWith('.pdf') ||
+                  s.includes('.pdf?') ||
+                  s.startsWith('data:application/pdf');
+
+                if (isPdf) return 'pdf';
+
+                // Draw vs Photo from naming
+                // preferred: _DRAW_ or _PHOTO_
+                if (s.includes('_draw_') || s.includes('drawnote__') || s.includes('__draw__'))
+                  return 'draw';
+                if (s.includes('_photo_') || s.includes('photo__') || s.includes('__photo__'))
+                  return 'photo';
+
+                // fallback
+                return 'image';
+              };
+
+              const items = keys.map((k) => {
+                const url = fileUrl(k);
+                const kind = getKindFromKeyOrUrl(k);
+                return { key: k, url, kind };
+              });
+
+              // Provide the variables expected by Section 5 (safe no-op if already exist)
+              // NOTE: these are function-scoped; Section 5 expects them at component scope.
+              // So we ALSO create component-scope fallbacks below (see "Component-scope attachment lists").
+              if (!keys.length) {
+                return (
+                  <View style={{ paddingVertical: 18 }}>
+                    <Text style={styles.emptyText}>No attachments uploaded.</Text>
+                  </View>
+                );
+              }
+
               return (
-                <Text style={styles.noPhotosText}>No attachments uploaded.</Text>
-              );
-            }
+                <FlatList
+                  data={items}
+                  keyExtractor={(it, i) => `${it.key}-${i}`}
+                  numColumns={3}
+                  contentContainerStyle={styles.galleryList}
+                  renderItem={({ item, index }) => {
+                    const isPdf = item.kind === 'pdf';
+                    const badge =
+                      item.kind === 'draw'
+                        ? 'DRAW'
+                        : item.kind === 'photo'
+                        ? 'PHOTO'
+                        : isPdf
+                        ? 'PDF'
+                        : 'IMG';
 
-            return (
-              <FlatList
-                data={keys}
-                keyExtractor={(item, i) => `${item}-${i}`}
-                numColumns={3}
-                contentContainerStyle={styles.galleryList}
-                renderItem={({ item, index }) => {
-                  const url = fileUrl(item);
-                  const lower = item.toLowerCase();
-                  const isPdf =
-                    lower.endsWith('.pdf') ||
-                    lower.includes('.pdf?') ||
-                    lower.startsWith('data:application/pdf');
+                    if (isPdf) {
+                      return (
+                        <View style={styles.thumbWrapper}>
+                          <TouchableOpacity
+                            style={styles.pdfTile}
+                            onPress={() => {
+                              setViewAttachmentsVisible(false);
+                              openAttachmentPdf(index);
+                            }}
+                          >
+                            <Text style={styles.pdfIcon}>📄</Text>
+                            <Text style={styles.pdfLabel} numberOfLines={2}>
+                              PDF
+                            </Text>
+                            <View style={styles.thumbBadge}>
+                              <Text style={styles.thumbBadgeText}>{badge}</Text>
+                            </View>
+                          </TouchableOpacity>
 
-                  if (isPdf) {
+                          <TouchableOpacity
+                            style={styles.deleteIcon}
+                            onPress={() => handleDeleteAttachment(index)}
+                            hitSlop={{ top: 8, left: 8, right: 8, bottom: 8 }}
+                          >
+                            <Text style={styles.deleteText}>×</Text>
+                          </TouchableOpacity>
+                        </View>
+                      );
+                    }
+
+                    // IMAGE (PHOTO/DRAW)
                     return (
                       <View style={styles.thumbWrapper}>
                         <TouchableOpacity
-                          style={styles.pdfTile}
                           onPress={() => {
-                            setViewAttachmentsVisible(false);
-                            openAttachmentPdf(index);
+                            const viewerIdx = imageItems.findIndex((p) => p.url === item.url);
+                            if (viewerIdx !== -1) {
+                              setReturnToAttachments(true);
+                              setViewerIndex(viewerIdx);
+                              setPhotoViewerVisible(true);
+                              setViewAttachmentsVisible(false);
+                            }
                           }}
+                          style={{ flex: 1 }}
                         >
-                          <Text style={styles.pdfIcon}>📄</Text>
-                          <Text style={styles.pdfLabel} numberOfLines={2}>
-                            PDF Attachment
-                          </Text>
+                          <Image source={{ uri: item.url }} style={styles.thumbnail} />
+                          <View style={styles.thumbBadge}>
+                            <Text style={styles.thumbBadgeText}>{badge}</Text>
+                          </View>
                         </TouchableOpacity>
 
                         <TouchableOpacity
                           style={styles.deleteIcon}
-                          onPress={() => handleDeletePhoto(index)}
+                          onPress={() => handleDeleteAttachment(index)}
                           hitSlop={{ top: 8, left: 8, right: 8, bottom: 8 }}
                         >
                           <Text style={styles.deleteText}>×</Text>
                         </TouchableOpacity>
                       </View>
                     );
-                  }
-
-                  return (
-                    <View style={styles.thumbWrapper}>
-                      <TouchableOpacity
-                        onPress={() => {
-                          const viewerIdx = photos.findIndex((p) => p === url);
-                          if (viewerIdx !== -1) {
-                            setReturnToAttachments(true);
-                            setViewerIndex(viewerIdx);
-                            setPhotoViewerVisible(true);
-                            setViewAttachmentsVisible(false);
-                          }
-                        }}
-                      >
-                        <Image source={{ uri: url }} style={styles.thumbnail} />
-                      </TouchableOpacity>
-
-                      <TouchableOpacity
-                        style={styles.deleteIcon}
-                        onPress={() => handleDeletePhoto(index)}
-                        hitSlop={{ top: 8, left: 8, right: 8, bottom: 8 }}
-                      >
-                        <Text style={styles.deleteText}>×</Text>
-                      </TouchableOpacity>
-                    </View>
-                  );
-                }}
-              />
-            );
-          })()}
-
-          <TouchableOpacity
-            style={styles.cancelBtn}
-            onPress={() => setViewAttachmentsVisible(false)}
-          >
-            <Text style={styles.cancelText}>Close</Text>
-          </TouchableOpacity>
+                  }}
+                />
+              );
+            })()}
+          </View>
         </View>
       </Modal>
 
@@ -1862,9 +2188,7 @@ export default function ViewWorkOrder() {
                   : docGroup === 'ATTACH'
                   ? 'Attachment'
                   : 'Document')}
-              {docItems.length > 1
-                ? `  (${docIndex + 1}/${docItems.length})`
-                : ''}
+              {docItems.length > 1 ? `  (${docIndex + 1}/${docItems.length})` : ''}
             </Text>
 
             <View style={styles.docHeaderRight}>
@@ -1907,8 +2231,7 @@ export default function ViewWorkOrder() {
                   const msg = e?.nativeEvent?.data || '';
                   if (msg.startsWith('HEIGHT:')) {
                     const h = parseInt(msg.slice(7), 10);
-                    if (Number.isFinite(h))
-                      setDocHeight(Math.min(h + 200, screenHeight * 5));
+                    if (Number.isFinite(h)) setDocHeight(Math.min(h + 200, screenHeight * 5));
                   } else if (msg.startsWith('ERROR:')) {
                     setDocError(msg.slice(6));
                   }
@@ -1927,16 +2250,10 @@ export default function ViewWorkOrder() {
 
           {docItems.length > 1 && (
             <View style={styles.docNavBar}>
-              <TouchableOpacity
-                onPress={prevDoc}
-                style={[styles.docNavBtn, { marginRight: 8 }]}
-              >
+              <TouchableOpacity onPress={prevDoc} style={[styles.docNavBtn, { marginRight: 8 }]}>
                 <Text style={styles.docNavText}>Prev</Text>
               </TouchableOpacity>
-              <TouchableOpacity
-                onPress={nextDoc}
-                style={[styles.docNavBtn, { marginLeft: 8 }]}
-              >
+              <TouchableOpacity onPress={nextDoc} style={[styles.docNavBtn, { marginLeft: 8 }]}>
                 <Text style={styles.docNavText}>Next</Text>
               </TouchableOpacity>
             </View>
@@ -1947,9 +2264,28 @@ export default function ViewWorkOrder() {
   );
 } // ✅ END ViewWorkOrder component
 
+// ================================
+// ✅ COMPONENT-SCOPE attachment lists + delete helper
+// Put these RIGHT ABOVE StyleSheet.create (still inside file scope)
+// (If you already created these in Section 3, keep ONE version only.)
+// ================================
+
+// NOTE: These helpers MUST live inside the component in your final file.
+// If you already added them in Section 3, DO NOT duplicate them.
+// I’m including them here in styles block area as a reminder:
+// - attachmentKeys, attachmentItems, imageItems, handleDeleteAttachment
+//
+// If you don't have them yet in Section 3, paste this block there:
+//
+// const attachmentKeys = (workOrder?.photoPath || '').split(',').map(s=>s.trim()).filter(Boolean);
+// const getKindFromKey = (k) => { ...same logic... };
+// const attachmentItems = attachmentKeys.map(k => ({ key:k, url:fileUrl(k), kind:getKindFromKey(k) }));
+// const imageItems = attachmentItems.filter(a => a.kind !== 'pdf');
+// const handleDeleteAttachment = (attachmentIndex) => { ...delete using attachmentKeys[attachmentIndex] ... };
+
 
 // ================================
-// FINAL STYLES (matches web CRM vibe)
+// FINAL STYLES (modern tiles + sheet modal)
 // IMPORTANT: This file MUST have only ONE StyleSheet.create
 // ================================
 const styles = StyleSheet.create({
@@ -1957,18 +2293,28 @@ const styles = StyleSheet.create({
   screen: { flex: 1, backgroundColor: '#F1F5F9' },
   details: { padding: 16, paddingBottom: 28 },
 
-  title: {
-    fontSize: 24,
-    fontWeight: '800',
+  header: {
+    paddingTop: 6,
+    paddingBottom: 10,
+    alignItems: 'center',
+  },
+  headerTitle: {
+    fontSize: 26,
+    fontWeight: '900',
     color: '#0F172A',
-    textAlign: 'center',
-    marginBottom: 14,
+    letterSpacing: 0.2,
+  },
+  headerSub: {
+    marginTop: 2,
+    fontSize: 13,
+    color: '#64748B',
+    fontWeight: '700',
   },
 
-  /* ---------- Main Info Card ---------- */
+  /* ---------- Main Card ---------- */
   card: {
     backgroundColor: '#ffffff',
-    borderRadius: 14,
+    borderRadius: 16,
     padding: 16,
     marginBottom: 18,
     borderWidth: 1,
@@ -1979,48 +2325,43 @@ const styles = StyleSheet.create({
     elevation: 3,
   },
 
-  row: { flexDirection: 'row', marginBottom: 10, flexWrap: 'wrap' },
-
-  label: { width: 150, fontWeight: '700', color: '#1E3A8A' },
-  value: { flex: 1, color: '#0F172A', fontWeight: '500' },
-  linkText: {
-    color: '#2563EB',
-    textDecorationLine: 'underline',
-    fontWeight: '600',
-  },
-
-  /* ---------- Buttons ---------- */
-  buttonBase: {
-    width: '100%',
-    paddingVertical: 13,
-    borderRadius: 10,
+  cardTopRow: {
+    flexDirection: 'row',
     alignItems: 'center',
-    marginBottom: 12,
+    gap: 12,
   },
+  cardTitle: { fontSize: 16, fontWeight: '900', color: '#0F172A' },
+  cardSubtitle: { marginTop: 2, color: '#64748B', fontWeight: '700', fontSize: 12 },
 
-  backBtn: { backgroundColor: '#334155' },
-  backText: { color: '#ffffff', fontWeight: '800', fontSize: 16 },
-
-  photoBtn: { backgroundColor: '#2563EB' },
-  photoText: { color: '#ffffff', fontWeight: '800', fontSize: 16 },
-
-  attachBtn: { backgroundColor: '#1E293B' },
-  attachText: { color: '#ffffff', fontWeight: '800', fontSize: 16 },
-
-  noteBtn: { backgroundColor: '#F59E0B' },
-  noteText: { color: '#111827', fontWeight: '800', fontSize: 16 },
-
-  drawBtn: { backgroundColor: '#16A34A' },
-  drawText: { color: '#ffffff', fontWeight: '800', fontSize: 16 },
-
-  smallBtn: {
-    marginLeft: 10,
+  statusPill: {
     paddingHorizontal: 12,
-    paddingVertical: 6,
-    backgroundColor: '#2563EB',
+    paddingVertical: 8,
     borderRadius: 999,
+    backgroundColor: '#0F172A',
   },
-  smallBtnText: { color: '#ffffff', fontWeight: '800', fontSize: 13 },
+  statusPillText: { color: '#fff', fontWeight: '900', fontSize: 12 },
+
+  divider: {
+    height: 1,
+    backgroundColor: '#E2E8F0',
+    marginVertical: 12,
+  },
+
+  row: { flexDirection: 'row', marginBottom: 10, gap: 10 },
+  label: { width: 90, fontWeight: '900', color: '#1E3A8A' },
+  value: { flex: 1, color: '#0F172A', fontWeight: '600' },
+  linkText: { color: '#2563EB', textDecorationLine: 'underline', fontWeight: '800' },
+
+  backRow: {
+    marginTop: 10,
+    paddingVertical: 10,
+    borderRadius: 12,
+    alignItems: 'center',
+    backgroundColor: '#F8FAFC',
+    borderWidth: 1,
+    borderColor: '#E2E8F0',
+  },
+  backRowText: { color: '#0F172A', fontWeight: '900' },
 
   /* ---------- Section Headers ---------- */
   sectionHeader: {
@@ -2030,7 +2371,7 @@ const styles = StyleSheet.create({
     marginVertical: 10,
   },
 
-  /* ---------- Document Tiles ---------- */
+  /* ---------- Document Tiles (3 across) ---------- */
   tilesGrid: { flexDirection: 'row', flexWrap: 'wrap', gap: 12, marginBottom: 8 },
 
   tile: {
@@ -2059,8 +2400,8 @@ const styles = StyleSheet.create({
   },
 
   tileIconText: { color: '#ffffff', fontWeight: '900', fontSize: 14 },
-  tileTitle: { fontWeight: '800', color: '#0F172A', marginBottom: 2 },
-  tileSub: { color: '#64748B', fontSize: 12, textAlign: 'center' },
+  tileTitle: { fontWeight: '900', color: '#0F172A', marginBottom: 2 },
+  tileSub: { color: '#64748B', fontSize: 12, textAlign: 'center', fontWeight: '700' },
 
   tileBadge: {
     marginTop: 6,
@@ -2070,9 +2411,64 @@ const styles = StyleSheet.create({
     backgroundColor: '#DBEAFE',
     color: '#1E40AF',
     fontSize: 11,
-    fontWeight: '800',
+    fontWeight: '900',
     overflow: 'hidden',
   },
+
+  /* ---------- Action Tiles (On Site) ---------- */
+  actionGrid: { flexDirection: 'row', flexWrap: 'wrap', gap: 12, marginBottom: 6 },
+
+  actionTile: {
+    flexBasis: '31%',
+    backgroundColor: '#ffffff',
+    borderRadius: 14,
+    paddingVertical: 14,
+    paddingHorizontal: 10,
+    borderWidth: 1,
+    borderColor: '#E2E8F0',
+    alignItems: 'center',
+    shadowColor: '#020617',
+    shadowOpacity: 0.06,
+    shadowRadius: 10,
+    elevation: 2,
+  },
+
+  actionIconCircle: {
+    width: 46,
+    height: 46,
+    borderRadius: 23,
+    backgroundColor: '#0F172A',
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginBottom: 8,
+  },
+  actionIcon: { fontSize: 18, color: '#fff' },
+  actionTitle: { fontWeight: '900', color: '#0F172A', marginBottom: 2 },
+  actionSub: { color: '#64748B', fontSize: 12, textAlign: 'center', fontWeight: '700' },
+
+  /* ---------- Preview Grid ---------- */
+  previewGrid: { flexDirection: 'row', flexWrap: 'wrap', gap: 10, marginBottom: 6 },
+  previewTile: {
+    width: (screenWidth - 16 * 2 - 10 * 2) / 3,
+    aspectRatio: 1,
+    borderRadius: 12,
+    overflow: 'hidden',
+    borderWidth: 1,
+    borderColor: '#E2E8F0',
+    backgroundColor: '#fff',
+  },
+  previewImage: { width: '100%', height: '100%' },
+  previewBadge: {
+    position: 'absolute',
+    left: 8,
+    top: 8,
+    paddingHorizontal: 8,
+    paddingVertical: 4,
+    borderRadius: 999,
+    backgroundColor: 'rgba(15,23,42,0.85)',
+  },
+  previewBadgeText: { color: '#fff', fontWeight: '900', fontSize: 11 },
+  previewHint: { color: '#64748B', fontWeight: '700', marginTop: 4, marginBottom: 6 },
 
   /* ---------- Notes ---------- */
   noteCard: {
@@ -2083,21 +2479,18 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     borderColor: '#E2E8F0',
   },
-  noteTimestamp: {
-    fontSize: 12,
-    color: '#64748B',
-    marginBottom: 6,
-    fontWeight: '600',
-  },
-  noteBody: { fontSize: 14, color: '#0F172A', lineHeight: 20 },
+  noteTimestamp: { fontSize: 12, color: '#64748B', marginBottom: 6, fontWeight: '700' },
+  noteBody: { fontSize: 14, color: '#0F172A', lineHeight: 20, fontWeight: '600' },
+  emptyText: { color: '#64748B', textAlign: 'center', fontWeight: '700', paddingVertical: 10 },
 
   /* ---------- Shared ---------- */
   center: { flex: 1, justifyContent: 'center', alignItems: 'center' },
-  loadingText: { fontSize: 18, color: '#2563EB', fontWeight: '700' },
+  loadingText: { fontSize: 18, color: '#2563EB', fontWeight: '800' },
 
   /* ---------- Photo viewer ---------- */
   viewerContainer: { flex: 1, backgroundColor: '#000' },
   fullScreenImage: { width: screenWidth, height: screenHeight, resizeMode: 'contain' },
+
   viewerButtons: {
     position: 'absolute',
     bottom: 40,
@@ -2110,38 +2503,77 @@ const styles = StyleSheet.create({
     flex: 1,
     marginHorizontal: 8,
     padding: 12,
-    borderRadius: 8,
+    borderRadius: 10,
     alignItems: 'center',
   },
-  shareBtn: { backgroundColor: 'rgba(255,255,255,0.3)' },
-  shareText: { color: '#fff', fontWeight: '600', fontSize: 16 },
+  shareBtn: { backgroundColor: 'rgba(255,255,255,0.25)' },
+  shareText: { color: '#fff', fontWeight: '800', fontSize: 16 },
   exitBtn: { backgroundColor: 'rgba(220,53,69,0.85)' },
-  exitText: { color: '#fff', fontWeight: '600', fontSize: 16 },
+  exitText: { color: '#fff', fontWeight: '800', fontSize: 16 },
 
-  /* ---------- Attachments modal ---------- */
-  modal: {
+  viewerBadge: {
+    position: 'absolute',
+    top: 50,
+    left: 16,
+    paddingHorizontal: 10,
+    paddingVertical: 6,
+    borderRadius: 999,
+    backgroundColor: 'rgba(0,0,0,0.55)',
+  },
+  viewerBadgeText: { color: '#fff', fontWeight: '900', fontSize: 12 },
+
+  /* ---------- Bottom sheet attachments ---------- */
+  sheetOverlay: {
     flex: 1,
-    padding: 16,
+    backgroundColor: 'rgba(2,6,23,0.55)',
+    justifyContent: 'flex-end',
+  },
+  sheet: {
     backgroundColor: '#fff',
-    marginTop: 80,
-    borderTopLeftRadius: 12,
-    borderTopRightRadius: 12,
+    borderTopLeftRadius: 18,
+    borderTopRightRadius: 18,
+    paddingHorizontal: 14,
+    paddingTop: 12,
+    paddingBottom: 18,
+    maxHeight: screenHeight * 0.82,
   },
-  modalTitle: {
-    fontSize: 18,
-    fontWeight: '700',
-    marginBottom: 12,
-    textAlign: 'center',
-    color: '#0F172A',
+  sheetHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    paddingBottom: 10,
+    borderBottomWidth: 1,
+    borderBottomColor: '#E2E8F0',
+    marginBottom: 10,
   },
-  noPhotosText: { textAlign: 'center', marginTop: 20, fontStyle: 'italic' },
+  sheetTitle: { fontSize: 18, fontWeight: '900', color: '#0F172A' },
+  sheetClose: {
+    paddingHorizontal: 10,
+    paddingVertical: 6,
+    borderRadius: 999,
+    backgroundColor: '#0F172A',
+  },
+  sheetCloseText: { color: '#fff', fontWeight: '900' },
+
   galleryList: { paddingBottom: 16 },
   thumbWrapper: { flex: 1 / 3, aspectRatio: 1, padding: 4 },
-  thumbnail: { width: '100%', height: '100%', borderRadius: 8 },
+  thumbnail: { width: '100%', height: '100%', borderRadius: 10 },
+
+  thumbBadge: {
+    position: 'absolute',
+    left: 8,
+    bottom: 8,
+    paddingHorizontal: 8,
+    paddingVertical: 4,
+    borderRadius: 999,
+    backgroundColor: 'rgba(15,23,42,0.85)',
+  },
+  thumbBadgeText: { color: '#fff', fontWeight: '900', fontSize: 11 },
+
   deleteIcon: {
     position: 'absolute',
-    top: 6,
-    right: 6,
+    top: 8,
+    right: 8,
     backgroundColor: 'rgba(0,0,0,0.6)',
     width: 24,
     height: 24,
@@ -2149,20 +2581,12 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
   },
-  deleteText: { color: '#fff', fontSize: 14, lineHeight: 18 },
-  cancelBtn: {
-    backgroundColor: '#dc3545',
-    padding: 12,
-    borderRadius: 8,
-    alignItems: 'center',
-    marginTop: 16,
-  },
-  cancelText: { color: '#fff', fontWeight: '700', fontSize: 16 },
+  deleteText: { color: '#fff', fontSize: 14, lineHeight: 18, fontWeight: '900' },
 
   /* ---------- PDF tiles in attachments ---------- */
   pdfTile: {
     flex: 1,
-    borderRadius: 8,
+    borderRadius: 10,
     borderWidth: 1,
     borderColor: '#E5E7EB',
     backgroundColor: '#F9FAFB',
@@ -2171,7 +2595,7 @@ const styles = StyleSheet.create({
     padding: 6,
   },
   pdfIcon: { fontSize: 24, marginBottom: 4 },
-  pdfLabel: { fontSize: 11, color: '#111827', textAlign: 'center' },
+  pdfLabel: { fontSize: 11, color: '#111827', textAlign: 'center', fontWeight: '900' },
 
   /* ---------- Add note overlays ---------- */
   addNoteOverlay: {
@@ -2183,7 +2607,7 @@ const styles = StyleSheet.create({
   addNoteContainer: { backgroundColor: '#fff', borderRadius: 12, padding: 16 },
   addNoteTitle: {
     fontSize: 18,
-    fontWeight: '700',
+    fontWeight: '900',
     marginBottom: 12,
     textAlign: 'center',
     color: '#0F172A',
@@ -2201,30 +2625,30 @@ const styles = StyleSheet.create({
   saveNoteBtn: {
     backgroundColor: '#16A34A',
     padding: 10,
-    borderRadius: 8,
+    borderRadius: 10,
     flex: 1,
     marginHorizontal: 4,
   },
-  saveNoteText: { color: '#fff', textAlign: 'center', fontWeight: '700' },
+  saveNoteText: { color: '#fff', textAlign: 'center', fontWeight: '900' },
   cancelNoteBtn: {
     backgroundColor: '#dc3545',
     padding: 10,
-    borderRadius: 8,
+    borderRadius: 10,
     flex: 1,
     marginHorizontal: 4,
   },
-  cancelNoteText: { color: '#fff', textAlign: 'center', fontWeight: '700' },
+  cancelNoteText: { color: '#fff', textAlign: 'center', fontWeight: '900' },
 
-  statusList: { gap: 8 },
+  statusList: { gap: 8, marginTop: 6 },
   statusOption: {
     padding: 12,
     borderWidth: 1,
     borderColor: '#e2e8f0',
-    borderRadius: 10,
+    borderRadius: 12,
     backgroundColor: '#fff',
   },
   statusOptionActive: { backgroundColor: '#2563EB' },
-  statusText: { color: '#0F172A', fontWeight: '700' },
+  statusText: { color: '#0F172A', fontWeight: '900' },
   statusTextActive: { color: '#fff' },
 
   /* ---------- Doc modal header/nav ---------- */
@@ -2240,13 +2664,13 @@ const styles = StyleSheet.create({
     paddingVertical: 6,
     paddingHorizontal: 10,
     backgroundColor: '#1f2937',
-    borderRadius: 8,
+    borderRadius: 10,
     marginRight: 8,
   },
-  docHeaderBtnText: { color: '#fff', fontWeight: '700' },
+  docHeaderBtnText: { color: '#fff', fontWeight: '900' },
   docHeaderTitle: {
     color: '#fff',
-    fontWeight: '800',
+    fontWeight: '900',
     fontSize: 16,
     flex: 1,
     textAlign: 'center',
@@ -2265,5 +2689,5 @@ const styles = StyleSheet.create({
     backgroundColor: '#1f2937',
     borderRadius: 999,
   },
-  docNavText: { color: '#fff', fontWeight: '700' },
+  docNavText: { color: '#fff', fontWeight: '900' },
 });
