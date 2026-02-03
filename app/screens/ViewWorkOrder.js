@@ -970,15 +970,6 @@ export default function ViewWorkOrder() {
     }
   };
 
-  // ─────────────────────────────────────────────────────────────
-  // ✅ NEW: Component-scope attachment lists (PHOTO vs DRAW vs PDF)
-  // Used by Section 5 + Section 6
-  // ─────────────────────────────────────────────────────────────
-  const attachmentKeys = (workOrder?.photoPath || '')
-    .split(',')
-    .map((s) => s.trim())
-    .filter(Boolean);
-
   const getKindFromKey = (k) => {
     const s = String(k || '').toLowerCase();
 
