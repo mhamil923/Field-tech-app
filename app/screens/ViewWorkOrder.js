@@ -1374,7 +1374,10 @@ export default function ViewWorkOrder() {
         <View style={styles.card}>
           <View style={styles.cardTopRow}>
             <View style={{ flex: 1 }}>
-              <Text style={styles.cardTitle}>Details</Text>
+              <View style={styles.detailsHeaderRow}>
+                <Text style={styles.cardTitle}>Details</Text>
+                <Text style={styles.detailsHeaderMeta}>Created: {createdDateDisplay}</Text>
+              </View>
               <Text style={styles.cardSubtitle} numberOfLines={1}>
                 {siteName || '—'}
               </Text>
@@ -1394,74 +1397,73 @@ export default function ViewWorkOrder() {
 
           <View style={styles.divider} />
 
-          <View style={styles.row}>
-            <Text style={styles.label}>WO #</Text>
-            <Text style={styles.value}>{workOrderNumber}</Text>
-          </View>
-
-          <View style={styles.row}>
-            <Text style={styles.label}>WO/PO #</Text>
-            <Text style={styles.value}>{poNumber}</Text>
-          </View>
-
-          <View style={styles.row}>
-            <Text style={styles.label}>Customer</Text>
-            <Text style={styles.value}>{customer}</Text>
-          </View>
-
-          <View style={styles.row}>
-            <Text style={styles.label}>Phone</Text>
-            {customerPhone ? (
-              <TouchableOpacity onPress={() => callNumber(customerPhone)}>
-                <Text style={[styles.value, styles.linkText]}>{customerPhone}</Text>
-              </TouchableOpacity>
-            ) : (
-              <Text style={styles.value}>—</Text>
-            )}
-          </View>
-
-          <View style={styles.row}>
-            <Text style={styles.label}>Email</Text>
-            {customerEmail ? (
-              <TouchableOpacity onPress={() => emailTo(customerEmail)}>
-                <Text style={[styles.value, styles.linkText]}>{customerEmail}</Text>
-              </TouchableOpacity>
-            ) : (
-              <Text style={styles.value}>—</Text>
-            )}
-          </View>
-
-          <View style={styles.row}>
-            <Text style={styles.label}>Site Address</Text>
-            {siteAddress ? (
-              <TouchableOpacity onPress={() => openMap(siteAddress)} style={{ flex: 1 }}>
-                <Text style={[styles.value, styles.linkText]}>{siteAddress}</Text>
-              </TouchableOpacity>
-            ) : (
-              <Text style={styles.value}>—</Text>
-            )}
-          </View>
-
-          {!!billingAddress && (
-            <View style={styles.row}>
-              <Text style={styles.label}>Billing</Text>
-              <Text style={styles.value}>{billingAddress}</Text>
+          {/* Side-by-side detail grid */}
+          <View style={styles.detailsGrid}>
+            {/* Row 1 */}
+            <View style={styles.detailCell}>
+              <Text style={styles.detailLabel}>WO #</Text>
+              <Text style={styles.detailValue}>{workOrderNumber}</Text>
             </View>
-          )}
+            <View style={styles.detailCell}>
+              <Text style={styles.detailLabel}>WO/PO #</Text>
+              <Text style={styles.detailValue}>{poNumber}</Text>
+            </View>
 
-          <View style={styles.row}>
-            <Text style={styles.label}>Scheduled</Text>
-            <Text style={styles.value}>{scheduled}</Text>
-          </View>
+            {/* Row 2 */}
+            <View style={styles.detailCell}>
+              <Text style={styles.detailLabel}>Customer</Text>
+              <Text style={styles.detailValue}>{customer}</Text>
+            </View>
+            <View style={styles.detailCell}>
+              <Text style={styles.detailLabel}>Scheduled</Text>
+              <Text style={styles.detailValue}>{scheduled}</Text>
+            </View>
 
-          <View style={styles.row}>
-            <Text style={styles.label}>Created</Text>
-            <Text style={styles.value}>{createdDateDisplay}</Text>
-          </View>
+            {/* Row 3 */}
+            <View style={styles.detailCell}>
+              <Text style={styles.detailLabel}>Phone</Text>
+              {customerPhone ? (
+                <TouchableOpacity onPress={() => callNumber(customerPhone)}>
+                  <Text style={[styles.detailValue, styles.linkText]}>{customerPhone}</Text>
+                </TouchableOpacity>
+              ) : (
+                <Text style={styles.detailValue}>—</Text>
+              )}
+            </View>
+            <View style={styles.detailCell}>
+              <Text style={styles.detailLabel}>Email</Text>
+              {customerEmail ? (
+                <TouchableOpacity onPress={() => emailTo(customerEmail)}>
+                  <Text style={[styles.detailValue, styles.linkText]}>{customerEmail}</Text>
+                </TouchableOpacity>
+              ) : (
+                <Text style={styles.detailValue}>—</Text>
+              )}
+            </View>
 
-          <View style={styles.row}>
-            <Text style={styles.label}>Problem</Text>
-            <Text style={styles.value}>{problem}</Text>
+            {/* Full-width rows */}
+            <View style={[styles.detailCell, styles.detailCellFull]}>
+              <Text style={styles.detailLabel}>Site Address</Text>
+              {siteAddress ? (
+                <TouchableOpacity onPress={() => openMap(siteAddress)} style={{ flex: 1 }}>
+                  <Text style={[styles.detailValue, styles.linkText]}>{siteAddress}</Text>
+                </TouchableOpacity>
+              ) : (
+                <Text style={styles.detailValue}>—</Text>
+              )}
+            </View>
+
+            {!!billingAddress && (
+              <View style={[styles.detailCell, styles.detailCellFull]}>
+                <Text style={styles.detailLabel}>Billing</Text>
+                <Text style={styles.detailValue}>{billingAddress}</Text>
+              </View>
+            )}
+
+            <View style={[styles.detailCell, styles.detailCellFull]}>
+              <Text style={styles.detailLabel}>Problem</Text>
+              <Text style={styles.detailValue}>{problem}</Text>
+            </View>
           </View>
 
           <TouchableOpacity style={styles.backRow} onPress={() => navigation.goBack()}>
@@ -1564,44 +1566,7 @@ export default function ViewWorkOrder() {
           </TouchableOpacity>
         </View>
 
-        {/* Quick Preview: Photos + Draw Notes (images only) */}
-        {!!imageItems.length && (
-          <>
-            <Text style={styles.sectionHeader}>Photos & Draw Notes</Text>
-            <View style={styles.previewGrid}>
-              {imageItems.slice(0, 12).map((it, i) => {
-                const badge =
-                  it.kind === 'draw' ? 'DRAW' : it.kind === 'photo' ? 'PHOTO' : 'IMG';
-
-                return (
-                  <TouchableOpacity
-                    key={`${it.url}-${i}`}
-                    style={styles.previewTile}
-                    onPress={() => {
-                      setViewerIndex(i);
-                      setPhotoViewerVisible(true);
-                    }}
-                    onLongPress={() => {
-                      const attachIdx = attachmentItems.findIndex((a) => a.url === it.url);
-                      if (attachIdx >= 0) handleDeleteAttachment(attachIdx);
-                    }}
-                  >
-                    <Image source={{ uri: it.url }} style={styles.previewImage} />
-                    <View style={styles.previewBadge}>
-                      <Text style={styles.previewBadgeText}>{badge}</Text>
-                    </View>
-                  </TouchableOpacity>
-                );
-              })}
-            </View>
-
-            {imageItems.length > 12 && (
-              <Text style={styles.previewHint}>Showing first 12 — open Attachments to see all.</Text>
-            )}
-          </>
-        )}
-
-        {/* Notes */}
+        {/* Notes (bottom only) */}
         <Text style={styles.sectionHeader}>Notes</Text>
         {notes.length > 0 ? (
           notes.map((n, i) => (
@@ -2026,6 +1991,20 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     gap: 12,
   },
+
+  detailsHeaderRow: {
+    flexDirection: 'row',
+    alignItems: 'baseline',
+    justifyContent: 'space-between',
+    gap: 10,
+  },
+
+  detailsHeaderMeta: {
+    fontSize: 12,
+    color: '#64748B',
+    fontWeight: '800',
+  },
+
   cardTitle: { fontSize: 16, fontWeight: '900', color: '#0F172A' },
   cardSubtitle: { marginTop: 2, color: '#64748B', fontWeight: '700', fontSize: 12 },
 
@@ -2043,13 +2022,40 @@ const styles = StyleSheet.create({
     marginVertical: 12,
   },
 
-  row: { flexDirection: 'row', marginBottom: 10, gap: 10 },
-  label: { width: 90, fontWeight: '900', color: '#1E3A8A' },
-  value: { flex: 1, color: '#0F172A', fontWeight: '600' },
   linkText: { color: '#2563EB', textDecorationLine: 'underline', fontWeight: '800' },
 
+  /* ---------- Side-by-side details grid ---------- */
+  detailsGrid: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 12,
+  },
+  detailCell: {
+    width: '48%',
+    backgroundColor: '#F8FAFC',
+    borderWidth: 1,
+    borderColor: '#E2E8F0',
+    borderRadius: 12,
+    padding: 12,
+  },
+  detailCellFull: {
+    width: '100%',
+  },
+  detailLabel: {
+    fontSize: 12,
+    color: '#1E3A8A',
+    fontWeight: '900',
+    marginBottom: 6,
+  },
+  detailValue: {
+    color: '#0F172A',
+    fontWeight: '700',
+    fontSize: 14,
+    lineHeight: 19,
+  },
+
   backRow: {
-    marginTop: 10,
+    marginTop: 14,
     paddingVertical: 10,
     borderRadius: 12,
     alignItems: 'center',
@@ -2141,30 +2147,6 @@ const styles = StyleSheet.create({
   actionIcon: { fontSize: 18, color: '#fff' },
   actionTitle: { fontWeight: '900', color: '#0F172A', marginBottom: 2 },
   actionSub: { color: '#64748B', fontSize: 12, textAlign: 'center', fontWeight: '700' },
-
-  /* ---------- Preview Grid ---------- */
-  previewGrid: { flexDirection: 'row', flexWrap: 'wrap', gap: 10, marginBottom: 6 },
-  previewTile: {
-    width: (screenWidth - 16 * 2 - 10 * 2) / 3,
-    aspectRatio: 1,
-    borderRadius: 12,
-    overflow: 'hidden',
-    borderWidth: 1,
-    borderColor: '#E2E8F0',
-    backgroundColor: '#fff',
-  },
-  previewImage: { width: '100%', height: '100%' },
-  previewBadge: {
-    position: 'absolute',
-    left: 8,
-    top: 8,
-    paddingHorizontal: 8,
-    paddingVertical: 4,
-    borderRadius: 999,
-    backgroundColor: 'rgba(15,23,42,0.85)',
-  },
-  previewBadgeText: { color: '#fff', fontWeight: '900', fontSize: 11 },
-  previewHint: { color: '#64748B', fontWeight: '700', marginTop: 4, marginBottom: 6 },
 
   /* ---------- Notes ---------- */
   noteCard: {
