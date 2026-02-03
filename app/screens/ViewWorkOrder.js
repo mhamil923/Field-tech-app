@@ -2274,14 +2274,6 @@ export default function ViewWorkOrder() {
 // If you already added them in Section 3, DO NOT duplicate them.
 // I’m including them here in styles block area as a reminder:
 // - attachmentKeys, attachmentItems, imageItems, handleDeleteAttachment
-//
-// If you don't have them yet in Section 3, paste this block there:
-//
-// const attachmentKeys = (workOrder?.photoPath || '').split(',').map(s=>s.trim()).filter(Boolean);
-// const getKindFromKey = (k) => { ...same logic... };
-// const attachmentItems = attachmentKeys.map(k => ({ key:k, url:fileUrl(k), kind:getKindFromKey(k) }));
-// const imageItems = attachmentItems.filter(a => a.kind !== 'pdf');
-// const handleDeleteAttachment = (attachmentIndex) => { ...delete using attachmentKeys[attachmentIndex] ... };
 
 
 // ================================
