@@ -341,7 +341,7 @@ export default function AddWorkOrder() {
       <TouchableOpacity onPress={pickEstimatePdf} style={[styles.btn, styles.pdfBtn]}>
         <Text style={styles.btnText}>{estimatePdfUri ? 'Change Estimate PDF' : 'Choose Estimate PDF'}</Text>
       </TouchableOpacity>
-      <Text style={{ color: '#64748b', marginTop: 4 }}>
+      <Text style={{ color: '#0f172a', marginTop: 4 }}>
         This will appear under <Text style={{ fontWeight: '700' }}>Estimates</Text> on the Work Order.
       </Text>
 
@@ -562,11 +562,11 @@ const styles = StyleSheet.create({
   title: {
     fontSize: 22,
     fontWeight: '800',
-    color: '#2B2D42',
+    color: '#0f172a',
     textAlign: 'center',
     marginBottom: 12,
   },
-  label: { color: '#334155', marginBottom: 6, fontWeight: '700' },
+  label: { color: '#0f172a', marginBottom: 6, fontWeight: '700' },
   input: {
     backgroundColor: '#fff',
     borderRadius: 8,
@@ -636,7 +636,7 @@ const styles = StyleSheet.create({
     padding: 14,
     maxHeight: '70%',
   },
-  modalTitle: { fontSize: 18, fontWeight: '700', marginBottom: 8, color: '#2B2D42' },
+  modalTitle: { fontSize: 18, fontWeight: '700', marginBottom: 8, color: '#0f172a' },
   statusOption: {
     paddingVertical: 10,
     paddingHorizontal: 12,

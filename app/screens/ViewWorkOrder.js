@@ -78,15 +78,14 @@ const buildAttachmentName = ({
   type,
   dateObj,
   ext = 'jpg',
-  extra = '',
 }) => {
   const wo = safeSlug(workOrderNumberOrId || 'WO');
   const date = dateStamp(dateObj || new Date());
-  const ts = Date.now();
-  const t = String(type || 'PHOTO').toUpperCase() === 'DRAW' ? 'DRAW' : 'PHOTO';
   const e = String(ext || 'jpg').toLowerCase().replace('.', '') || 'jpg';
-  const x = extra ? `__${safeSlug(extra)}` : '';
-  return `WO-${wo}__${date}__${t}__${ts}${x}.${e}`;
+  if (String(type || 'PHOTO').toUpperCase() === 'DRAW') {
+    return `DrawNote-${wo}-${date}.${e}`;
+  }
+  return `Photo-${wo}-${date}-${Date.now()}.${e}`;
 };
 
 const detectKindFromKeyOrUrl = (keyOrUrl) => {
@@ -660,6 +659,10 @@ export default function ViewWorkOrder() {
   // Camera upload state
   const [isCameraUploading, setIsCameraUploading] = useState(false);
 
+  // Session tracking for status reminder
+  const [hasAddedContentThisSession, setHasAddedContentThisSession] = useState(false);
+  const [hasUpdatedStatusThisSession, setHasUpdatedStatusThisSession] = useState(false);
+
   // -------- helpers for contact actions & address --------
   const normPhone = (p) => String(p || '').replace(/[^\d+]/g, '');
 
@@ -717,9 +720,9 @@ export default function ViewWorkOrder() {
   const getIdForFilename = useCallback(() => {
     const wo = String(workOrder?.workOrderNumber || '').trim();
     const po = String(workOrder?.poNumber || '').trim();
-    if (wo) return `WO-${safeSlug(wo)}`;
-    if (po) return `PO-${safeSlug(po)}`;
-    return `ID-${safeSlug(workOrderId)}`;
+    if (wo) return safeSlug(wo);
+    if (po) return safeSlug(po);
+    return safeSlug(workOrderId);
   }, [workOrder?.workOrderNumber, workOrder?.poNumber, workOrderId]);
 
   // Fetch work order
@@ -903,6 +906,7 @@ export default function ViewWorkOrder() {
     setNewNoteText('');
     setShowAddNoteModal(false);
     await fetchWorkOrder();
+    setHasAddedContentThisSession(true);
   };
 
   // Keep uploads smaller
@@ -1008,6 +1012,7 @@ export default function ViewWorkOrder() {
       try {
         await uploadCameraPhotoNow(asset.uri);
         await fetchWorkOrder();
+        setHasAddedContentThisSession(true);
       } catch (err) {
         const msg = err?.response?.data?.error || err?.message || 'Failed to upload photo.';
         await new Promise((resolve) => {
@@ -1056,7 +1061,6 @@ export default function ViewWorkOrder() {
         type: 'PHOTO',
         dateObj: getVisitDateForFilename(),
         ext: 'jpg',
-        extra: String(i + 1),
       });
 
       form.append('photoFile', {
@@ -1075,6 +1079,7 @@ export default function ViewWorkOrder() {
       });
 
       await fetchWorkOrder();
+      setHasAddedContentThisSession(true);
       Alert.alert('Success', 'Photos uploaded!');
     } catch (err) {
       Alert.alert('Upload Error', err?.response?.data?.error || err?.message || 'Upload failed.');
@@ -1226,6 +1231,7 @@ export default function ViewWorkOrder() {
 
         setSketchVisible(false);
         await fetchWorkOrder();
+        setHasAddedContentThisSession(true);
         Alert.alert('Uploaded', 'Drawing note uploaded.');
       } catch (e) {
         Alert.alert('Upload Error', e?.message || 'Failed to upload drawing note.');
@@ -1256,11 +1262,40 @@ export default function ViewWorkOrder() {
       });
 
       await fetchWorkOrder();
+      setHasUpdatedStatusThisSession(true);
     } catch (e) {
       setWorkOrder((w) => (w ? { ...w, status: prev } : w));
       Alert.alert('Error', e?.response?.data?.error || e?.message || 'Failed to update status.');
     } finally {
       setIsStatusSaving(false);
+    }
+  };
+
+  // ----- back navigation with status reminder -----
+  const handleBackNavigation = () => {
+    if (hasAddedContentThisSession && !hasUpdatedStatusThisSession) {
+      Alert.alert(
+        'Update Status?',
+        'You added notes or photos but haven\'t updated the work order status. Would you like to update it before leaving?',
+        [
+          {
+            text: 'Update Status',
+            onPress: () => openStatusModal(),
+          },
+          {
+            text: 'Go Back Anyway',
+            style: 'destructive',
+            onPress: () => navigation.goBack(),
+          },
+          {
+            text: 'Cancel',
+            style: 'cancel',
+          },
+        ],
+        { cancelable: true }
+      );
+    } else {
+      navigation.goBack();
     }
   };
   // -------------------------
@@ -1372,12 +1407,13 @@ export default function ViewWorkOrder() {
 
         {/* Work Order Details */}
         <View style={styles.card}>
+          <View style={styles.detailsHeaderRow}>
+            <Text style={styles.cardTitle}>Details</Text>
+            <Text style={styles.detailsHeaderMeta}>Created: {createdDateDisplay}</Text>
+          </View>
+
           <View style={styles.cardTopRow}>
             <View style={{ flex: 1 }}>
-              <View style={styles.detailsHeaderRow}>
-                <Text style={styles.cardTitle}>Details</Text>
-                <Text style={styles.detailsHeaderMeta}>Created: {createdDateDisplay}</Text>
-              </View>
               <Text style={styles.cardSubtitle} numberOfLines={1}>
                 {siteName || '—'}
               </Text>
@@ -1395,10 +1431,8 @@ export default function ViewWorkOrder() {
             </TouchableOpacity>
           </View>
 
-          <View style={styles.divider} />
-
           {/* Side-by-side detail grid */}
-          <View style={styles.detailsGrid}>
+          <View style={[styles.detailsGrid, { marginTop: 12 }]}>
             {/* Row 1 */}
             <View style={styles.detailCell}>
               <Text style={styles.detailLabel}>WO #</Text>
@@ -1466,7 +1500,7 @@ export default function ViewWorkOrder() {
             </View>
           </View>
 
-          <TouchableOpacity style={styles.backRow} onPress={() => navigation.goBack()}>
+          <TouchableOpacity style={styles.backRow} onPress={handleBackNavigation}>
             <Text style={styles.backRowText}>← Back to List</Text>
           </TouchableOpacity>
         </View>
@@ -1968,7 +2002,7 @@ const styles = StyleSheet.create({
   headerSub: {
     marginTop: 2,
     fontSize: 13,
-    color: '#64748B',
+    color: '#0f172a',
     fontWeight: '700',
   },
 
@@ -1995,18 +2029,18 @@ const styles = StyleSheet.create({
   detailsHeaderRow: {
     flexDirection: 'row',
     alignItems: 'baseline',
-    justifyContent: 'space-between',
+    justifyContent: 'flex-start',
     gap: 10,
   },
 
   detailsHeaderMeta: {
     fontSize: 12,
-    color: '#64748B',
+    color: '#0f172a',
     fontWeight: '800',
   },
 
   cardTitle: { fontSize: 16, fontWeight: '900', color: '#0F172A' },
-  cardSubtitle: { marginTop: 2, color: '#64748B', fontWeight: '700', fontSize: 12 },
+  cardSubtitle: { marginTop: 2, color: '#0f172a', fontWeight: '700', fontSize: 16 },
 
   statusPill: {
     paddingHorizontal: 12,
@@ -2032,10 +2066,6 @@ const styles = StyleSheet.create({
   },
   detailCell: {
     width: '48%',
-    backgroundColor: '#F8FAFC',
-    borderWidth: 1,
-    borderColor: '#E2E8F0',
-    borderRadius: 12,
     padding: 12,
   },
   detailCellFull: {
@@ -2103,7 +2133,7 @@ const styles = StyleSheet.create({
 
   tileIconText: { color: '#ffffff', fontWeight: '900', fontSize: 14 },
   tileTitle: { fontWeight: '900', color: '#0F172A', marginBottom: 2 },
-  tileSub: { color: '#64748B', fontSize: 12, textAlign: 'center', fontWeight: '700' },
+  tileSub: { color: '#0f172a', fontSize: 12, textAlign: 'center', fontWeight: '700' },
 
   tileBadge: {
     marginTop: 6,
@@ -2146,7 +2176,7 @@ const styles = StyleSheet.create({
   },
   actionIcon: { fontSize: 18, color: '#fff' },
   actionTitle: { fontWeight: '900', color: '#0F172A', marginBottom: 2 },
-  actionSub: { color: '#64748B', fontSize: 12, textAlign: 'center', fontWeight: '700' },
+  actionSub: { color: '#0f172a', fontSize: 12, textAlign: 'center', fontWeight: '700' },
 
   /* ---------- Notes ---------- */
   noteCard: {
@@ -2157,9 +2187,9 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     borderColor: '#E2E8F0',
   },
-  noteTimestamp: { fontSize: 12, color: '#64748B', marginBottom: 6, fontWeight: '700' },
+  noteTimestamp: { fontSize: 12, color: '#0f172a', marginBottom: 6, fontWeight: '700' },
   noteBody: { fontSize: 14, color: '#0F172A', lineHeight: 20, fontWeight: '600' },
-  emptyText: { color: '#64748B', textAlign: 'center', fontWeight: '700', paddingVertical: 10 },
+  emptyText: { color: '#0f172a', textAlign: 'center', fontWeight: '700', paddingVertical: 10 },
 
   /* ---------- Shared ---------- */
   center: { flex: 1, justifyContent: 'center', alignItems: 'center' },

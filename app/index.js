@@ -6,7 +6,14 @@ import {
   ScrollView,
   StyleSheet,
   TouchableOpacity,
+  LayoutAnimation,
+  Platform,
+  UIManager,
 } from 'react-native';
+
+if (Platform.OS === 'android' && UIManager.setLayoutAnimationEnabledExperimental) {
+  UIManager.setLayoutAnimationEnabledExperimental(true);
+}
 import axios from 'axios';
 import moment from 'moment';
 import { useRouter } from 'expo-router';
@@ -33,6 +40,7 @@ export default function HomeScreen() {
 
   const [orders, setOrders] = useState([]);
   const [todayOrderIds, setTodayOrderIds] = useState([]);
+  const [notesExpanded, setNotesExpanded] = useState(false);
 
   const norm = (v) => (v ?? '').toString().trim();
 
@@ -371,41 +379,66 @@ export default function HomeScreen() {
     <ScrollView contentContainerStyle={styles.container}>
       <Text style={styles.header}>Welcome to the CRM Dashboard</Text>
 
-      {/* ===== Notes (This Week) ===== */}
-      <View style={styles.section}>
-        <View style={styles.sectionHeaderRow}>
-          <Text style={styles.sectionTitle}>Notes (This Week)</Text>
+      {/* ===== Notes (This Week) - Collapsible ===== */}
+      <View style={styles.notesContainer}>
+        <TouchableOpacity
+          activeOpacity={0.7}
+          onPress={() => {
+            LayoutAnimation.configureNext(LayoutAnimation.Presets.easeInEaseOut);
+            setNotesExpanded((prev) => !prev);
+          }}
+          style={styles.notesHeaderRow}
+        >
+          <View style={styles.notesHeaderLeft}>
+            <Text style={styles.notesChevron}>{notesExpanded ? '▼' : '▶'}</Text>
+            <Text style={[styles.sectionTitle, { marginBottom: 0 }]}>Notes (This Week)</Text>
+            {weeklyNotes.length > 0 && (
+              <View style={styles.noteCountBadge}>
+                <Text style={styles.noteCountText}>{weeklyNotes.length}</Text>
+              </View>
+            )}
+          </View>
           {weeklyNotes.length > 0 && (
-            <TouchableOpacity onPress={markAllWeeklyNotesRead} style={styles.markAllBtn}>
+            <TouchableOpacity
+              onPress={(e) => {
+                e.stopPropagation?.();
+                markAllWeeklyNotesRead();
+              }}
+              style={styles.markAllBtn}
+            >
               <Text style={styles.markAllText}>Mark All Read</Text>
             </TouchableOpacity>
           )}
-        </View>
+        </TouchableOpacity>
 
-        {weeklyNotes.length ? (
-          weeklyNotes.map((n) => (
-            <TouchableOpacity
-              key={n.key}
-              style={styles.noteCard}
-              onPress={() => markNoteReadAndOpen(n)}
-              activeOpacity={0.7}
-            >
-              <View style={styles.noteHeaderRow}>
-                <Text style={styles.noteWo}>WO: {n.workOrderNumber || n.orderId}</Text>
-                <Text style={styles.noteMeta}>
-                  {moment(n.createdAt).fromNow()} {n.by ? `• ${n.by}` : ''}
-                </Text>
-              </View>
-              <Text style={styles.noteSubMeta} numberOfLines={1}>
-                {n.customer} • {n.site}
-              </Text>
-              <Text style={styles.noteText} numberOfLines={3}>
-                {n.text}
-              </Text>
-            </TouchableOpacity>
-          ))
-        ) : (
-          <Text style={styles.noData}>No new notes from the past 7 days.</Text>
+        {notesExpanded && (
+          <View style={styles.notesBody}>
+            {weeklyNotes.length ? (
+              weeklyNotes.map((n) => (
+                <TouchableOpacity
+                  key={n.key}
+                  style={styles.noteCard}
+                  onPress={() => markNoteReadAndOpen(n)}
+                  activeOpacity={0.7}
+                >
+                  <View style={styles.noteHeaderRow}>
+                    <Text style={styles.noteWo}>WO: {n.workOrderNumber || n.orderId}</Text>
+                    <Text style={styles.noteMeta}>
+                      {moment(n.createdAt).fromNow()} {n.by ? `• ${n.by}` : ''}
+                    </Text>
+                  </View>
+                  <Text style={styles.noteSubMeta} numberOfLines={1}>
+                    {n.customer} • {n.site}
+                  </Text>
+                  <Text style={styles.noteText} numberOfLines={3}>
+                    {n.text}
+                  </Text>
+                </TouchableOpacity>
+              ))
+            ) : (
+              <Text style={styles.noData}>No new notes from the past 7 days.</Text>
+            )}
+          </View>
         )}
       </View>
 
@@ -436,87 +469,136 @@ export default function HomeScreen() {
 
 const styles = StyleSheet.create({
   container: {
-    backgroundColor: '#F1F5F9',
+    backgroundColor: '#f1f5f9',
     padding: 16,
     flexGrow: 1,
   },
   header: {
-    fontSize: 24,
-    fontWeight: '700',
+    fontSize: 22,
+    fontWeight: '800',
     marginBottom: 16,
     textAlign: 'center',
-    color: '#2B2D42',
+    color: '#0f172a',
   },
 
   section: {
     marginBottom: 24,
   },
-  sectionHeaderRow: {
+  sectionTitle: {
+    fontSize: 18,
+    fontWeight: '800',
+    color: '#0d6efd',
+    marginBottom: 12,
+  },
+
+  // Collapsible notes container
+  notesContainer: {
+    backgroundColor: '#ffffff',
+    borderRadius: 14,
+    borderWidth: 1,
+    borderColor: '#eef2f7',
+    marginBottom: 16,
+    shadowColor: '#000',
+    shadowOpacity: 0.06,
+    shadowRadius: 9,
+    shadowOffset: { width: 0, height: 6 },
+    elevation: 3,
+    overflow: 'hidden',
+  },
+  notesHeaderRow: {
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
-    marginBottom: 8,
+    padding: 14,
   },
-  sectionTitle: {
-    fontSize: 20,
-    fontWeight: '600',
-    color: '#3D5A80',
+  notesHeaderLeft: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+  },
+  notesChevron: {
+    fontSize: 14,
+    color: '#0d6efd',
+  },
+  noteCountBadge: {
+    backgroundColor: 'rgba(13,110,253,0.08)',
+    borderRadius: 999,
+    paddingHorizontal: 8,
+    paddingVertical: 2,
+    minWidth: 24,
+    alignItems: 'center',
+  },
+  noteCountText: {
+    color: '#0d6efd',
+    fontSize: 12,
+    fontWeight: '700',
   },
   markAllBtn: {
-    paddingHorizontal: 10,
+    paddingHorizontal: 12,
     paddingVertical: 6,
-    borderRadius: 16,
-    backgroundColor: '#E2E8F0',
+    borderRadius: 12,
+    backgroundColor: '#f8fafc',
+    borderWidth: 1,
+    borderColor: '#e2e8f0',
   },
   markAllText: {
-    color: '#0F172A',
-    fontWeight: '600',
+    color: '#0f172a',
+    fontWeight: '700',
     fontSize: 12,
+  },
+  notesBody: {
+    paddingHorizontal: 14,
+    paddingBottom: 14,
   },
 
   // Note card styles
   noteCard: {
-    backgroundColor: '#FFFFFF',
-    padding: 12,
-    borderRadius: 8,
+    backgroundColor: '#ffffff',
+    padding: 14,
+    borderRadius: 14,
     borderWidth: 1,
-    borderColor: '#E2E8F0',
+    borderColor: '#eef2f7',
     marginBottom: 10,
+    shadowColor: '#000',
+    shadowOpacity: 0.06,
+    shadowRadius: 9,
+    shadowOffset: { width: 0, height: 6 },
+    elevation: 3,
   },
   noteHeaderRow: {
     flexDirection: 'row',
     justifyContent: 'space-between',
     marginBottom: 2,
   },
-  noteWo: { fontWeight: '700', color: '#0F172A' },
-  noteMeta: { color: '#64748B', fontSize: 12 },
-  noteSubMeta: { color: '#64748B', fontSize: 12, marginBottom: 6 },
-  noteText: { color: '#0F172A', fontSize: 14 },
+  noteWo: { fontWeight: '900', color: '#0f172a' },
+  noteMeta: { color: '#0f172a', fontSize: 12 },
+  noteSubMeta: { color: '#0f172a', fontSize: 13, marginBottom: 6 },
+  noteText: { color: '#0f172a', fontSize: 14 },
 
   // Existing card list styles
   card: {
-    backgroundColor: '#FFFFFF',
-    padding: 16,
-    borderRadius: 8,
+    backgroundColor: '#ffffff',
+    padding: 14,
+    borderRadius: 14,
     borderWidth: 1,
-    borderColor: '#E2E8F0',
+    borderColor: '#eef2f7',
     marginBottom: 12,
     shadowColor: '#000',
-    shadowOpacity: 0.05,
-    shadowOffset: { width: 0, height: 2 },
-    shadowRadius: 4,
-    elevation: 2,
+    shadowOpacity: 0.06,
+    shadowRadius: 9,
+    shadowOffset: { width: 0, height: 6 },
+    elevation: 3,
   },
   cardTitle: {
-    fontWeight: '700',
+    fontWeight: '900',
     marginBottom: 6,
-    color: '#2B2D42',
-    fontSize: 18,
+    color: '#0f172a',
+    fontSize: 15,
   },
   cardText: {
-    fontSize: 14,
+    fontSize: 13,
     marginBottom: 4,
-    color: '#2B2D42',
+    color: '#0f172a',
   },
 
   actionsRow: {
@@ -529,25 +611,30 @@ const styles = StyleSheet.create({
   rightCol: { flexShrink: 1, alignItems: 'flex-end', maxWidth: '60%' },
 
   latestNoteBox: {
-    backgroundColor: '#F8FAFC',
+    backgroundColor: '#f8fafc',
     borderWidth: 1,
-    borderColor: '#E2E8F0',
-    borderRadius: 8,
+    borderColor: '#eef2f7',
+    borderRadius: 12,
     paddingHorizontal: 10,
     paddingVertical: 8,
     maxWidth: '100%',
   },
-  latestNoteMeta: { fontSize: 11, color: '#64748B', marginBottom: 4 },
-  latestNoteText: { fontSize: 13, color: '#0F172A' },
+  latestNoteMeta: { fontSize: 12, color: '#0f172a', marginBottom: 4 },
+  latestNoteText: { fontSize: 13, color: '#0f172a' },
 
   viewButton: {
-    backgroundColor: '#17a2b8',
-    borderRadius: 6,
+    backgroundColor: '#0d6efd',
+    borderRadius: 12,
     paddingVertical: 10,
     paddingHorizontal: 16,
     alignSelf: 'flex-end',
+    shadowColor: 'rgba(13,110,253,1)',
+    shadowOpacity: 0.24,
+    shadowRadius: 11,
+    shadowOffset: { width: 0, height: 10 },
+    elevation: 4,
   },
-  viewButtonText: { color: '#FFFFFF', fontSize: 15, fontWeight: 'bold' },
+  viewButtonText: { color: '#ffffff', fontSize: 14, fontWeight: '700' },
 
-  noData: { fontStyle: 'italic', color: '#8D99AE' },
+  noData: { fontStyle: 'italic', color: '#0f172a' },
 });

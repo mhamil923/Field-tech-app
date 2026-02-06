@@ -223,7 +223,7 @@ const styles = StyleSheet.create({
   center: { flex: 1, alignItems: 'center', justifyContent: 'center' },
   header: { fontSize: 24, fontWeight: 'bold', textAlign: 'center', marginBottom: 16 },
 
-  label: { fontWeight: 'bold', marginTop: 8, color: '#2B2D42' },
+  label: { fontWeight: 'bold', marginTop: 8, color: '#0f172a' },
   input: {
     borderWidth: 1,
     borderColor: '#ccc',
@@ -270,7 +270,7 @@ const styles = StyleSheet.create({
   },
   secondaryButtonText: { color: '#fff', fontWeight: '600' },
 
-  fileHint: { marginTop: 6, color: '#3D5A80' },
+  fileHint: { marginTop: 6, color: '#0f172a' },
 
   backButton: {
     backgroundColor: '#6c757d',

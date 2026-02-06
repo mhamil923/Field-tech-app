@@ -5,7 +5,7 @@ import { Stack, useRouter, usePathname } from 'expo-router';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { GestureHandlerRootView } from 'react-native-gesture-handler';
 import AsyncStorage from '@react-native-async-storage/async-storage';
-// import * as Linking from 'expo-linking'; // if you ever want external links
+import { CRM } from '@/constants/Colors';
 
 function Header() {
   const router = useRouter();
@@ -46,21 +46,13 @@ function Header() {
     router.replace('/screens/LoginScreen');
   });
 
-  // If you truly want to open an external web calendar instead of an in-app screen:
-  // const openExternal = withNavLock(() => {
-  //   const url = 'https://main.d2c3mwinxmekdi.amplifyapp.com/calendar';
-  //   Linking.openURL(url);
-  // });
-
   // 3) Ensure these paths actually exist in your app folder structure
   const TABS: Array<{ label: string; path?: string; onPress?: () => void }> = [
-    { label: 'Home',        path: '/' }, // usually app/index.tsx
+    { label: 'Home',        path: '/' },
     { label: 'Work Orders', path: '/screens/WorkOrdersScreen' },
+    { label: 'POs',         path: '/screens/PurchaseOrdersScreen' },
     { label: 'History',     path: '/screens/HistoryScreen' },
-    // Use an in-app screen for Calendar to keep it seamless:
-    { label: 'Calendar',    path: '/screens/CalendarScreen' }, // <-- make sure this exists
-    // If you prefer the external web calendar, replace the above with:
-    // { label: 'Calendar',    onPress: openExternal },
+    { label: 'Calendar',    path: '/screens/CalendarScreen' },
     { label: 'Logout',      onPress: logout },
   ];
 
@@ -76,16 +68,29 @@ function Header() {
     onPress?: () => void;
   }) => {
     const active = path ? (pathname === path || pathname.startsWith(path + '/')) : false;
+    const isLogout = label === 'Logout';
     const press = onPress ?? (path ? go(path) : undefined);
 
     return (
       <TouchableOpacity
         onPress={active ? undefined : press}
         disabled={active}
-        activeOpacity={0.8}
-        style={[styles.tab, active && styles.tabActive]}
+        activeOpacity={0.7}
+        style={[
+          styles.tab,
+          !isLogout && styles.tabFlex,
+          active && styles.tabActive,
+          isLogout && styles.tabLogout,
+        ]}
       >
-        <Text style={[styles.navText, active && styles.navTextActive]} numberOfLines={1}>
+        <Text
+          style={[
+            styles.navText,
+            active && styles.navTextActive,
+            isLogout && styles.navTextLogout,
+          ]}
+          numberOfLines={1}
+        >
           {label}
         </Text>
       </TouchableOpacity>
@@ -112,8 +117,7 @@ export default function Layout() {
         screenOptions={{
           header: () => <Header />,
           headerShown: true,
-          contentStyle: { backgroundColor: '#F1F5F9' },
-          // On Android, this helps avoid visual flicker while replacing:
+          contentStyle: { backgroundColor: CRM.pageBackground },
           animation: Platform.OS === 'android' ? 'fade' : 'default',
         }}
       />
@@ -124,49 +128,55 @@ export default function Layout() {
 const styles = StyleSheet.create({
   wrapper: {
     flex: 1,
-    backgroundColor: '#F1F5F9',
+    backgroundColor: CRM.pageBackground,
   },
   headerSafe: {
-    backgroundColor: '#FFFFFF',
+    backgroundColor: CRM.pageBackground,
   },
   header: {
-    backgroundColor: '#FFFFFF',
-    borderBottomWidth: StyleSheet.hairlineWidth,
-    borderBottomColor: '#E2E8F0',
+    backgroundColor: CRM.pageBackground,
     shadowColor: '#000',
-    shadowOpacity: 0.06,
-    shadowRadius: 6,
-    shadowOffset: { width: 0, height: 3 },
+    shadowOpacity: 0.05,
+    shadowRadius: 4,
+    shadowOffset: { width: 0, height: 2 },
     elevation: 2,
     width: '100%',
   },
   tabsRow: {
     flexDirection: 'row',
-    alignItems: 'stretch',
-    justifyContent: 'space-between',
-    paddingHorizontal: 8,
-    paddingVertical: 8,
+    alignItems: 'center',
+    paddingHorizontal: 12,
+    paddingVertical: 10,
+    gap: 6,
   },
   tab: {
+    paddingVertical: 10,
+    paddingHorizontal: 10,
+    borderRadius: 8,
+  },
+  tabFlex: {
     flex: 1,
     alignItems: 'center',
-    justifyContent: 'center',
-    paddingVertical: 10,
-    marginHorizontal: 4,
-    borderRadius: 8,
-    backgroundColor: '#F8FAFC',
-    borderWidth: 1,
-    borderColor: '#E2E8F0',
   },
   tabActive: {
-    backgroundColor: '#17a2b8',
-    borderColor: '#17a2b8',
+    backgroundColor: 'rgba(13, 110, 253, 0.08)',
+  },
+  tabLogout: {
+    marginLeft: 'auto',
+    backgroundColor: CRM.logoutRed,
+    borderRadius: 8,
   },
   navText: {
-    color: '#0F172A',
+    color: CRM.navInactive,
     fontWeight: '600',
+    fontSize: 15,
   },
   navTextActive: {
-    color: '#FFFFFF',
+    color: CRM.navActiveBlue,
+    fontWeight: '700',
+  },
+  navTextLogout: {
+    color: CRM.white,
+    fontWeight: '600',
   },
 });

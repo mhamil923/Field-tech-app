@@ -1,10 +1,11 @@
 // File: app/screens/HistoryScreen.js
-import React, { useState, useCallback, useEffect, useMemo } from 'react';
+import React, { useState, useCallback, useEffect } from 'react';
 import {
   View, Text, StyleSheet, TextInput, TouchableOpacity,
   FlatList, Linking, Platform, RefreshControl, Alert, ScrollView,
 } from 'react-native';
 import moment from 'moment';
+import AsyncStorage from '@react-native-async-storage/async-storage';
 import { useRouter } from 'expo-router';
 import api from '../../constants/api';
 
@@ -59,13 +60,51 @@ export default function HistoryScreen() {
   // Single combined search query
   const [query, setQuery] = useState('');
 
-  const [statusFilter, setStatusFilter] = useState('Any'); // status filter
+  const [recentSearches, setRecentSearches] = useState([]);
 
   const [results, setResults] = useState([]);
   const [refreshing, setRefreshing] = useState(false);
   const [loading, setLoading] = useState(false);
 
-  const runSearch = useCallback(async () => {
+  // Load recent searches from storage on mount; clear corrupted data
+  useEffect(() => {
+    (async () => {
+      try {
+        const stored = await AsyncStorage.getItem('recentSearches');
+        if (stored) {
+          const parsed = JSON.parse(stored);
+          // Only keep entries that are plain strings (drop objects / broken data)
+          const clean = Array.isArray(parsed)
+            ? parsed.filter((s) => typeof s === 'string' && s.trim())
+            : [];
+          if (clean.length !== parsed.length) {
+            await AsyncStorage.setItem('recentSearches', JSON.stringify(clean));
+          }
+          setRecentSearches(clean);
+        }
+      } catch {
+        await AsyncStorage.removeItem('recentSearches');
+      }
+    })();
+  }, []);
+
+  const saveRecentSearch = async (term) => {
+    const trimmed = term.trim();
+    if (!trimmed) return;
+    const updated = [trimmed, ...recentSearches.filter((s) => s !== trimmed)].slice(0, 5);
+    setRecentSearches(updated);
+    await AsyncStorage.setItem('recentSearches', JSON.stringify(updated));
+  };
+
+  const clearSearchHistory = async () => {
+    setRecentSearches([]);
+    await AsyncStorage.removeItem('recentSearches');
+  };
+
+  const runSearch = useCallback(async (overrideQuery) => {
+    // Only accept string overrides (ignore event objects from onPress)
+    const searchTerm =
+      typeof overrideQuery === 'string' ? overrideQuery : query;
     setLoading(true);
     try {
       // Pull all work orders, then filter on device (matches web History page behavior)
@@ -78,10 +117,10 @@ export default function HistoryScreen() {
         status: toCanonicalStatus(o.status),
       }));
 
-      const q = norm(query).toLowerCase();
+      const q = norm(searchTerm).toLowerCase();
 
       // Text search across Customer, WO, PO, Site Location
-      const textFiltered = q
+      const filtered = q
         ? list.filter((o) => {
             const customer = (o.customer || '').toString().toLowerCase();
             const wo = (o.workOrderNumber || '').toString().toLowerCase();
@@ -96,15 +135,22 @@ export default function HistoryScreen() {
           })
         : list;
 
-      // Apply status filter client-side
-      const finalFiltered =
-        statusFilter === 'Any'
-          ? textFiltered
-          : textFiltered.filter(
-              (o) => statusKey(o.status) === statusKey(statusFilter)
-            );
+      setResults(filtered);
 
-      setResults(finalFiltered);
+      // Save a meaningful label to recent searches
+      if (q && filtered.length) {
+        // Check if the query matched a WO number
+        const woMatch = filtered.find(
+          (o) => (o.workOrderNumber || '').toString().toLowerCase().includes(q)
+        );
+        if (woMatch && norm(woMatch.workOrderNumber)) {
+          saveRecentSearch(norm(woMatch.workOrderNumber));
+        } else {
+          // Fall back to customer name of first result
+          const custName = norm(filtered[0].customer);
+          if (custName) saveRecentSearch(custName);
+        }
+      }
     } catch (e) {
       console.error(e);
       Alert.alert('Search Error', 'Could not fetch results.');
@@ -112,7 +158,7 @@ export default function HistoryScreen() {
       setLoading(false);
       setRefreshing(false);
     }
-  }, [query, statusFilter]);
+  }, [query]);
 
   // initial load (empty query returns all)
   useEffect(() => { runSearch(); }, []); // eslint-disable-line react-hooks/exhaustive-deps
@@ -124,8 +170,7 @@ export default function HistoryScreen() {
 
   const clearFilters = () => {
     setQuery('');
-    setStatusFilter('Any');
-    setTimeout(runSearch, 0);
+    setTimeout(() => runSearch(''), 0);
   };
 
   const openInGoogleMaps = async (loc) => {
@@ -179,27 +224,9 @@ export default function HistoryScreen() {
     );
   };
 
-  // Status filter chips (Any + all statuses)
-  const StatusChips = () => {
-    const options = useMemo(() => ['Any', ...STATUSES], []);
-    return (
-      <View style={styles.chipsWrap}>
-        {options.map((opt) => {
-          const active = statusFilter === opt;
-          return (
-            <TouchableOpacity
-              key={opt}
-              onPress={() => setStatusFilter(opt)}
-              style={[styles.chip, active && styles.chipActive]}
-            >
-              <Text style={[styles.chipText, active && styles.chipTextActive]} numberOfLines={1}>
-                {opt}
-              </Text>
-            </TouchableOpacity>
-          );
-        })}
-      </View>
-    );
+  const onRecentSearchTap = (term) => {
+    setQuery(term);
+    runSearch(term);
   };
 
   return (
@@ -216,15 +243,34 @@ export default function HistoryScreen() {
           autoCapitalize="none"
         />
 
-        <Text style={styles.subLabel}>Status</Text>
-        <ScrollView horizontal showsHorizontalScrollIndicator={false}>
-          <StatusChips />
-        </ScrollView>
+        {recentSearches.length > 0 && (
+          <View style={styles.recentSection}>
+            <View style={styles.recentHeader}>
+              <Text style={styles.recentLabel}>Recent Searches</Text>
+              <TouchableOpacity onPress={clearSearchHistory}>
+                <Text style={styles.clearHistoryText}>Clear History</Text>
+              </TouchableOpacity>
+            </View>
+            <ScrollView horizontal showsHorizontalScrollIndicator={false}>
+              <View style={styles.chipsWrap}>
+                {recentSearches.map((term) => (
+                  <TouchableOpacity
+                    key={term}
+                    style={styles.chip}
+                    onPress={() => onRecentSearchTap(term)}
+                  >
+                    <Text style={styles.chipText} numberOfLines={1}>{term}</Text>
+                  </TouchableOpacity>
+                ))}
+              </View>
+            </ScrollView>
+          </View>
+        )}
 
         <View style={styles.filterButtons}>
           <TouchableOpacity
             style={[styles.button, styles.searchBtn]}
-            onPress={runSearch}
+            onPress={() => runSearch()}
             disabled={loading}
           >
             <Text style={styles.searchBtnText}>{loading ? 'Searching…' : 'Search'}</Text>
@@ -254,51 +300,101 @@ export default function HistoryScreen() {
 }
 
 const styles = StyleSheet.create({
-  screen: { flex: 1, backgroundColor: '#F1F5F9', padding: 16 },
-  header: { fontSize: 22, fontWeight: '700', color: '#2B2D42', marginBottom: 10 },
+  screen: { flex: 1, backgroundColor: '#f1f5f9', padding: 16 },
+  header: { fontSize: 22, fontWeight: '800', color: '#0f172a', marginBottom: 10 },
 
-  filters: { backgroundColor: '#fff', padding: 12, borderRadius: 8, marginBottom: 12, borderWidth: 1, borderColor: '#E5E7EB' },
-  input: {
-    backgroundColor: '#F8FAFC',
+  filters: {
+    backgroundColor: '#ffffff',
+    padding: 14,
+    borderRadius: 14,
+    marginBottom: 12,
     borderWidth: 1,
-    borderColor: '#E5E7EB',
-    borderRadius: 6,
-    paddingHorizontal: 10,
+    borderColor: '#eef2f7',
+    shadowColor: '#000',
+    shadowOpacity: 0.06,
+    shadowRadius: 9,
+    shadowOffset: { width: 0, height: 6 },
+    elevation: 3,
+  },
+  input: {
+    backgroundColor: '#ffffff',
+    borderWidth: 1,
+    borderColor: '#cbd5e1',
+    borderRadius: 12,
+    paddingHorizontal: 12,
     paddingVertical: 10,
     marginBottom: 8,
-    color: '#0F172A',
+    color: '#0f172a',
+    fontSize: 14,
   },
-  subLabel: { marginTop: 4, marginBottom: 6, color: '#475569', fontWeight: '600' },
+  recentSection: { marginBottom: 4 },
+  recentHeader: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    marginBottom: 8,
+  },
+  recentLabel: { fontSize: 14, fontWeight: '700', color: '#0f172a' },
+  clearHistoryText: { fontSize: 12, fontWeight: '700', color: '#dc2626' },
 
   chipsWrap: { flexDirection: 'row', gap: 8, marginBottom: 6 },
   chip: {
     borderWidth: 1,
-    borderColor: '#17a2b8',
-    backgroundColor: '#fff',
+    borderColor: 'rgba(13,110,253,0.22)',
+    backgroundColor: 'rgba(13,110,253,0.06)',
     paddingVertical: 6,
     paddingHorizontal: 10,
-    borderRadius: 18,
-    marginRight: 8,
+    borderRadius: 999,
   },
-  chipActive: { backgroundColor: '#17a2b8', borderColor: '#17a2b8' },
-  chipText: { color: '#17a2b8', fontWeight: '600' },
-  chipTextActive: { color: '#fff', fontWeight: '700' },
+  chipText: { color: '#0d6efd', fontWeight: '700', fontSize: 12 },
 
   filterButtons: { flexDirection: 'row', gap: 8, marginTop: 8 },
 
-  button: { paddingVertical: 10, paddingHorizontal: 14, borderRadius: 6, alignItems: 'center' },
-  searchBtn: { backgroundColor: '#17a2b8', flex: 1 },
+  button: { paddingVertical: 10, paddingHorizontal: 14, borderRadius: 12, alignItems: 'center' },
+  searchBtn: {
+    backgroundColor: '#0d6efd',
+    flex: 1,
+    shadowColor: 'rgba(13,110,253,1)',
+    shadowOpacity: 0.24,
+    shadowRadius: 11,
+    shadowOffset: { width: 0, height: 10 },
+    elevation: 4,
+  },
   searchBtnText: { color: '#fff', fontWeight: '700' },
-  clearBtn: { backgroundColor: '#e5e7eb', flexBasis: 110 },
-  clearBtnText: { color: '#111827', fontWeight: '700' },
+  clearBtn: {
+    backgroundColor: '#f8fafc',
+    flexBasis: 110,
+    borderWidth: 1,
+    borderColor: '#e2e8f0',
+  },
+  clearBtnText: { color: '#0f172a', fontWeight: '700' },
 
-  card: { backgroundColor: '#fff', borderRadius: 8, padding: 14, marginBottom: 12, borderWidth: 1, borderColor: '#E5E7EB' },
-  title: { fontSize: 16, fontWeight: '700', color: '#2B2D42', marginBottom: 6 },
-  line: { color: '#2B2D42', marginBottom: 4 },
-  link: { color: '#17a2b8', textDecorationLine: 'underline' },
-  row: { flexDirection: 'row', justifyContent: 'flex-end', marginTop: 8 },
-  viewBtn: { backgroundColor: '#17a2b8' },
+  card: {
+    backgroundColor: '#ffffff',
+    borderRadius: 14,
+    padding: 14,
+    marginBottom: 12,
+    borderWidth: 1,
+    borderColor: '#eef2f7',
+    shadowColor: '#000',
+    shadowOpacity: 0.06,
+    shadowRadius: 9,
+    shadowOffset: { width: 0, height: 6 },
+    elevation: 3,
+  },
+  title: { fontSize: 15, fontWeight: '900', color: '#0f172a', marginBottom: 6 },
+  line: { color: '#0f172a', fontSize: 14, marginBottom: 4 },
+  link: { color: '#0d6efd', textDecorationLine: 'underline', fontWeight: '700' },
+  row: { flexDirection: 'row', justifyContent: 'flex-end', marginTop: 10 },
+  viewBtn: {
+    backgroundColor: '#0d6efd',
+    shadowColor: 'rgba(13,110,253,1)',
+    shadowOpacity: 0.24,
+    shadowRadius: 11,
+    shadowOffset: { width: 0, height: 10 },
+    elevation: 4,
+  },
   viewBtnText: { color: '#fff', fontWeight: '700' },
 
-  empty: { textAlign: 'center', color: '#8D99AE', marginTop: 16, fontStyle: 'italic' },
+  empty: { textAlign: 'center', color: '#0f172a', marginTop: 16, fontStyle: 'italic' },
 });

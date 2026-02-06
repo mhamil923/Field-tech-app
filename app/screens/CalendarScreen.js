@@ -49,7 +49,7 @@ export default function CalendarScreen() {
         if (!marks[dayLocal]) marks[dayLocal] = { dots: [] };
         // react-native-calendars shows up to 3 dots nicely
         if ((marks[dayLocal].dots || []).length < 3) {
-          marks[dayLocal].dots = [...(marks[dayLocal].dots || []), { color: '#50CEBB' }];
+          marks[dayLocal].dots = [...(marks[dayLocal].dots || []), { color: '#0d6efd' }];
         }
       }
     });
@@ -58,7 +58,7 @@ export default function CalendarScreen() {
     marks[selectedDate] = {
       ...(marks[selectedDate] || {}),
       selected: true,
-      selectedColor: '#3D5A80',
+      selectedColor: '#0d6efd',
     };
     setMarkedDates(marks);
   }, [workOrders, selectedDate]);
@@ -110,7 +110,7 @@ export default function CalendarScreen() {
       <Text style={styles.orderText}>Customer: {item.customer}</Text>
       <Text style={styles.orderText}>Site: {item.siteLocation}</Text>
       <Text style={styles.orderText}>Problem: {item.problemDescription}</Text>
-      <Text style={[styles.orderText, { color: '#50CEBB' }]}>
+      <Text style={[styles.orderText, { color: '#0d6efd', fontWeight: '700' }]}>
         {item.scheduledDate
           ? moment(item.scheduledDate).local().format('HH:mm')
           : 'Not Scheduled'}
@@ -127,20 +127,23 @@ export default function CalendarScreen() {
         markedDates={markedDates}
         markingType="multi-dot"
         theme={{
-          backgroundColor: '#F1F5F9',
-          calendarBackground: '#F1F5F9',
-          textSectionTitleColor: '#2B2D42',
-          dayTextColor: '#2B2D42',
-          todayTextColor: '#98C379',
-          selectedDayBackgroundColor: '#3D5A80',
-          selectedDayTextColor: '#FFFFFF',
-          dotColor: '#50CEBB',
-          arrowColor: '#2B2D42',
-          monthTextColor: '#2B2D42',
-          textDisabledColor: '#C1C1C1',
+          backgroundColor: '#ffffff',
+          calendarBackground: '#ffffff',
+          textSectionTitleColor: '#0f172a',
+          dayTextColor: '#0f172a',
+          todayTextColor: '#0d6efd',
+          selectedDayBackgroundColor: '#0d6efd',
+          selectedDayTextColor: '#ffffff',
+          dotColor: '#0d6efd',
+          arrowColor: '#0f172a',
+          monthTextColor: '#0f172a',
+          textDisabledColor: '#cbd5e1',
           textDayFontSize: 16,
           textMonthFontSize: 20,
           textDayHeaderFontSize: 14,
+          textDayFontWeight: '500',
+          textMonthFontWeight: '800',
+          textDayHeaderFontWeight: '700',
         }}
         style={styles.calendar}
       />
@@ -160,7 +163,7 @@ export default function CalendarScreen() {
           <Text style={styles.noData}>No work orders scheduled on this day.</Text>
         }
         refreshControl={
-          <RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor="#3D5A80" />
+          <RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor="#0d6efd" />
         }
       />
     </View>
@@ -168,42 +171,51 @@ export default function CalendarScreen() {
 }
 
 const styles = StyleSheet.create({
-  container: { flex: 1, backgroundColor: '#F1F5F9' },
+  container: { flex: 1, backgroundColor: '#f1f5f9' },
   screenHeader: {
     textAlign: 'center',
-    fontSize: 24,
-    fontWeight: '700',
-    color: '#2B2D42',
+    fontSize: 22,
+    fontWeight: '800',
+    color: '#0f172a',
     marginVertical: 16,
   },
   calendar: {
-    marginHorizontal: 12,
-    borderRadius: 8,
-    elevation: 2,
+    marginHorizontal: 16,
+    borderRadius: 14,
+    borderWidth: 1,
+    borderColor: '#eef2f7',
     paddingBottom: 8,
+    shadowColor: '#000',
+    shadowOpacity: 0.06,
+    shadowRadius: 9,
+    shadowOffset: { width: 0, height: 6 },
+    elevation: 3,
   },
   sectionHeader: {
     fontSize: 18,
-    fontWeight: '600',
-    color: '#3D5A80',
-    marginTop: 12,
+    fontWeight: '800',
+    color: '#0f172a',
+    marginTop: 16,
+    marginBottom: 4,
     marginHorizontal: 16,
   },
-  listContainer: { paddingHorizontal: 16, paddingVertical: 8 },
+  listContainer: { paddingHorizontal: 0, paddingVertical: 8 },
   emptyContainer: { flex: 1, justifyContent: 'center', alignItems: 'center' },
   orderCard: {
-    backgroundColor: '#FFFFFF',
-    borderRadius: 8,
-    padding: 12,
+    backgroundColor: '#ffffff',
+    borderRadius: 14,
+    padding: 14,
     marginVertical: 6,
     marginHorizontal: 16,
-    shadowColor: '#00000020',
-    shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.1,
-    shadowRadius: 4,
-    elevation: 2,
+    borderWidth: 1,
+    borderColor: '#eef2f7',
+    shadowColor: '#000',
+    shadowOpacity: 0.06,
+    shadowRadius: 9,
+    shadowOffset: { width: 0, height: 6 },
+    elevation: 3,
   },
-  orderTitle: { fontSize: 16, fontWeight: '600', color: '#2B2D42', marginBottom: 4 },
-  orderText: { fontSize: 14, color: '#2B2D42' },
-  noData: { fontStyle: 'italic', color: '#8D99AE', marginTop: 32, textAlign: 'center' },
+  orderTitle: { fontSize: 15, fontWeight: '900', color: '#0f172a', marginBottom: 4 },
+  orderText: { fontSize: 13, color: '#0f172a' },
+  noData: { fontStyle: 'italic', color: '#0f172a', marginTop: 32, textAlign: 'center' },
 });

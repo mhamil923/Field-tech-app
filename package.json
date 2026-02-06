@@ -17,7 +17,9 @@
     "lint": "expo lint",
     "reset-project": "node ./scripts/reset-project.js"
   },
-  "jest": { "preset": "jest-expo" },
+  "jest": {
+    "preset": "jest-expo"
+  },
   "dependencies": {
     "@expo/vector-icons": "^14.1.0",
     "@react-native-async-storage/async-storage": "~2.1.2",
@@ -61,7 +63,8 @@
     "react-native-svg": "15.11.2",
     "react-native-view-shot": "^4.0.3",
     "react-native-web": "^0.20.0",
-    "react-native-webview": "13.13.5"
+    "react-native-webview": "13.13.5",
+    "expo-camera": "~16.1.11"
   },
   "devDependencies": {
     "@babel/core": "^7.26.0",
@@ -81,7 +84,10 @@
   "expo": {
     "doctor": {
       "reactNativeDirectoryCheck": {
-        "exclude": ["moment", "pdf-lib"],
+        "exclude": [
+          "moment",
+          "pdf-lib"
+        ],
         "listUnknownPackages": false
       }
     }
