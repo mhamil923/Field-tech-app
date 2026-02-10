@@ -52,6 +52,57 @@ const toCanonicalStatus = (s) =>
 const isLegacyWoInPo = (wo, po) => !!norm(wo) && norm(wo) === norm(po);
 const displayPO = (wo, po) => (isLegacyWoInPo(wo, po) ? '' : norm(po));
 
+// Parse the latest note from the notes text field
+// Notes are stored as: "[timestamp] username: note text" separated by \n\n
+const parseLatestNote = (notesText) => {
+  if (!notesText || typeof notesText !== 'string') return null;
+
+  // Split by double newline to get individual notes
+  const entries = notesText.split('\n\n').filter(e => e.trim());
+  if (entries.length === 0) return null;
+
+  // Get the last (most recent) entry
+  const lastEntry = entries[entries.length - 1].trim();
+
+  // Try to parse the format: [timestamp] username: note text
+  const match = lastEntry.match(/^\[([^\]]+)\]\s*([^:]+):\s*(.*)$/s);
+  if (match) {
+    return {
+      createdAt: match[1].trim(),
+      author: match[2].trim(),
+      text: match[3].trim(),
+    };
+  }
+
+  // If format doesn't match, just return the raw text
+  return {
+    createdAt: null,
+    author: null,
+    text: lastEntry,
+  };
+};
+
+// Format time ago for note display
+const formatTimeAgo = (dateString) => {
+  if (!dateString) return '';
+
+  // Parse the timestamp format "YYYY-MM-DD HH:mm:ss"
+  const date = new Date(dateString.replace(' ', 'T') + 'Z');
+  if (isNaN(date.getTime())) return dateString; // Return as-is if can't parse
+
+  const now = new Date();
+  const diffMs = now - date;
+  const diffMins = Math.floor(diffMs / 60000);
+  const diffHours = Math.floor(diffMs / 3600000);
+  const diffDays = Math.floor(diffMs / 86400000);
+
+  if (diffMins < 1) return 'just now';
+  if (diffMins < 60) return `${diffMins}m ago`;
+  if (diffHours < 24) return `${diffHours}h ago`;
+  if (diffDays < 7) return `${diffDays}d ago`;
+  return date.toLocaleDateString();
+};
+
 // --------------------------------------------
 
 export default function HistoryScreen() {
@@ -193,6 +244,8 @@ export default function HistoryScreen() {
     const po =
       displayPO(item.workOrderNumber, item.poNumber) ||
       (norm(item.poNumber) ? item.poNumber : 'N/A');
+    const latestNote = parseLatestNote(item.notes);
+
     return (
       <View style={styles.card}>
         <Text style={styles.title}>WO: {wo}   •   PO: {po}</Text>
@@ -211,6 +264,27 @@ export default function HistoryScreen() {
             ? moment(item.scheduledDate).format('YYYY-MM-DD HH:mm')
             : 'Not Scheduled'}
         </Text>
+
+        {/* Latest Note Section */}
+        {latestNote && (
+          <View style={styles.noteContainer}>
+            <View style={styles.noteDivider} />
+            <View style={styles.noteContent}>
+              <View style={styles.noteHeader}>
+                <Text style={styles.noteLabel}>Latest Note</Text>
+                {latestNote.createdAt && (
+                  <Text style={styles.noteTime}>{formatTimeAgo(latestNote.createdAt)}</Text>
+                )}
+              </View>
+              <Text style={styles.noteText} numberOfLines={2}>
+                {latestNote.text}
+              </Text>
+              {latestNote.author && (
+                <Text style={styles.noteAuthor}>— {latestNote.author}</Text>
+              )}
+            </View>
+          </View>
+        )}
 
         <View style={styles.row}>
           <TouchableOpacity
@@ -395,6 +469,47 @@ const styles = StyleSheet.create({
     elevation: 4,
   },
   viewBtnText: { color: '#fff', fontWeight: '700' },
+
+  // Latest Note styles
+  noteContainer: {
+    marginTop: 12,
+  },
+  noteDivider: {
+    height: 1,
+    backgroundColor: '#e2e8f0',
+    marginBottom: 12,
+  },
+  noteContent: {
+    paddingTop: 4,
+  },
+  noteHeader: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    marginBottom: 6,
+  },
+  noteLabel: {
+    fontSize: 11,
+    fontWeight: '600',
+    color: '#64748b',
+    textTransform: 'uppercase',
+    letterSpacing: 0.5,
+  },
+  noteTime: {
+    fontSize: 11,
+    color: '#64748b',
+  },
+  noteText: {
+    fontSize: 14,
+    color: '#0f172a',
+    lineHeight: 20,
+    marginBottom: 4,
+  },
+  noteAuthor: {
+    fontSize: 12,
+    color: '#64748b',
+    fontStyle: 'italic',
+  },
 
   empty: { textAlign: 'center', color: '#0f172a', marginTop: 16, fontStyle: 'italic' },
 });

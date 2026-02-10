@@ -15,7 +15,8 @@
     "web": "expo start --web",
     "test": "jest --watchAll",
     "lint": "expo lint",
-    "reset-project": "node ./scripts/reset-project.js"
+    "reset-project": "node ./scripts/reset-project.js",
+    "postinstall": "patch-package"
   },
   "jest": {
     "preset": "jest-expo"
@@ -31,6 +32,7 @@
     "axios": "^1.8.4",
     "expo": "^53.0.0",
     "expo-blur": "~14.1.4",
+    "expo-camera": "~16.1.11",
     "expo-constants": "~17.1.6",
     "expo-dev-client": "~5.2.0",
     "expo-document-picker": "~13.1.6",
@@ -63,8 +65,7 @@
     "react-native-svg": "15.11.2",
     "react-native-view-shot": "^4.0.3",
     "react-native-web": "^0.20.0",
-    "react-native-webview": "13.13.5",
-    "expo-camera": "~16.1.11"
+    "react-native-webview": "13.13.5"
   },
   "devDependencies": {
     "@babel/core": "^7.26.0",
@@ -74,6 +75,7 @@
     "@types/react-test-renderer": "^19.0.0",
     "jest": "~29.7.0",
     "jest-expo": "~53.0.10",
+    "patch-package": "^8.0.1",
     "typescript": "~5.8.3"
   },
   "overrides": {

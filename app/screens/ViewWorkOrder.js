@@ -27,6 +27,7 @@ import { useLocalSearchParams } from 'expo-router';
 import { useNavigation } from '@react-navigation/native';
 
 import api, { fileUrl } from '../../constants/api';
+import MultiPhotoCamera from '../components/MultiPhotoCamera';
 
 const { width: screenWidth, height: screenHeight } = Dimensions.get('window');
 
@@ -658,6 +659,7 @@ export default function ViewWorkOrder() {
 
   // Camera upload state
   const [isCameraUploading, setIsCameraUploading] = useState(false);
+  const [showMultiCamera, setShowMultiCamera] = useState(false);
 
   // Session tracking for status reminder
   const [hasAddedContentThisSession, setHasAddedContentThisSession] = useState(false);
@@ -981,7 +983,54 @@ export default function ViewWorkOrder() {
   };
 
   /**
-   * CAMERA FLOW (multi-shot)
+   * Handle multi-photo upload from MultiPhotoCamera component
+   */
+  const handleMultiPhotoUpload = async (photos) => {
+    if (!workOrderId || !photos?.length) return;
+
+    setIsCameraUploading(true);
+
+    try {
+      // Upload each photo sequentially with date-only filenames
+      for (let i = 0; i < photos.length; i++) {
+        const photo = photos[i];
+        const form = new FormData();
+        const processedUri = await processImageForUpload(photo.uri);
+
+        const d = photo.timestamp ? new Date(photo.timestamp) : new Date();
+        const yyyy = d.getFullYear();
+        const mm = String(d.getMonth() + 1).padStart(2, '0');
+        const dd = String(d.getDate()).padStart(2, '0');
+        const name = `photo_${yyyy}-${mm}-${dd}_${i + 1}.jpg`;
+
+        form.append('photoFile', {
+          uri: processedUri,
+          name,
+          type: 'image/jpeg',
+        });
+
+        await api.put(`/work-orders/${workOrderId}/edit`, form, {
+          headers: {
+            'Content-Type': 'multipart/form-data',
+            ...authHeaders(),
+          },
+        });
+      }
+
+      await fetchWorkOrder();
+      setHasAddedContentThisSession(true);
+      Alert.alert('Success', `${photos.length} photo${photos.length !== 1 ? 's' : ''} uploaded successfully!`);
+    } catch (err) {
+      const msg = err?.response?.data?.error || err?.message || 'Failed to upload photos.';
+      Alert.alert('Upload Error', msg);
+      throw err; // Re-throw so MultiPhotoCamera knows upload failed
+    } finally {
+      setIsCameraUploading(false);
+    }
+  };
+
+  /**
+   * CAMERA FLOW (multi-shot) - Legacy, kept for fallback
    * Keeps reopening camera until Cancel is pressed
    */
   const openCamera = async () => {
@@ -1557,7 +1606,7 @@ export default function ViewWorkOrder() {
 
           <TouchableOpacity
             style={[styles.actionTile, isCameraUploading && { opacity: 0.7 }]}
-            onPress={openCamera}
+            onPress={() => setShowMultiCamera(true)}
             disabled={isCameraUploading}
           >
             <View style={styles.actionIconCircle}>
@@ -1976,6 +2025,14 @@ export default function ViewWorkOrder() {
           )}
         </SafeAreaView>
       </Modal>
+
+      {/* Multi-Photo Camera */}
+      <MultiPhotoCamera
+        visible={showMultiCamera}
+        onClose={() => setShowMultiCamera(false)}
+        onUpload={handleMultiPhotoUpload}
+        workOrderId={workOrderId}
+      />
     </View>
   );
 }

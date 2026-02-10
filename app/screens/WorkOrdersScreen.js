@@ -11,7 +11,6 @@ import {
   RefreshControl,
   Modal,
   Pressable,
-  TextInput,
   ActivityIndicator,
   ScrollView,
 } from 'react-native';
@@ -243,13 +242,6 @@ export default function WorkOrdersScreen() {
 
   // single-status change modal
   const [statusModal, setStatusModal] = useState({ id: null, value: null });
-
-  // ----- BULK "Parts In" -----
-  const [bulkVisible, setBulkVisible] = useState(false);
-  const [bulkSearch, setBulkSearch] = useState('');
-  const [bulkSelected, setBulkSelected] = useState(() => new Set());
-  const [bulkNote, setBulkNote] = useState('Parts In');
-  const [bulkWorking, setBulkWorking] = useState(false);
 
   // Drag order for Today
   const todayKey = `woOrder:${moment().format('YYYY-MM-DD')}`;
@@ -504,124 +496,6 @@ export default function WorkOrdersScreen() {
     }
   };
 
-  /* ---------------- Notes: /work-orders/:id/notes ---------------- */
-  const addNote = async (id, text) => {
-    const trimmed = (text || '').trim();
-    if (!trimmed) return;
-
-    await ensureAuthHeader();
-
-    try {
-      await api.put(
-        `/work-orders/${id}/notes`,
-        { notes: trimmed, append: true },
-        { headers: { 'Content-Type': 'application/json' } }
-      );
-    } catch (e1) {
-      try {
-        await api.put(
-          `/work-orders/${id}/notes`,
-          { text: trimmed, append: true },
-          { headers: { 'Content-Type': 'application/json' } }
-        );
-      } catch (e2) {
-        console.error(
-          'Failed to add note:',
-          e2?.response?.data?.error || e2?.message || e1?.message
-        );
-      }
-    }
-  };
-
-  // ----- BULK "Parts In" helpers -----
-  const waitingOrders = useMemo(
-    () => workOrders.filter((o) => normStatus(o.status) === normStatus(PARTS_WAITING)),
-    [workOrders]
-  );
-
-  const [bulkDefaultSeed, setBulkDefaultSeed] = useState(0);
-
-  const filteredWaitingForModal = useMemo(() => {
-    const q = bulkSearch.trim().toLowerCase();
-    if (!q) return waitingOrders;
-    return waitingOrders.filter((o) => {
-      const hay = [
-        o.workOrderNumber,
-        o.poNumber,
-        o.customer,
-        o.siteLocation,
-        o.siteName,
-        o.siteLocationName,
-        o.siteAddress,
-        o.serviceAddress,
-        o.address,
-        o.problemDescription,
-      ]
-        .filter(Boolean)
-        .join(' ')
-        .toLowerCase();
-      return hay.includes(q);
-    });
-  }, [waitingOrders, bulkSearch]);
-
-  const toggleBulkSelect = (id) => {
-    setBulkSelected((prev) => {
-      const next = new Set(prev);
-      if (next.has(id)) next.delete(id);
-      else next.add(id);
-      return next;
-    });
-  };
-  const selectAll = () => setBulkSelected(new Set(filteredWaitingForModal.map((o) => o.id)));
-  const selectNone = () => setBulkSelected(new Set());
-
-  const openBulkModal = () => {
-    setBulkSearch('');
-    setBulkNote('Parts In');
-    setBulkSelected(new Set(waitingOrders.map((o) => o.id)));
-    setBulkDefaultSeed((s) => s + 1);
-    setBulkVisible(true);
-  };
-  const closeBulkModal = () => {
-    if (bulkWorking) return;
-    setBulkVisible(false);
-    setBulkSelected(new Set());
-    setBulkNote('Parts In');
-    setBulkSearch('');
-  };
-
-  const applyBulkPartsIn = async () => {
-    const ids = Array.from(bulkSelected);
-    if (!ids.length) {
-      Alert.alert('Nothing selected', 'Choose at least one work order.');
-      return;
-    }
-    try {
-      setBulkWorking(true);
-      for (const id of ids) {
-        try {
-          await putStatus(id, PARTS_NEXT);
-          if (bulkNote && bulkNote.trim()) {
-            await addNote(id, bulkNote.trim());
-          }
-        } catch (e) {
-          console.error('Bulk status error for id', id, e?.response?.data?.error || e?.message);
-          if (e?.response?.status === 401) {
-            handle401();
-            return;
-          }
-        }
-      }
-      Alert.alert('Success', `Marked parts in for ${ids.length} work order(s).`);
-      closeBulkModal();
-      fetchWorkOrders();
-    } catch (e) {
-      Alert.alert('Error', e?.response?.data?.error || e?.message || 'Failed to apply updates.');
-    } finally {
-      setBulkWorking(false);
-    }
-  };
-
   // ✅ ROUTE: generate + reorder Today list
   const generateBestRoute = async () => {
     if (selectedStatus !== 'Today') {
@@ -641,20 +515,32 @@ export default function WorkOrdersScreen() {
 
     const missingCount = candidates.length - stops.length;
 
+    // Log route generation details for debugging
+    console.log('[ROUTE] Generating route with', stops.length, 'stops');
+    console.log('[ROUTE] Shop address:', SHOP_ADDRESS);
+    stops.forEach((s, i) => console.log(`[ROUTE] Stop ${i + 1}:`, s.address));
+
     if (stops.length < 2) {
       Alert.alert(
         'Route',
         stops.length === 0
-          ? 'No usable addresses found in Today work orders.'
+          ? 'No usable addresses found in Today work orders.\n\nMake sure work orders have a Site Address filled in.'
           : 'Need at least 2 stops with valid addresses to generate a route.'
       );
       return;
     }
 
     if (missingCount > 0) {
+      // Find which work orders are missing addresses
+      const missingOrders = candidates
+        .filter((o) => !bestAddressForOrder(o))
+        .map((o) => `WO ${o.workOrderNumber || o.id}`)
+        .slice(0, 3);
+      const moreText = missingCount > 3 ? `\n...and ${missingCount - 3} more` : '';
+
       Alert.alert(
-        'Route',
-        `${missingCount} work order(s) were skipped because they are missing a usable address.\n\n(You can still generate a route for the others.)`
+        'Missing Addresses',
+        `${missingCount} work order(s) skipped (no address):\n${missingOrders.join('\n')}${moreText}\n\nGenerating route for the rest.`
       );
     }
 
@@ -746,6 +632,7 @@ export default function WorkOrdersScreen() {
 
       const totalDistanceMiles = metersToMiles(data?.totalDistanceMeters);
       const totalDurationMinutes = secondsToMinutes(data?.totalDurationSeconds);
+      const totalDurationInTrafficMinutes = secondsToMinutes(data?.totalDurationInTrafficSeconds);
 
       const mapsUrl =
         data?.googleMapsUrl ||
@@ -755,14 +642,28 @@ export default function WorkOrdersScreen() {
           orderedStops.map((s) => s.address)
         );
 
+      // Log optimization results
+      console.log('[ROUTE] Optimization complete');
+      console.log('[ROUTE] Optimized:', data?.optimized);
+      console.log('[ROUTE] Total distance:', fmtMiles(totalDistanceMiles));
+      console.log('[ROUTE] Total duration:', fmtMinutes(totalDurationMinutes));
+      if (totalDurationInTrafficMinutes) {
+        console.log('[ROUTE] Duration with traffic:', fmtMinutes(totalDurationInTrafficMinutes));
+      }
+      console.log('[ROUTE] Waypoint order:', data?.google?.waypoint_order);
+
       setRouteResult({
         orderedIds,
         orderedStops,
         totalDistanceMeters: data?.totalDistanceMeters ?? null,
         totalDurationSeconds: data?.totalDurationSeconds ?? null,
+        totalDurationInTrafficSeconds: data?.totalDurationInTrafficSeconds ?? null,
         totalDistanceMiles,
         totalDurationMinutes,
+        totalDurationInTrafficMinutes,
         googleMapsUrl: mapsUrl,
+        optimized: data?.optimized ?? false,
+        warning: data?.warning || null,
       });
 
       setRouteModalOpen(true);
@@ -792,17 +693,6 @@ export default function WorkOrdersScreen() {
       handleUpdateStatus(statusModal.id, statusModal.value);
     }
     setStatusModal({ id: null, value: null });
-  };
-
-  const HeaderActions = () => {
-    if (normStatus(selectedStatus) !== normStatus(PARTS_WAITING)) return null;
-    return (
-      <View style={styles.partsHeaderRow}>
-        <TouchableOpacity onPress={openBulkModal} style={styles.partsHeaderBtn}>
-          <Text style={styles.partsHeaderBtnText}>Mark Parts In ({waitingOrders.length})</Text>
-        </TouchableOpacity>
-      </View>
-    );
   };
 
   const TodayRouteActions = () => {
@@ -1004,7 +894,6 @@ export default function WorkOrdersScreen() {
 
       <View style={styles.filterBar}>{renderChips()}</View>
 
-      <HeaderActions />
       {ListComponent}
 
       {/* ROUTE RESULT MODAL */}
@@ -1022,14 +911,27 @@ export default function WorkOrdersScreen() {
             <Text style={styles.routeMeta}>End: {SHOP_ADDRESS}</Text>
 
             {!!routeResult && (
-              <Text style={[styles.routeMeta, { marginTop: 6, fontWeight: '700' }]}>
-                Stops: {routeResult.orderedStops?.length || 0}
-                {routeResult.totalDistanceMiles != null || routeResult.totalDurationMinutes != null
-                  ? ` • ${fmtMiles(routeResult.totalDistanceMiles)} • ${fmtMinutes(
-                      routeResult.totalDurationMinutes
-                    )}`
-                  : ''}
-              </Text>
+              <>
+                <Text style={[styles.routeMeta, { marginTop: 6, fontWeight: '700' }]}>
+                  Stops: {routeResult.orderedStops?.length || 0}
+                  {routeResult.totalDistanceMiles != null || routeResult.totalDurationMinutes != null
+                    ? ` • ${fmtMiles(routeResult.totalDistanceMiles)} • ${fmtMinutes(
+                        routeResult.totalDurationMinutes
+                      )}`
+                    : ''}
+                </Text>
+                {routeResult.totalDurationInTrafficMinutes != null &&
+                  routeResult.totalDurationInTrafficMinutes !== routeResult.totalDurationMinutes && (
+                    <Text style={[styles.routeMeta, { marginTop: 2, color: '#e67e22' }]}>
+                      🚗 With current traffic: {fmtMinutes(routeResult.totalDurationInTrafficMinutes)}
+                    </Text>
+                  )}
+                {!!routeResult.warning && (
+                  <Text style={[styles.routeMeta, { marginTop: 4, color: '#c0392b' }]}>
+                    ⚠️ {routeResult.warning}
+                  </Text>
+                )}
+              </>
             )}
 
             <View style={{ height: 10 }} />
@@ -1132,97 +1034,6 @@ export default function WorkOrdersScreen() {
         </Pressable>
       </Modal>
 
-      {/* BULK Parts In Modal */}
-      <Modal transparent visible={bulkVisible} animationType="fade" onRequestClose={closeBulkModal}>
-        <Pressable style={styles.modalOverlay} onPress={closeBulkModal}>
-          <Pressable style={styles.partsModalCard} onPress={() => {}}>
-            <Text style={styles.modalTitle}>Mark Parts as Received</Text>
-
-            <View style={styles.bulkTopRow}>
-              <TextInput
-                style={styles.searchInput}
-                placeholder="Search WO #, PO #, customer, or site..."
-                value={bulkSearch}
-                onChangeText={setBulkSearch}
-              />
-              <TouchableOpacity style={styles.bulkTopBtn} onPress={selectAll}>
-                <Text style={styles.bulkTopBtnText}>Select All</Text>
-              </TouchableOpacity>
-              <TouchableOpacity style={styles.bulkTopBtn} onPress={selectNone}>
-                <Text style={styles.bulkTopBtnText}>Select None</Text>
-              </TouchableOpacity>
-            </View>
-
-            <FlatList
-              data={filteredWaitingForModal}
-              keyExtractor={(it) => String(it.id)}
-              style={{ maxHeight: 380 }}
-              ItemSeparatorComponent={() => <View style={styles.rowDivider} />}
-              extraData={bulkDefaultSeed}
-              renderItem={({ item }) => {
-                const checked = bulkSelected.has(item.id);
-                const site =
-                  norm(item.siteAddress) ||
-                  norm(item.serviceAddress) ||
-                  norm(item.address) ||
-                  norm(item.siteLocation) ||
-                  '';
-                return (
-                  <TouchableOpacity onPress={() => toggleBulkSelect(item.id)} style={styles.partsRow}>
-                    <View style={[styles.checkbox, checked && styles.checkboxChecked]}>
-                      {checked ? <Text style={styles.checkboxGlyph}>✓</Text> : null}
-                    </View>
-                    <View style={{ flex: 1 }}>
-                      <Text style={styles.partsRowTitle}>
-                        WO: {item.workOrderNumber || '—'} {item.poNumber ? ` • PO: ${item.poNumber}` : ''}
-                      </Text>
-                      <Text style={styles.partsRowSub}>{item.customer || '—'}</Text>
-                      {!!site && (
-                        <Text style={styles.partsRowSub} numberOfLines={1}>
-                          {site}
-                        </Text>
-                      )}
-                    </View>
-                  </TouchableOpacity>
-                );
-              }}
-              ListEmptyComponent={
-                <View style={{ paddingVertical: 12 }}>
-                  <Text style={{ textAlign: 'center', color: '#0f172a' }}>No matching work orders.</Text>
-                </View>
-              }
-            />
-
-            <Text style={[styles.inputLabel, { marginTop: 10 }]}>Optional note</Text>
-            <TextInput
-              value={bulkNote}
-              onChangeText={setBulkNote}
-              placeholder="e.g., Parts In"
-              style={styles.textInput}
-              multiline
-            />
-
-            <View style={styles.modalButtonsRow}>
-              <TouchableOpacity
-                style={[styles.modalBtnCancel, bulkWorking && { opacity: 0.7 }]}
-                onPress={closeBulkModal}
-                disabled={bulkWorking}
-              >
-                <Text style={styles.modalBtnText}>Cancel</Text>
-              </TouchableOpacity>
-              <TouchableOpacity
-                style={[styles.modalBtnApply, !bulkSelected.size && { backgroundColor: '#94a3b8' }]}
-                onPress={applyBulkPartsIn}
-                disabled={!bulkSelected.size || bulkWorking}
-              >
-                <Text style={styles.modalBtnText}>
-                  {bulkWorking ? 'Updating…' : `Mark Parts In (${bulkSelected.size})`}
-                </Text>
-              </TouchableOpacity>
-            </View>
-          </Pressable>
-        </Pressable>
-      </Modal>
     </View>
   );
 }
@@ -1298,19 +1109,6 @@ const styles = StyleSheet.create({
   badgeActive: { backgroundColor: 'rgba(15,23,42,0.15)', borderColor: 'rgba(255,255,255,0.22)' },
   badgeText: { color: '#0d6efd', fontSize: 12, fontWeight: '700' },
   badgeTextActive: { color: '#fff' },
-
-  partsHeaderRow: {
-    paddingTop: 8,
-    paddingBottom: 4,
-    alignItems: 'flex-start',
-  },
-  partsHeaderBtn: {
-    backgroundColor: '#22c55e',
-    paddingVertical: 10,
-    paddingHorizontal: 14,
-    borderRadius: 12,
-  },
-  partsHeaderBtnText: { color: '#fff', fontWeight: '700' },
 
   todayHeaderRow: {
     paddingTop: 10,
@@ -1430,16 +1228,6 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     borderColor: '#eef2f7',
   },
-  partsModalCard: {
-    width: '100%',
-    maxWidth: 640,
-    backgroundColor: '#fff',
-    borderRadius: 14,
-    padding: 16,
-    borderWidth: 1,
-    borderColor: '#eef2f7',
-  },
-
   routeModalCard: {
     width: '100%',
     maxWidth: 680,
@@ -1490,16 +1278,6 @@ const styles = StyleSheet.create({
     textAlign: 'center',
     marginBottom: 8,
   },
-  inputLabel: { fontSize: 12, color: '#0f172a', marginBottom: 4, fontWeight: '600' },
-  textInput: {
-    minHeight: 60,
-    borderWidth: 1,
-    borderColor: '#e2e8f0',
-    borderRadius: 12,
-    padding: 10,
-    textAlignVertical: 'top',
-    color: '#0f172a',
-  },
   statusOption: {
     paddingVertical: 12,
     paddingHorizontal: 12,
@@ -1534,40 +1312,4 @@ const styles = StyleSheet.create({
   },
   modalBtnText: { color: '#fff', fontWeight: '700' },
 
-  bulkTopRow: { flexDirection: 'row', alignItems: 'center', gap: 8, marginBottom: 10 },
-  searchInput: {
-    flex: 1,
-    borderWidth: 1,
-    borderColor: '#e2e8f0',
-    borderRadius: 12,
-    paddingHorizontal: 10,
-    height: 40,
-    color: '#0f172a',
-  },
-  bulkTopBtn: {
-    backgroundColor: '#f8fafc',
-    paddingHorizontal: 10,
-    height: 40,
-    borderRadius: 12,
-    justifyContent: 'center',
-    borderWidth: 1,
-    borderColor: '#e2e8f0',
-  },
-  bulkTopBtnText: { color: '#0f172a', fontWeight: '700' },
-
-  partsRow: { flexDirection: 'row', alignItems: 'center', paddingVertical: 10, gap: 10 },
-  rowDivider: { height: StyleSheet.hairlineWidth, backgroundColor: '#e2e8f0' },
-  checkbox: {
-    width: 20,
-    height: 20,
-    borderRadius: 4,
-    borderWidth: 2,
-    borderColor: '#cbd5e1',
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  checkboxChecked: { backgroundColor: '#0d6efd', borderColor: '#0d6efd' },
-  checkboxGlyph: { color: '#fff', fontWeight: '900', fontSize: 13 },
-  partsRowTitle: { fontWeight: '700', color: '#0f172a' },
-  partsRowSub: { color: '#0f172a', fontSize: 12 },
 });
