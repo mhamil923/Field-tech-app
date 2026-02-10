@@ -6,7 +6,6 @@ import {
 } from 'react-native';
 import { WebView } from 'react-native-webview';
 import { SafeAreaView } from 'react-native-safe-area-context';
-import moment from 'moment';
 import { useRouter } from 'expo-router';
 import api, { fileUrl } from '../../constants/api';
 
@@ -214,13 +213,28 @@ export default function PurchaseOrdersScreen() {
           </View>
         </View>
 
-        <Text style={styles.line}>PO #: {norm(item.poNumber) || 'N/A'}</Text>
-        <Text style={styles.line}>WO #: {norm(item.workOrderNumber) || 'N/A'}</Text>
-        <Text style={styles.line}>Customer: {norm(item.customer) || '—'}</Text>
-        <Text style={styles.line}>Site: {norm(item.siteLocation) || '—'}</Text>
-        <Text style={styles.line}>
-          Created: {item.createdAt ? moment(item.createdAt).format('YYYY-MM-DD') : '—'}
-        </Text>
+        <View style={styles.infoRow}>
+          <View style={styles.infoColumn}>
+            <Text style={styles.infoText}>
+              <Text style={styles.infoLabel}>PO #: </Text>
+              <Text style={styles.infoValue}>{norm(item.poNumber) || 'N/A'}</Text>
+            </Text>
+            <Text style={styles.infoText}>
+              <Text style={styles.infoLabel}>WO #: </Text>
+              <Text style={styles.infoValue}>{norm(item.workOrderNumber) || 'N/A'}</Text>
+            </Text>
+          </View>
+          <View style={styles.infoColumn}>
+            <Text style={styles.infoText}>
+              <Text style={styles.infoLabel}>Customer: </Text>
+              <Text style={styles.infoValue}>{norm(item.customer) || '—'}</Text>
+            </Text>
+            <Text style={styles.infoText}>
+              <Text style={styles.infoLabel}>Site: </Text>
+              <Text style={styles.infoValue}>{norm(item.siteLocation) || '—'}</Text>
+            </Text>
+          </View>
+        </View>
 
         {/* Action buttons */}
         <View style={styles.actions}>
@@ -418,8 +432,12 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     marginBottom: 8,
   },
-  supplier: { fontSize: 15, fontWeight: '900', color: '#0f172a', flex: 1, marginRight: 8 },
-  line: { color: '#0f172a', fontSize: 14, marginBottom: 4 },
+  supplier: { fontSize: 20, fontWeight: '900', color: '#000000', flex: 1, marginRight: 8 },
+  infoRow: { flexDirection: 'row', marginBottom: 12 },
+  infoColumn: { flex: 1 },
+  infoText: { fontSize: 16, marginBottom: 6, color: '#000000' },
+  infoLabel: { fontSize: 16, color: '#000000', fontWeight: '500' },
+  infoValue: { fontSize: 16, fontWeight: '600', color: '#000000' },
 
   // Status badges
   badge: {
@@ -458,7 +476,7 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     borderColor: '#e2e8f0',
   },
-  pdfBtnText: { color: '#0f172a', fontWeight: '700' },
+  pdfBtnText: { color: '#1d1d1f', fontSize: 15, fontWeight: '700' },
   pickupBtn: {
     backgroundColor: '#16a34a',
     shadowColor: 'rgba(22,163,74,1)',
@@ -467,7 +485,7 @@ const styles = StyleSheet.create({
     shadowOffset: { width: 0, height: 6 },
     elevation: 3,
   },
-  pickupBtnText: { color: '#fff', fontWeight: '700' },
+  pickupBtnText: { color: '#fff', fontSize: 15, fontWeight: '700' },
   viewBtn: {
     backgroundColor: '#0d6efd',
     shadowColor: 'rgba(13,110,253,1)',
@@ -476,7 +494,7 @@ const styles = StyleSheet.create({
     shadowOffset: { width: 0, height: 10 },
     elevation: 4,
   },
-  viewBtnText: { color: '#fff', fontWeight: '700' },
+  viewBtnText: { color: '#fff', fontSize: 15, fontWeight: '700' },
 
   empty: { textAlign: 'center', color: '#0f172a', marginTop: 16, fontStyle: 'italic' },
 

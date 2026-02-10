@@ -498,14 +498,16 @@ const styles = StyleSheet.create({
     bottom: 0,
     left: 0,
     right: 0,
-    paddingBottom: 40,
+    paddingBottom: 50,
+    paddingTop: 16,
     backgroundColor: 'rgba(0,0,0,0.6)',
   },
 
   // Thumbnail Strip
   thumbnailStrip: {
     maxHeight: 80,
-    marginBottom: 16,
+    marginBottom: 20,
+    marginTop: 10,
   },
   thumbnailStripContent: {
     paddingHorizontal: 16,
@@ -514,6 +516,7 @@ const styles = StyleSheet.create({
   thumbnailContainer: {
     position: 'relative',
     marginRight: 8,
+    marginTop: 10,
   },
   thumbnail: {
     width: 60,
@@ -524,14 +527,15 @@ const styles = StyleSheet.create({
   },
   thumbnailBadge: {
     position: 'absolute',
-    top: -6,
-    right: -6,
-    width: 20,
-    height: 20,
-    borderRadius: 10,
+    top: -8,
+    right: -8,
+    width: 22,
+    height: 22,
+    borderRadius: 11,
     backgroundColor: '#0a84ff',
     justifyContent: 'center',
     alignItems: 'center',
+    zIndex: 10,
   },
   thumbnailBadgeText: {
     fontSize: 11,
@@ -637,21 +641,23 @@ const styles = StyleSheet.create({
   mainPreviewContainer: {
     flex: 1,
     justifyContent: 'center',
+    paddingHorizontal: 8,
+    paddingVertical: 8,
   },
   mainPreviewItem: {
     width: SCREEN_WIDTH,
     justifyContent: 'center',
     alignItems: 'center',
-    padding: 16,
+    padding: 8,
   },
   mainPreviewImage: {
-    width: SCREEN_WIDTH - 32,
-    height: SCREEN_HEIGHT * 0.5,
-    borderRadius: 16,
+    width: SCREEN_WIDTH - 16,
+    height: SCREEN_HEIGHT * 0.65,
+    borderRadius: 12,
     resizeMode: 'contain',
   },
   photoTimestamp: {
-    marginTop: 16,
+    marginTop: 12,
     fontSize: 14,
     color: '#86868b',
   },
@@ -662,7 +668,7 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
     alignItems: 'center',
     gap: 8,
-    paddingVertical: 16,
+    paddingVertical: 12,
   },
   paginationDot: {
     width: 8,
@@ -679,18 +685,18 @@ const styles = StyleSheet.create({
     textAlign: 'center',
     fontSize: 14,
     color: '#86868b',
-    marginBottom: 16,
+    marginBottom: 12,
   },
 
   // Review Actions
   reviewActions: {
     flexDirection: 'row',
     justifyContent: 'space-around',
-    paddingVertical: 20,
+    paddingVertical: 16,
     paddingHorizontal: 24,
     borderTopWidth: 1,
     borderTopColor: 'rgba(255,255,255,0.1)',
-    paddingBottom: 40,
+    paddingBottom: 30,
   },
   deleteButton: {
     flexDirection: 'row',
