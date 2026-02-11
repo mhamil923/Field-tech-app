@@ -15,7 +15,6 @@ import {
   TextInput,
   Linking,
   Platform,
-  SafeAreaView,
   KeyboardAvoidingView,
 } from 'react-native';
 import { WebView } from 'react-native-webview';
@@ -665,6 +664,9 @@ export default function ViewWorkOrder() {
   const [hasAddedContentThisSession, setHasAddedContentThisSession] = useState(false);
   const [hasUpdatedStatusThisSession, setHasUpdatedStatusThisSession] = useState(false);
 
+  // Ref to store pending navigation action when intercepted by beforeRemove
+  const pendingNavAction = useRef(null);
+
   // -------- helpers for contact actions & address --------
   const normPhone = (p) => String(p || '').replace(/[^\d+]/g, '');
 
@@ -746,6 +748,49 @@ export default function ViewWorkOrder() {
   useEffect(() => {
     fetchWorkOrder();
   }, [fetchWorkOrder]);
+
+  // Intercept ALL navigation away (back button, navbar taps, etc.)
+  useEffect(() => {
+    const unsubscribe = navigation.addListener('beforeRemove', (e) => {
+      // No unsaved content or status already updated — allow navigation
+      if (!hasAddedContentThisSession || hasUpdatedStatusThisSession) return;
+
+      // Prevent the default navigation
+      e.preventDefault();
+
+      // Store the action so we can dispatch it later
+      pendingNavAction.current = e.data.action;
+
+      Alert.alert(
+        'Update Status?',
+        "You added notes or photos but haven't updated the work order status. Would you like to update it before leaving?",
+        [
+          {
+            text: 'Update Status',
+            onPress: () => openStatusModal(),
+          },
+          {
+            text: 'Go Back Anyway',
+            style: 'destructive',
+            onPress: () => {
+              pendingNavAction.current = null;
+              navigation.dispatch(e.data.action);
+            },
+          },
+          {
+            text: 'Cancel',
+            style: 'cancel',
+            onPress: () => {
+              pendingNavAction.current = null;
+            },
+          },
+        ],
+        { cancelable: true }
+      );
+    });
+
+    return unsubscribe;
+  }, [navigation, hasAddedContentThisSession, hasUpdatedStatusThisSession]);
 
   // Work Order main PDF
   const woPdfUrl = workOrder?.pdfPath ? fileUrl(workOrder.pdfPath) : null;
@@ -1312,6 +1357,13 @@ export default function ViewWorkOrder() {
 
       await fetchWorkOrder();
       setHasUpdatedStatusThisSession(true);
+
+      // If status was updated from the navigation prompt, complete the pending navigation
+      if (pendingNavAction.current) {
+        const action = pendingNavAction.current;
+        pendingNavAction.current = null;
+        navigation.dispatch(action);
+      }
     } catch (e) {
       setWorkOrder((w) => (w ? { ...w, status: prev } : w));
       Alert.alert('Error', e?.response?.data?.error || e?.message || 'Failed to update status.');
@@ -1320,33 +1372,7 @@ export default function ViewWorkOrder() {
     }
   };
 
-  // ----- back navigation with status reminder -----
-  const handleBackNavigation = () => {
-    if (hasAddedContentThisSession && !hasUpdatedStatusThisSession) {
-      Alert.alert(
-        'Update Status?',
-        'You added notes or photos but haven\'t updated the work order status. Would you like to update it before leaving?',
-        [
-          {
-            text: 'Update Status',
-            onPress: () => openStatusModal(),
-          },
-          {
-            text: 'Go Back Anyway',
-            style: 'destructive',
-            onPress: () => navigation.goBack(),
-          },
-          {
-            text: 'Cancel',
-            style: 'cancel',
-          },
-        ],
-        { cancelable: true }
-      );
-    } else {
-      navigation.goBack();
-    }
-  };
+  // Back navigation — beforeRemove listener handles the status reminder prompt
   // -------------------------
 
   // Open a PDF attachment using the multi-page viewer (by attachment index)
@@ -1549,7 +1575,7 @@ export default function ViewWorkOrder() {
             </View>
           </View>
 
-          <TouchableOpacity style={styles.backRow} onPress={handleBackNavigation}>
+          <TouchableOpacity style={styles.backRow} onPress={() => navigation.goBack()}>
             <Text style={styles.backRowText}>← Back to List</Text>
           </TouchableOpacity>
         </View>
@@ -1894,7 +1920,7 @@ export default function ViewWorkOrder() {
 
       {/* Draw Note Modal (JPEG export) */}
       <Modal visible={sketchVisible} animationType="slide" onRequestClose={() => setSketchVisible(false)}>
-        <SafeAreaView style={{ flex: 1, backgroundColor: '#000' }}>
+        <View style={{ flex: 1, backgroundColor: '#000', paddingTop: Platform.OS === 'ios' ? 54 : 10 }}>
           <WebView
             originWhitelist={['*']}
             source={{ html: SKETCH_HTML }}
@@ -1906,12 +1932,12 @@ export default function ViewWorkOrder() {
             onMessage={onSketchMessage}
             style={{ flex: 1 }}
           />
-        </SafeAreaView>
+        </View>
       </Modal>
 
       {/* Annotate & Sign Modal */}
       <Modal visible={annotateVisible} animationType="slide" onRequestClose={() => setAnnotateVisible(false)}>
-        <SafeAreaView style={{ flex: 1, backgroundColor: '#000' }}>
+        <View style={{ flex: 1, backgroundColor: '#000', paddingTop: Platform.OS === 'ios' ? 54 : 10 }}>
           {pdfBase64 ? (
             <WebView
               ref={annotatorRef}
@@ -1933,12 +1959,12 @@ export default function ViewWorkOrder() {
               <Text style={styles.loadingText}>Loading PDF…</Text>
             </View>
           )}
-        </SafeAreaView>
+        </View>
       </Modal>
 
       {/* Document Lightbox Modal (for WO/EST/PO/ATTACH) */}
       <Modal visible={docModalVisible} animationType="slide" onRequestClose={() => setDocModalVisible(false)}>
-        <SafeAreaView style={{ flex: 1, backgroundColor: '#000' }}>
+        <View style={{ flex: 1, backgroundColor: '#000', paddingTop: Platform.OS === 'ios' ? 54 : 10 }}>
           <View style={styles.docHeader}>
             <TouchableOpacity onPress={() => setDocModalVisible(false)} style={styles.docHeaderBtn}>
               <Text style={styles.docHeaderBtnText}>Close</Text>
@@ -2023,7 +2049,7 @@ export default function ViewWorkOrder() {
               </TouchableOpacity>
             </View>
           )}
-        </SafeAreaView>
+        </View>
       </Modal>
 
       {/* Multi-Photo Camera */}

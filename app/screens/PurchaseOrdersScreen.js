@@ -2,17 +2,16 @@
 import React, { useState, useCallback, useEffect } from 'react';
 import {
   View, Text, StyleSheet, TextInput, TouchableOpacity,
-  FlatList, Modal, RefreshControl, Alert,
+  FlatList, Modal, RefreshControl, Alert, Platform,
 } from 'react-native';
 import { WebView } from 'react-native-webview';
-import { SafeAreaView } from 'react-native-safe-area-context';
 import { useRouter } from 'expo-router';
 import api, { fileUrl } from '../../constants/api';
 
 const norm = (v) => (v ?? '').toString().trim();
 
 // Matches web CRM PurchaseOrders.js supplier list
-const SUPPLIERS = ['All Suppliers', 'Chicago Tempered', 'CRL', 'Oldcastle', 'Casco'];
+const SUPPLIERS = ['All Suppliers', 'All State Metal Fab', 'Chicago Tempered', 'CRL', 'Oldcastle', 'Casco'];
 
 // Helper to check if status is "Waiting on Parts" (case-insensitive)
 const isWaitingOnParts = (status) => {
@@ -60,7 +59,7 @@ export default function PurchaseOrdersScreen() {
       const syntheticRows = waitingWOs
         .filter((wo) => !poWorkOrderIds.has(wo.id))
         .map((wo) => ({
-          id: wo.id,
+          id: `wo-${wo.id}`,
           workOrderId: wo.id,
           workOrderNumber: wo.workOrderNumber || '',
           poNumber: wo.poNumber || '',
@@ -307,7 +306,7 @@ export default function PurchaseOrdersScreen() {
 
       <FlatList
         data={results}
-        keyExtractor={(it) => String(it.id)}
+        keyExtractor={(it) => String(it.poId || it.id)}
         renderItem={renderItem}
         contentContainerStyle={{ paddingBottom: 24 }}
         refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} />}
@@ -322,7 +321,7 @@ export default function PurchaseOrdersScreen() {
         animationType="slide"
         onRequestClose={() => setPdfModal({ visible: false, url: '', poNumber: '' })}
       >
-        <SafeAreaView style={styles.modalSafe}>
+        <View style={styles.modalSafe}>
           <View style={styles.modalHeader}>
             <Text style={styles.modalTitle} numberOfLines={1}>PO #{pdfModal.poNumber}</Text>
             <TouchableOpacity
@@ -339,7 +338,7 @@ export default function PurchaseOrdersScreen() {
               startInLoadingState
             />
           ) : null}
-        </SafeAreaView>
+        </View>
       </Modal>
     </View>
   );
@@ -499,7 +498,7 @@ const styles = StyleSheet.create({
   empty: { textAlign: 'center', color: '#0f172a', marginTop: 16, fontStyle: 'italic' },
 
   // PDF viewer modal
-  modalSafe: { flex: 1, backgroundColor: '#f1f5f9' },
+  modalSafe: { flex: 1, backgroundColor: '#f1f5f9', paddingTop: Platform.OS === 'ios' ? 54 : 10 },
   modalHeader: {
     flexDirection: 'row',
     alignItems: 'center',
