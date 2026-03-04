@@ -660,6 +660,11 @@ export default function ViewWorkOrder() {
   const [isCameraUploading, setIsCameraUploading] = useState(false);
   const [showMultiCamera, setShowMultiCamera] = useState(false);
 
+  // Close camera modal if workOrderId changes (prevents uploading to wrong WO)
+  useEffect(() => {
+    setShowMultiCamera(false);
+  }, [workOrderId]);
+
   // Session tracking for status reminder
   const [hasAddedContentThisSession, setHasAddedContentThisSession] = useState(false);
   const [hasUpdatedStatusThisSession, setHasUpdatedStatusThisSession] = useState(false);
@@ -1033,20 +1038,25 @@ export default function ViewWorkOrder() {
   const handleMultiPhotoUpload = async (photos) => {
     if (!workOrderId || !photos?.length) return;
 
+    // Capture the work order ID at upload time to prevent stale references
+    const woId = workOrderId;
+
     setIsCameraUploading(true);
 
     try {
-      // Upload each photo sequentially with date-only filenames
       for (let i = 0; i < photos.length; i++) {
         const photo = photos[i];
         const form = new FormData();
         const processedUri = await processImageForUpload(photo.uri);
 
-        const d = photo.timestamp ? new Date(photo.timestamp) : new Date();
-        const yyyy = d.getFullYear();
-        const mm = String(d.getMonth() + 1).padStart(2, '0');
-        const dd = String(d.getDate()).padStart(2, '0');
-        const name = `photo_${yyyy}-${mm}-${dd}_${i + 1}.jpg`;
+        // Use buildAttachmentName for unique filenames per work order
+        // (prevents filename collisions when uploading to multiple WOs same day)
+        const name = buildAttachmentName({
+          workOrderNumberOrId: getIdForFilename(),
+          type: 'PHOTO',
+          dateObj: getVisitDateForFilename(),
+          ext: 'jpg',
+        });
 
         form.append('photoFile', {
           uri: processedUri,
@@ -1054,7 +1064,8 @@ export default function ViewWorkOrder() {
           type: 'image/jpeg',
         });
 
-        await api.put(`/work-orders/${workOrderId}/edit`, form, {
+        console.log('[Photo] Uploading to WO ID:', woId, 'filename:', name);
+        await api.put(`/work-orders/${woId}/edit`, form, {
           headers: {
             'Content-Type': 'multipart/form-data',
             ...authHeaders(),
