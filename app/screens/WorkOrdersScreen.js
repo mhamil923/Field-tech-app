@@ -846,7 +846,7 @@ export default function WorkOrdersScreen() {
 
   const ListComponent =
     selectedStatus === 'Today' ? (
-      <>
+      <View style={{ flex: 1 }}>
         <TodayRouteActions />
         <Text style={styles.dragBanner}>Long-press to drag order.</Text>
         <DraggableFlatList
@@ -857,18 +857,19 @@ export default function WorkOrdersScreen() {
           renderItem={({ item, drag }) => <Card item={item} drag={drag} />}
           contentContainerStyle={[styles.list, { paddingBottom: insets.bottom + 160 }]}
           refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} />}
-          ListFooterComponent={<View style={{ height: insets.bottom + 40 }} />}
+          ListFooterComponent={<View style={{ height: insets.bottom + 80 }} />}
           ListEmptyComponent={!loadingFirst ? <TodayEmpty /> : null}
         />
-      </>
+      </View>
     ) : (
       <FlatList
+        style={{ flex: 1 }}
         data={filteredOrders}
         keyExtractor={(it) => String(it.id)}
         renderItem={({ item }) => <Card item={item} />}
-        contentContainerStyle={styles.list}
+        contentContainerStyle={[styles.list, { paddingBottom: insets.bottom + 160 }]}
         refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} />}
-        ListFooterComponent={<View style={styles.bottomSpacer} />}
+        ListFooterComponent={<View style={{ height: insets.bottom + 80 }} />}
         ListEmptyComponent={
           !loadingFirst ? (
             <View style={styles.center}>

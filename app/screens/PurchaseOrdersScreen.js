@@ -11,7 +11,7 @@ import api, { fileUrl } from '../../constants/api';
 const norm = (v) => (v ?? '').toString().trim();
 
 // Matches web CRM PurchaseOrders.js supplier list
-const SUPPLIERS = ['All Suppliers', 'All State Metal Fab', 'Chicago Tempered', 'CRL', 'Oldcastle', 'Casco'];
+const SUPPLIERS = ['All Suppliers', 'All State Metal Fab', 'Casco', 'Chicago Tempered', 'CRL', 'Oldcastle Chicago', 'Oldcastle Elk Grove'];
 
 // Helper to check if status is "Waiting on Parts" (case-insensitive)
 const isWaitingOnParts = (status) => {
