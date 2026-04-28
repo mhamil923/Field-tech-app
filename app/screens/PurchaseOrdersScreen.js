@@ -2,8 +2,9 @@
 import React, { useState, useCallback, useEffect } from 'react';
 import {
   View, Text, StyleSheet, TextInput, TouchableOpacity,
-  FlatList, Modal, RefreshControl, Alert, Platform,
+  FlatList, Modal, RefreshControl, Alert, Platform, ScrollView,
 } from 'react-native';
+import { useLocalSearchParams } from 'expo-router';
 import { WebView } from 'react-native-webview';
 import { useRouter } from 'expo-router';
 import api, { fileUrl } from '../../constants/api';
@@ -21,9 +22,25 @@ const isWaitingOnParts = (status) => {
 
 export default function PurchaseOrdersScreen() {
   const router = useRouter();
+  const params = useLocalSearchParams();
 
   const [query, setQuery] = useState('');
-  const [supplierFilter, setSupplierFilter] = useState('All Suppliers');
+  const [supplierFilter, setSupplierFilter] = useState(() => {
+    const incoming = (params?.supplierFilter || '').toString().trim();
+    if (!incoming) return 'All Suppliers';
+    const match = SUPPLIERS.find((s) => s.toLowerCase() === incoming.toLowerCase());
+    return match || 'All Suppliers';
+  });
+
+  // If route params provide a supplier filter after mount, sync it
+  useEffect(() => {
+    const incoming = (params?.supplierFilter || '').toString().trim();
+    if (!incoming) return;
+    const match = SUPPLIERS.find((s) => s.toLowerCase() === incoming.toLowerCase());
+    if (match && match !== supplierFilter) {
+      setSupplierFilter(match);
+    }
+  }, [params?.supplierFilter]); // eslint-disable-line react-hooks/exhaustive-deps
   const [pdfModal, setPdfModal] = useState({ visible: false, url: '', poNumber: '' });
 
   const [results, setResults] = useState([]);
@@ -270,7 +287,12 @@ export default function PurchaseOrdersScreen() {
         />
 
         {/* Supplier filter chips */}
-        <View style={styles.chipRow}>
+        <ScrollView
+          horizontal
+          showsHorizontalScrollIndicator={false}
+          contentContainerStyle={{ paddingHorizontal: 12, gap: 8, flexDirection: 'row' }}
+          style={{ marginHorizontal: -14, marginBottom: 8 }}
+        >
           {SUPPLIERS.map((sup) => {
             const active = supplierFilter === sup;
             return (
@@ -283,7 +305,7 @@ export default function PurchaseOrdersScreen() {
               </TouchableOpacity>
             );
           })}
-        </View>
+        </ScrollView>
 
         {/* Search / Clear buttons */}
         <View style={styles.filterButtons}>

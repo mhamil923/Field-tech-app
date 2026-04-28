@@ -21,6 +21,7 @@ export default function CalendarScreen() {
   const router = useRouter();
 
   const [workOrders, setWorkOrders] = useState([]);
+  const [pickups, setPickups] = useState([]);
   const [selectedDate, setSelectedDate] = useState(moment().format('YYYY-MM-DD'));
   const [markedDates, setMarkedDates] = useState({});
   const [refreshing, setRefreshing] = useState(false);
@@ -47,9 +48,17 @@ export default function CalendarScreen() {
       if (order.scheduledDate) {
         const dayLocal = moment(order.scheduledDate).local().format('YYYY-MM-DD');
         if (!marks[dayLocal]) marks[dayLocal] = { dots: [] };
-        // react-native-calendars shows up to 3 dots nicely
         if ((marks[dayLocal].dots || []).length < 3) {
           marks[dayLocal].dots = [...(marks[dayLocal].dots || []), { color: '#0d6efd' }];
+        }
+      }
+    });
+    pickups.forEach((p) => {
+      if (p.scheduledDate) {
+        const dayLocal = moment(p.scheduledDate).local().format('YYYY-MM-DD');
+        if (!marks[dayLocal]) marks[dayLocal] = { dots: [] };
+        if ((marks[dayLocal].dots || []).length < 3) {
+          marks[dayLocal].dots = [...(marks[dayLocal].dots || []), { color: '#ea580c' }];
         }
       }
     });
@@ -61,12 +70,16 @@ export default function CalendarScreen() {
       selectedColor: '#0d6efd',
     };
     setMarkedDates(marks);
-  }, [workOrders, selectedDate]);
+  }, [workOrders, pickups, selectedDate]);
 
   const fetchWorkOrders = async () => {
     try {
-      const { data } = await api.get('/work-orders');
-      setWorkOrders(Array.isArray(data) ? data : []);
+      const [woRes, pickupRes] = await Promise.all([
+        api.get('/work-orders'),
+        api.get('/supplier-pickups').catch(() => ({ data: [] })),
+      ]);
+      setWorkOrders(Array.isArray(woRes.data) ? woRes.data : []);
+      setPickups(Array.isArray(pickupRes.data) ? pickupRes.data : []);
     } catch (err) {
       if (err?.response?.status === 401) {
         await AsyncStorage.removeItem('jwt');
@@ -88,35 +101,72 @@ export default function CalendarScreen() {
     setSelectedDate(day.dateString);
   };
 
-  const ordersForSelectedDate = useMemo(() => {
-    const list = workOrders.filter(
-      (o) =>
-        o.scheduledDate &&
-        moment(o.scheduledDate).local().format('YYYY-MM-DD') === selectedDate
-    );
-    return list.sort(
-      (a, b) =>
-        moment(a.scheduledDate).local().valueOf() -
-        moment(b.scheduledDate).local().valueOf()
-    );
-  }, [workOrders, selectedDate]);
+  const itemsForSelectedDate = useMemo(() => {
+    const wos = workOrders
+      .filter(
+        (o) =>
+          o.scheduledDate &&
+          moment(o.scheduledDate).local().format('YYYY-MM-DD') === selectedDate
+      )
+      .map((o) => ({ ...o, __kind: 'wo' }));
 
-  const renderOrderItem = ({ item }) => (
-    <TouchableOpacity
-      style={styles.orderCard}
-      onPress={() => router.push(`/screens/ViewWorkOrder?id=${item.id}`)}
-    >
-      <Text style={styles.orderTitle}>PO#: {item.poNumber || 'N/A'}</Text>
-      <Text style={styles.orderText}>Customer: {item.customer}</Text>
-      <Text style={styles.orderText}>Site: {item.siteLocation}</Text>
-      <Text style={styles.orderText}>Problem: {item.problemDescription}</Text>
-      <Text style={[styles.orderText, { color: '#0d6efd', fontWeight: '700' }]}>
-        {item.scheduledDate
-          ? moment(item.scheduledDate).local().format('HH:mm')
-          : 'Not Scheduled'}
-      </Text>
-    </TouchableOpacity>
-  );
+    const pks = pickups
+      .filter(
+        (p) =>
+          p.scheduledDate &&
+          moment(p.scheduledDate).local().format('YYYY-MM-DD') === selectedDate
+      )
+      .map((p) => ({ ...p, __kind: 'pickup' }));
+
+    return [...wos, ...pks].sort((a, b) => {
+      const av = moment(a.scheduledDate).local().valueOf();
+      const bv = moment(b.scheduledDate).local().valueOf();
+      return av - bv;
+    });
+  }, [workOrders, pickups, selectedDate]);
+
+  const renderOrderItem = ({ item }) => {
+    if (item.__kind === 'pickup') {
+      return (
+        <TouchableOpacity
+          style={[styles.orderCard, styles.pickupCard]}
+          onPress={() =>
+            router.push({
+              pathname: '/screens/PurchaseOrdersScreen',
+              params: { supplierFilter: item.supplier },
+            })
+          }
+        >
+          <Text style={[styles.orderTitle, { color: '#ea580c' }]}>
+            📦 Supplier Pickup
+          </Text>
+          <Text style={styles.orderText}>Supplier: {item.supplier}</Text>
+          {item.assignedTech ? (
+            <Text style={styles.orderText}>Tech: {item.assignedTech}</Text>
+          ) : null}
+          {item.notes ? (
+            <Text style={styles.orderText}>Notes: {item.notes}</Text>
+          ) : null}
+        </TouchableOpacity>
+      );
+    }
+    return (
+      <TouchableOpacity
+        style={styles.orderCard}
+        onPress={() => router.push(`/screens/ViewWorkOrder?id=${item.id}`)}
+      >
+        <Text style={styles.orderTitle}>PO#: {item.poNumber || 'N/A'}</Text>
+        <Text style={styles.orderText}>Customer: {item.customer}</Text>
+        <Text style={styles.orderText}>Site: {item.siteLocation}</Text>
+        <Text style={styles.orderText}>Problem: {item.problemDescription}</Text>
+        <Text style={[styles.orderText, { color: '#0d6efd', fontWeight: '700' }]}>
+          {item.scheduledDate
+            ? moment(item.scheduledDate).local().format('HH:mm')
+            : 'Not Scheduled'}
+        </Text>
+      </TouchableOpacity>
+    );
+  };
 
   return (
     <View style={styles.container}>
@@ -153,11 +203,11 @@ export default function CalendarScreen() {
       </Text>
 
       <FlatList
-        data={ordersForSelectedDate}
-        keyExtractor={(item) => item.id.toString()}
+        data={itemsForSelectedDate}
+        keyExtractor={(item) => `${item.__kind}-${item.id}`}
         renderItem={renderOrderItem}
         contentContainerStyle={
-          ordersForSelectedDate.length ? styles.listContainer : styles.emptyContainer
+          itemsForSelectedDate.length ? styles.listContainer : styles.emptyContainer
         }
         ListEmptyComponent={
           <Text style={styles.noData}>No work orders scheduled on this day.</Text>
@@ -218,4 +268,9 @@ const styles = StyleSheet.create({
   orderTitle: { fontSize: 15, fontWeight: '900', color: '#0f172a', marginBottom: 4 },
   orderText: { fontSize: 13, color: '#0f172a' },
   noData: { fontStyle: 'italic', color: '#0f172a', marginTop: 32, textAlign: 'center' },
+  pickupCard: {
+    backgroundColor: 'rgba(234,88,12,0.08)',
+    borderColor: '#ea580c',
+    borderLeftWidth: 4,
+  },
 });
