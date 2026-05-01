@@ -61,6 +61,14 @@ export default function AddWorkOrder() {
   const [billingAddress, setBillingAddress] = useState('');
   const [problemDescription, setProblemDescription] = useState('');
 
+  // "Same as billing address" — copies billingAddress into siteAddress and locks the input.
+  const [sameAsBilling, setSameAsBilling] = useState(false);
+  useEffect(() => {
+    if (sameAsBilling && siteAddress !== billingAddress) {
+      setSiteAddress(billingAddress);
+    }
+  }, [sameAsBilling, billingAddress]); // eslint-disable-line react-hooks/exhaustive-deps
+
   // Status
   const [status, setStatus] = useState('Needs to be Scheduled');
   const [showStatusPicker, setShowStatusPicker] = useState(false);
@@ -259,6 +267,35 @@ export default function AddWorkOrder() {
         placeholder="e.g., Panda Express"
       />
 
+      {/* "Same as billing address" toggle for Site Address */}
+      <TouchableOpacity
+        onPress={() => {
+          setSameAsBilling((prev) => {
+            const next = !prev;
+            if (next) setSiteAddress(billingAddress);
+            else setSiteAddress('');
+            return next;
+          });
+        }}
+        style={{ flexDirection: 'row', alignItems: 'center', gap: 8, marginBottom: 8 }}
+      >
+        <View
+          style={{
+            width: 20,
+            height: 20,
+            borderRadius: 4,
+            borderWidth: 2,
+            borderColor: sameAsBilling ? '#3b82f6' : '#9ca3af',
+            backgroundColor: sameAsBilling ? '#3b82f6' : 'transparent',
+            alignItems: 'center',
+            justifyContent: 'center',
+          }}
+        >
+          {sameAsBilling && <Text style={{ color: '#fff', fontSize: 12, fontWeight: 'bold' }}>✓</Text>}
+        </View>
+        <Text style={{ color: '#6b7280', fontSize: 13 }}>Same as billing address</Text>
+      </TouchableOpacity>
+
       {/* Site Address with Google Places autocomplete */}
       <PlacesAutocompleteInput
         label="Site Address"
@@ -266,6 +303,7 @@ export default function AddWorkOrder() {
         onChangeValue={setSiteAddress}
         googleKey={GOOGLE_PLACES_KEY}
         required
+        editable={!sameAsBilling}
       />
 
       {/* Billing & Problem */}
@@ -380,7 +418,7 @@ function LabeledInput({ label, required, multiline, style, ...props }) {
  * - FIX: keep form state (`onChangeValue`) in sync on each keystroke,
  *   so validation sees the address even if the user doesn’t tap a suggestion.
  */
-function PlacesAutocompleteInput({ label, value, onChangeValue, googleKey, required }) {
+function PlacesAutocompleteInput({ label, value, onChangeValue, googleKey, required, editable = true }) {
   const [query, setQuery] = useState(value || '');
   const [predictions, setPredictions] = useState([]); // [{place_id, description}]
   const [loading, setLoading] = useState(false);
@@ -513,10 +551,11 @@ function PlacesAutocompleteInput({ label, value, onChangeValue, googleKey, requi
       </Text>
       <View style={{ position: 'relative' }}>
         <TextInput
-          style={[styles.input]}
+          style={[styles.input, !editable && { backgroundColor: '#f3f4f6', color: '#6b7280' }]}
           value={query}
           onChangeText={onChangeText}
           onFocus={() => {
+            if (!editable) return;
             setShowList(true);
             if (query && query.length >= 3) runAutocomplete(query);
           }}
@@ -528,6 +567,7 @@ function PlacesAutocompleteInput({ label, value, onChangeValue, googleKey, requi
           placeholder="Start typing address…"
           autoCorrect={false}
           autoCapitalize="none"
+          editable={editable}
         />
         {loading ? (
           <View style={styles.autocompleteLoading}>
