@@ -236,6 +236,7 @@ export default function WorkOrdersScreen() {
   const [meLoading, setMeLoading] = useState(true);
 
   const [workOrders, setWorkOrders] = useState([]);
+  const [supplierPickups, setSupplierPickups] = useState([]);
   const [selectedStatus, setSelectedStatus] = useState('Today');
   const [refreshing, setRefreshing] = useState(false);
   const [loadingFirst, setLoadingFirst] = useState(true);
@@ -358,12 +359,16 @@ export default function WorkOrdersScreen() {
         return;
       }
 
-      const res = await api.get('/work-orders');
+      const [res, pickupRes] = await Promise.all([
+        api.get('/work-orders'),
+        api.get('/supplier-pickups').catch(() => ({ data: [] })),
+      ]);
       const canon = (res.data || []).map((o) => ({
         ...o,
         status: toCanonicalStatus(o.status),
       }));
       setWorkOrders(canon);
+      setSupplierPickups(Array.isArray(pickupRes.data) ? pickupRes.data : []);
     } catch (err) {
       const status = err?.response?.status;
       console.error('Error fetching work orders:', status, err?.response?.data || err?.message);
@@ -459,6 +464,19 @@ export default function WorkOrdersScreen() {
     }
     return [...ordered, ...Array.from(map.values())];
   }, [filteredOrders, selectedStatus, todayOrderIds]);
+
+  // Today's supplier pickups assigned to me (or unassigned).
+  const todayPickups = useMemo(() => {
+    if (selectedStatus !== 'Today') return [];
+    const todayStr = moment().format('YYYY-MM-DD');
+    const myName = (me?.name || me?.username || '').toString().trim().toLowerCase();
+    return supplierPickups.filter((p) => {
+      const day = (p.scheduledDate || '').toString().split('T')[0];
+      if (day !== todayStr) return false;
+      const tech = (p.assignedTech || '').toString().trim().toLowerCase();
+      return !tech || tech === myName;
+    });
+  }, [supplierPickups, selectedStatus, me]);
 
   const onRefresh = () => {
     setRefreshing(true);
@@ -848,6 +866,37 @@ export default function WorkOrdersScreen() {
     selectedStatus === 'Today' ? (
       <View style={{ flex: 1 }}>
         <TodayRouteActions />
+        {todayPickups.length > 0 && (
+          <View style={{ paddingHorizontal: 16, paddingTop: 8 }}>
+            {todayPickups.map((p) => (
+              <TouchableOpacity
+                key={'sp-' + p.id}
+                onPress={() =>
+                  router.push({
+                    pathname: '/screens/PurchaseOrdersScreen',
+                    params: { supplierFilter: p.supplier },
+                  })
+                }
+                style={{
+                  backgroundColor: '#fff7ed',
+                  borderLeftWidth: 4,
+                  borderLeftColor: '#f97316',
+                  borderRadius: 8,
+                  padding: 16,
+                  marginBottom: 12,
+                }}
+              >
+                <Text style={{ fontWeight: 'bold', fontSize: 16 }}>📦 {p.supplier} — Supplier Pickup</Text>
+                {p.notes ? (
+                  <Text style={{ color: '#6b7280', marginTop: 4 }}>{p.notes}</Text>
+                ) : null}
+                <Text style={{ color: '#f97316', marginTop: 4, fontWeight: '600' }}>
+                  Tap to view Purchase Orders →
+                </Text>
+              </TouchableOpacity>
+            ))}
+          </View>
+        )}
         <Text style={styles.dragBanner}>Long-press to drag order.</Text>
         <DraggableFlatList
           data={orderedToday}
