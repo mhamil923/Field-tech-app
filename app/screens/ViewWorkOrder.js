@@ -1581,6 +1581,27 @@ export default function ViewWorkOrder() {
               </View>
             )}
 
+            {Array.isArray(workOrder?.techNames) && workOrder.techNames.length > 0 && (
+              <View style={[styles.detailCell, styles.detailCellFull]}>
+                <Text style={styles.detailLabel}>Crew</Text>
+                <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 6 }}>
+                  {workOrder.techNames.map((name, i) => (
+                    <View
+                      key={`${name}-${i}`}
+                      style={{
+                        paddingHorizontal: 10,
+                        paddingVertical: 4,
+                        borderRadius: 999,
+                        backgroundColor: '#1d4ed8',
+                      }}
+                    >
+                      <Text style={{ color: '#fff', fontSize: 12, fontWeight: '600' }}>{name}</Text>
+                    </View>
+                  ))}
+                </View>
+              </View>
+            )}
+
             <View style={[styles.detailCell, styles.detailCellFull]}>
               <Text style={styles.detailLabel}>Problem</Text>
               <Text style={styles.detailValue}>{problem}</Text>

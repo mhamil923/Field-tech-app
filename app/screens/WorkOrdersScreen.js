@@ -121,9 +121,16 @@ const isAssignedToMe = (order, me) => {
   if (myId != null) {
     if (assignedId === myId) return true;
     if (assignedId != null && String(assignedId) === String(myId)) return true;
+    if (Array.isArray(order.techIds) && order.techIds.some((tid) => String(tid) === String(myId))) {
+      return true;
+    }
   }
 
   if (myName && assignedName && myName === assignedName) return true;
+
+  if (myName && Array.isArray(order.techNames)) {
+    if (order.techNames.some((n) => String(n).trim().toLowerCase() === myName)) return true;
+  }
 
   return false;
 };
