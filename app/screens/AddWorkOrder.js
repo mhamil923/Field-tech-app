@@ -61,13 +61,13 @@ export default function AddWorkOrder() {
   const [billingAddress, setBillingAddress] = useState('');
   const [problemDescription, setProblemDescription] = useState('');
 
-  // "Same as billing address" — copies billingAddress into siteAddress and locks the input.
+  // "Same as site address" — copies siteAddress into billingAddress and locks the input.
   const [sameAsBilling, setSameAsBilling] = useState(false);
   useEffect(() => {
-    if (sameAsBilling && siteAddress !== billingAddress) {
-      setSiteAddress(billingAddress);
+    if (sameAsBilling && billingAddress !== siteAddress) {
+      setBillingAddress(siteAddress);
     }
-  }, [sameAsBilling, billingAddress]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [sameAsBilling, siteAddress]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // Status
   const [status, setStatus] = useState('Needs to be Scheduled');
@@ -267,13 +267,22 @@ export default function AddWorkOrder() {
         placeholder="e.g., Panda Express"
       />
 
-      {/* "Same as billing address" toggle for Site Address */}
+      {/* Site Address with Google Places autocomplete */}
+      <PlacesAutocompleteInput
+        label="Site Address"
+        value={siteAddress}
+        onChangeValue={setSiteAddress}
+        googleKey={GOOGLE_PLACES_KEY}
+        required
+      />
+
+      {/* "Same as site address" toggle for Billing Address */}
       <TouchableOpacity
         onPress={() => {
           setSameAsBilling((prev) => {
             const next = !prev;
-            if (next) setSiteAddress(billingAddress);
-            else setSiteAddress('');
+            if (next) setBillingAddress(siteAddress);
+            else setBillingAddress('');
             return next;
           });
         }}
@@ -293,21 +302,19 @@ export default function AddWorkOrder() {
         >
           {sameAsBilling && <Text style={{ color: '#fff', fontSize: 12, fontWeight: 'bold' }}>✓</Text>}
         </View>
-        <Text style={{ color: '#6b7280', fontSize: 13 }}>Same as billing address</Text>
+        <Text style={{ color: '#6b7280', fontSize: 13 }}>Same as site address</Text>
       </TouchableOpacity>
 
-      {/* Site Address with Google Places autocomplete */}
-      <PlacesAutocompleteInput
-        label="Site Address"
-        value={siteAddress}
-        onChangeValue={setSiteAddress}
-        googleKey={GOOGLE_PLACES_KEY}
-        required
-        editable={!sameAsBilling}
-      />
-
       {/* Billing & Problem */}
-      <LabeledInput required label="Billing Address" value={billingAddress} onChangeText={setBillingAddress} multiline />
+      <LabeledInput
+        required
+        label="Billing Address"
+        value={billingAddress}
+        onChangeText={setBillingAddress}
+        multiline
+        editable={!sameAsBilling}
+        style={sameAsBilling ? { backgroundColor: '#f3f4f6', color: '#6b7280' } : null}
+      />
       <LabeledInput required label="Problem Description" value={problemDescription} onChangeText={setProblemDescription} multiline />
 
       {/* Status picker */}
