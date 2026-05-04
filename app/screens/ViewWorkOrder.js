@@ -38,6 +38,7 @@ const STATUS_OPTIONS = [
   'Scheduled',
   'Needs to be Quoted',
   'Waiting for Approval',
+  'Declined',
   'Approved',
   'Waiting on Parts',
   'Needs to be Scheduled',
