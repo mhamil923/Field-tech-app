@@ -61,13 +61,19 @@ export default function AddWorkOrder() {
   const [billingAddress, setBillingAddress] = useState('');
   const [problemDescription, setProblemDescription] = useState('');
 
-  // "Same as site address" — copies siteAddress into billingAddress and locks the input.
-  const [sameAsBilling, setSameAsBilling] = useState(false);
+  // Mutually exclusive: copy one address into the other and lock that field.
+  const [siteFromBilling, setSiteFromBilling] = useState(false);
+  const [billingFromSite, setBillingFromSite] = useState(false);
   useEffect(() => {
-    if (sameAsBilling && billingAddress !== siteAddress) {
+    if (siteFromBilling && siteAddress !== billingAddress) {
+      setSiteAddress(billingAddress);
+    }
+  }, [siteFromBilling, billingAddress]); // eslint-disable-line react-hooks/exhaustive-deps
+  useEffect(() => {
+    if (billingFromSite && billingAddress !== siteAddress) {
       setBillingAddress(siteAddress);
     }
-  }, [sameAsBilling, siteAddress]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [billingFromSite, siteAddress]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // Status
   const [status, setStatus] = useState('Needs to be Scheduled');
@@ -258,13 +264,46 @@ export default function AddWorkOrder() {
       {/* PO */}
       <LabeledInput label="PO Number (optional)" value={poNumber} onChangeText={setPoNumber} placeholder="Optional" />
 
-      {/* Site Location Name */}
+      {/* Site Location Name — with "Same as billing address" toggle inline */}
       <LabeledInput
         required
         label="Site Location (name)"
         value={siteLocation}
         onChangeText={setSiteLocation}
         placeholder="e.g., Panda Express"
+        headerRight={
+          <TouchableOpacity
+            onPress={() => {
+              setSiteFromBilling((prev) => {
+                const next = !prev;
+                if (next) {
+                  setBillingFromSite(false);
+                  setSiteAddress(billingAddress);
+                } else {
+                  setSiteAddress('');
+                }
+                return next;
+              });
+            }}
+            style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}
+          >
+            <View
+              style={{
+                width: 18,
+                height: 18,
+                borderRadius: 4,
+                borderWidth: 2,
+                borderColor: siteFromBilling ? '#3b82f6' : '#9ca3af',
+                backgroundColor: siteFromBilling ? '#3b82f6' : 'transparent',
+                alignItems: 'center',
+                justifyContent: 'center',
+              }}
+            >
+              {siteFromBilling && <Text style={{ color: '#fff', fontSize: 11, fontWeight: 'bold' }}>✓</Text>}
+            </View>
+            <Text style={{ color: '#6b7280', fontSize: 12 }}>Same as billing address</Text>
+          </TouchableOpacity>
+        }
       />
 
       {/* Site Address with Google Places autocomplete */}
@@ -274,46 +313,51 @@ export default function AddWorkOrder() {
         onChangeValue={setSiteAddress}
         googleKey={GOOGLE_PLACES_KEY}
         required
+        editable={!siteFromBilling}
       />
 
-      {/* "Same as site address" toggle for Billing Address */}
-      <TouchableOpacity
-        onPress={() => {
-          setSameAsBilling((prev) => {
-            const next = !prev;
-            if (next) setBillingAddress(siteAddress);
-            else setBillingAddress('');
-            return next;
-          });
-        }}
-        style={{ flexDirection: 'row', alignItems: 'center', gap: 8, marginBottom: 8 }}
-      >
-        <View
-          style={{
-            width: 20,
-            height: 20,
-            borderRadius: 4,
-            borderWidth: 2,
-            borderColor: sameAsBilling ? '#3b82f6' : '#9ca3af',
-            backgroundColor: sameAsBilling ? '#3b82f6' : 'transparent',
-            alignItems: 'center',
-            justifyContent: 'center',
-          }}
-        >
-          {sameAsBilling && <Text style={{ color: '#fff', fontSize: 12, fontWeight: 'bold' }}>✓</Text>}
-        </View>
-        <Text style={{ color: '#6b7280', fontSize: 13 }}>Same as site address</Text>
-      </TouchableOpacity>
-
-      {/* Billing & Problem */}
+      {/* Billing Address — with "Same as site address" toggle inline */}
       <LabeledInput
         required
         label="Billing Address"
         value={billingAddress}
         onChangeText={setBillingAddress}
         multiline
-        editable={!sameAsBilling}
-        style={sameAsBilling ? { backgroundColor: '#f3f4f6', color: '#6b7280' } : null}
+        editable={!billingFromSite}
+        style={billingFromSite ? { backgroundColor: '#f3f4f6', color: '#6b7280' } : null}
+        headerRight={
+          <TouchableOpacity
+            onPress={() => {
+              setBillingFromSite((prev) => {
+                const next = !prev;
+                if (next) {
+                  setSiteFromBilling(false);
+                  setBillingAddress(siteAddress);
+                } else {
+                  setBillingAddress('');
+                }
+                return next;
+              });
+            }}
+            style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}
+          >
+            <View
+              style={{
+                width: 18,
+                height: 18,
+                borderRadius: 4,
+                borderWidth: 2,
+                borderColor: billingFromSite ? '#3b82f6' : '#9ca3af',
+                backgroundColor: billingFromSite ? '#3b82f6' : 'transparent',
+                alignItems: 'center',
+                justifyContent: 'center',
+              }}
+            >
+              {billingFromSite && <Text style={{ color: '#fff', fontSize: 11, fontWeight: 'bold' }}>✓</Text>}
+            </View>
+            <Text style={{ color: '#6b7280', fontSize: 12 }}>Same as site address</Text>
+          </TouchableOpacity>
+        }
       />
       <LabeledInput required label="Problem Description" value={problemDescription} onChangeText={setProblemDescription} multiline />
 
@@ -403,12 +447,15 @@ export default function AddWorkOrder() {
 }
 
 /** Simple labeled input */
-function LabeledInput({ label, required, multiline, style, ...props }) {
+function LabeledInput({ label, required, multiline, style, headerRight, ...props }) {
   return (
     <View style={{ marginBottom: 14 }}>
-      <Text style={styles.label}>
-        {label} {required ? <Text style={{ color: '#ef4444' }}>*</Text> : null}
-      </Text>
+      <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginBottom: 4 }}>
+        <Text style={styles.label}>
+          {label} {required ? <Text style={{ color: '#ef4444' }}>*</Text> : null}
+        </Text>
+        {headerRight}
+      </View>
       <TextInput
         style={[styles.input, multiline && { height: 110, textAlignVertical: 'top' }, style]}
         placeholder={label}
