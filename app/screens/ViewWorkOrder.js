@@ -84,7 +84,7 @@ const buildAttachmentName = ({
   const date = dateStamp(dateObj || new Date());
   const e = String(ext || 'jpg').toLowerCase().replace('.', '') || 'jpg';
   if (String(type || 'PHOTO').toUpperCase() === 'DRAW') {
-    return `DrawNote-${wo}-${date}.${e}`;
+    return `DrawNote-${wo}-${date}-${Date.now()}.${e}`;
   }
   return `Photo-${wo}-${date}-${Date.now()}.${e}`;
 };
