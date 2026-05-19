@@ -32,8 +32,14 @@ const STATUSES = [
   'Waiting on Parts',
   'Needs to be Scheduled',
   'Needs to be Invoiced',
+  'Invoiced Waiting for Payment',
   'Completed',
 ];
+
+// Per-status accent colors used for chips/badges that need to stand out.
+const STATUS_COLOR = {
+  'Invoiced Waiting for Payment': '#f59e0b',
+};
 
 const PARTS_WAITING = 'Waiting on Parts';
 const PARTS_NEXT = 'Needs to be Scheduled';
@@ -56,6 +62,12 @@ const STATUS_SYNONYMS = new Map([
   ['waiting_on_parts', PARTS_WAITING],
   ['needs quote', 'Needs to be Quoted'],
   ['needs invoiced', 'Needs to be Invoiced'],
+  ['invoiced waiting for payment', 'Invoiced Waiting for Payment'],
+  ['invoiced-waiting-for-payment', 'Invoiced Waiting for Payment'],
+  ['invoiced_waiting_for_payment', 'Invoiced Waiting for Payment'],
+  ['waiting for payment', 'Invoiced Waiting for Payment'],
+  ['waiting on payment', 'Invoiced Waiting for Payment'],
+  ['awaiting payment', 'Invoiced Waiting for Payment'],
 ]);
 
 const toCanonicalStatus = (s) =>
@@ -765,20 +777,61 @@ export default function WorkOrdersScreen() {
           </View>
         </TouchableOpacity>
 
-        {STATUSES.map((s) => (
-          <TouchableOpacity
-            key={s}
-            onPress={() => setSelectedStatus(s)}
-            style={[styles.chip, selectedStatus === s && styles.chipActive]}
-          >
-            <Text style={[styles.chipText, selectedStatus === s && styles.chipTextActive]}>{s}</Text>
-            <View style={[styles.badge, selectedStatus === s && styles.badgeActive]}>
-              <Text style={[styles.badgeText, selectedStatus === s && styles.badgeTextActive]}>
-                {counts.byStatus[s]}
-              </Text>
-            </View>
-          </TouchableOpacity>
-        ))}
+        {STATUSES.map((s) => {
+          const accent = STATUS_COLOR[s];
+          const isActive = selectedStatus === s;
+          if (accent) {
+            return (
+              <TouchableOpacity
+                key={s}
+                onPress={() => setSelectedStatus(s)}
+                style={[
+                  styles.chip,
+                  { borderColor: accent, borderWidth: 2 },
+                  isActive && { backgroundColor: accent },
+                ]}
+              >
+                <Text
+                  style={[
+                    styles.chipText,
+                    { color: isActive ? '#fff' : accent, fontWeight: '700' },
+                  ]}
+                >
+                  {s}
+                </Text>
+                <View
+                  style={[
+                    styles.badge,
+                    { backgroundColor: isActive ? '#fff' : accent },
+                  ]}
+                >
+                  <Text
+                    style={[
+                      styles.badgeText,
+                      { color: isActive ? accent : '#fff' },
+                    ]}
+                  >
+                    {counts.byStatus[s]}
+                  </Text>
+                </View>
+              </TouchableOpacity>
+            );
+          }
+          return (
+            <TouchableOpacity
+              key={s}
+              onPress={() => setSelectedStatus(s)}
+              style={[styles.chip, isActive && styles.chipActive]}
+            >
+              <Text style={[styles.chipText, isActive && styles.chipTextActive]}>{s}</Text>
+              <View style={[styles.badge, isActive && styles.badgeActive]}>
+                <Text style={[styles.badgeText, isActive && styles.badgeTextActive]}>
+                  {counts.byStatus[s]}
+                </Text>
+              </View>
+            </TouchableOpacity>
+          );
+        })}
       </View>
     );
   };

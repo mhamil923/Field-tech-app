@@ -19,6 +19,7 @@ const STATUSES = [
   'Declined',
   'Waiting on Parts',
   'Parts In',
+  'Invoiced Waiting for Payment',
   'Completed',
 ];
 
@@ -45,6 +46,13 @@ const STATUS_SYNONYMS = new Map([
   ['needs-to-be-quoted','Needs to be Quoted'],
   ['needs_to_be_quoted','Needs to be Quoted'],
   ['needstobequoted','Needs to be Quoted'],
+  // Invoiced Waiting for Payment
+  ['invoiced waiting for payment','Invoiced Waiting for Payment'],
+  ['invoiced-waiting-for-payment','Invoiced Waiting for Payment'],
+  ['invoiced_waiting_for_payment','Invoiced Waiting for Payment'],
+  ['waiting for payment','Invoiced Waiting for Payment'],
+  ['waiting on payment','Invoiced Waiting for Payment'],
+  ['awaiting payment','Invoiced Waiting for Payment'],
 ]);
 const toCanonicalStatus = (s) =>
   CANON.get(statusKey(s)) || STATUS_SYNONYMS.get(statusKey(s)) || norm(s);

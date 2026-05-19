@@ -22,6 +22,7 @@ const STATUS_OPTIONS = [
   'Waiting for Approval',
   'Declined',
   'Waiting on Parts',
+  'Invoiced Waiting for Payment',
   'Completed',
 ];
 
