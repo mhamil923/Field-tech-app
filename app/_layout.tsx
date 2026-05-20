@@ -1,11 +1,12 @@
 // File: app/_layout.tsx
-import React, { useRef, useMemo } from 'react';
+import React, { useRef, useMemo, useEffect, useState } from 'react';
 import { Text, StyleSheet, TouchableOpacity, View, Platform } from 'react-native';
 import { Stack, useRouter, usePathname } from 'expo-router';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { GestureHandlerRootView } from 'react-native-gesture-handler';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { CRM } from '@/constants/Colors';
+import api from '../constants/api';
 
 function Header() {
   const router = useRouter();
@@ -46,17 +47,49 @@ function Header() {
     router.replace('/screens/LoginScreen');
   });
 
-  // 3) Ensure these paths actually exist in your app folder structure
-  const TABS: Array<{ label: string; path?: string; onPress?: () => void }> = [
-    { label: 'Home',        path: '/' },
-    { label: 'Work Orders', path: '/screens/WorkOrdersScreen' },
-    { label: 'POs',         path: '/screens/PurchaseOrdersScreen' },
-    { label: 'History',     path: '/screens/HistoryScreen' },
-    { label: 'Calendar',    path: '/screens/CalendarScreen' },
-    { label: 'Logout',      onPress: logout },
-  ];
+  // Identify the logged-in user so we can show role-specific tabs (e.g. Overview for Jeff).
+  const [me, setMe] = useState<{ id?: number; username?: string; name?: string; role?: string } | null>(null);
 
-  const tabs = useMemo(() => TABS, []); // stable identity
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      try {
+        const token = await AsyncStorage.getItem('jwt');
+        if (!token) {
+          if (!cancelled) setMe(null);
+          return;
+        }
+        const res = await api.get('/auth/me');
+        if (!cancelled) setMe(res?.data || null);
+      } catch {
+        if (!cancelled) setMe(null);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [pathname]);
+
+  const isJeff =
+    !!me &&
+    (String(me.username || '').toLowerCase() === 'jeff' ||
+      String(me.name || '').toLowerCase() === 'jeff');
+
+  // 3) Ensure these paths actually exist in your app folder structure
+  const tabs = useMemo(() => {
+    const TABS: Array<{ label: string; path?: string; onPress?: () => void }> = [
+      { label: 'Home',        path: '/' },
+      { label: 'Work Orders', path: '/screens/WorkOrdersScreen' },
+      { label: 'POs',         path: '/screens/PurchaseOrdersScreen' },
+      { label: 'History',     path: '/screens/HistoryScreen' },
+      { label: 'Calendar',    path: '/screens/CalendarScreen' },
+    ];
+    if (isJeff) {
+      TABS.push({ label: 'Overview', path: '/screens/OverviewScreen' });
+    }
+    TABS.push({ label: 'Logout', onPress: logout });
+    return TABS;
+  }, [isJeff, logout]);
 
   const Tab = ({
     label,
