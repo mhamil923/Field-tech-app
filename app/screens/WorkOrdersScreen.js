@@ -428,12 +428,12 @@ export default function WorkOrdersScreen() {
       if (byStatus[label] !== undefined) byStatus[label] += 1;
     }
 
-    const today = me
-      ? workOrders.filter((o) => isAssignedToMe(o, me) && isScheduledToday(o)).length
-      : 0;
+    // Today counts all WOs scheduled today, regardless of which tech they're
+    // assigned to — small team setup, everyone sees today's jobs.
+    const today = workOrders.filter((o) => isScheduledToday(o)).length;
 
     return { byStatus, today };
-  }, [workOrders, me]);
+  }, [workOrders]);
 
   const openInGoogleMaps = useCallback(
     async (query) => {
@@ -464,8 +464,7 @@ export default function WorkOrdersScreen() {
     const base = workOrders;
 
     if (selectedStatus === 'Today') {
-      if (!me) return [];
-      return base.filter((o) => isAssignedToMe(o, me) && isScheduledToday(o));
+      return base.filter((o) => isScheduledToday(o));
     }
 
     return base.filter((o) => normStatus(o.status) === normStatus(selectedStatus));
@@ -485,18 +484,15 @@ export default function WorkOrdersScreen() {
     return [...ordered, ...Array.from(map.values())];
   }, [filteredOrders, selectedStatus, todayOrderIds]);
 
-  // Today's supplier pickups assigned to me (or unassigned).
+  // Today's supplier pickups — show all of today's pickups, not just mine.
   const todayPickups = useMemo(() => {
     if (selectedStatus !== 'Today') return [];
     const todayStr = moment().format('YYYY-MM-DD');
-    const myName = (me?.name || me?.username || '').toString().trim().toLowerCase();
     return supplierPickups.filter((p) => {
       const day = (p.scheduledDate || '').toString().split('T')[0];
-      if (day !== todayStr) return false;
-      const tech = (p.assignedTech || '').toString().trim().toLowerCase();
-      return !tech || tech === myName;
+      return day === todayStr;
     });
-  }, [supplierPickups, selectedStatus, me]);
+  }, [supplierPickups, selectedStatus]);
 
   const onRefresh = () => {
     setRefreshing(true);
