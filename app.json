@@ -9,7 +9,7 @@
     "scheme": "myapp",
     "userInterfaceStyle": "automatic",
     "ios": {
-      "buildNumber": "160",
+      "buildNumber": "165",
       "supportsTablet": true,
       "bundleIdentifier": "com.firstclassglass.fieldtech",
       "infoPlist": {
@@ -55,7 +55,10 @@
           "backgroundColor": "#ffffff"
         }
       ],
-      "expo-dev-client"
+      "expo-dev-client",
+      "expo-font",
+      "expo-router",
+      "expo-web-browser"
     ],
     "experiments": {
       "typedRoutes": true
