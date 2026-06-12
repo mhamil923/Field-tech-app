@@ -60,7 +60,7 @@ export default function PurchaseOrdersScreen() {
       // Fetch both endpoints in parallel (like web CRM does)
       const [poResponse, woResponse] = await Promise.all([
         api.get('/purchase-orders', { params }),
-        api.get('/work-orders'),
+        api.get('/work-orders', { params: { mine: 'true' } }),
       ]);
 
       const poList = Array.isArray(poResponse.data) ? poResponse.data : [];

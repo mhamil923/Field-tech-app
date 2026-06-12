@@ -168,7 +168,7 @@ export default function HistoryScreen() {
     setLoading(true);
     try {
       // Pull all work orders, then filter on device (matches web History page behavior)
-      const { data } = await api.get('/work-orders');
+      const { data } = await api.get('/work-orders', { params: { mine: 'true' } });
       const listRaw = Array.isArray(data) ? data : [];
 
       // Canonicalize status consistently

@@ -75,7 +75,7 @@ export default function CalendarScreen() {
   const fetchWorkOrders = async () => {
     try {
       const [woRes, pickupRes] = await Promise.all([
-        api.get('/work-orders'),
+        api.get('/work-orders', { params: { mine: 'true' } }),
         api.get('/supplier-pickups').catch(() => ({ data: [] })),
       ]);
       setWorkOrders(Array.isArray(woRes.data) ? woRes.data : []);

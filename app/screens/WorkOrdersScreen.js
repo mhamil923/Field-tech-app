@@ -380,7 +380,7 @@ export default function WorkOrdersScreen() {
       }
 
       const [res, pickupRes] = await Promise.all([
-        api.get('/work-orders'),
+        api.get('/work-orders', { params: { mine: 'true' } }),
         api.get('/supplier-pickups').catch(() => ({ data: [] })),
       ]);
       const canon = (res.data || []).map((o) => ({
@@ -428,8 +428,6 @@ export default function WorkOrdersScreen() {
       if (byStatus[label] !== undefined) byStatus[label] += 1;
     }
 
-    // Today counts all WOs scheduled today, regardless of which tech they're
-    // assigned to — small team setup, everyone sees today's jobs.
     const today = workOrders.filter((o) => isScheduledToday(o)).length;
 
     return { byStatus, today };
