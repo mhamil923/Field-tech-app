@@ -608,6 +608,69 @@ const SKETCH_HTML = `
 </html>
 `;
 
+// Residential contract in-field signing surface: full legal name + signature pad.
+// Posts 'CONTRACT_SIGN:' + JSON.stringify({ name, sig }) where sig is a PNG data URL.
+const CONTRACT_SIGN_HTML = `
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no" />
+<title>Sign Contract</title>
+<style>
+  html,body { margin:0; padding:0; background:#f3f4f6; font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Arial,sans-serif; }
+  .wrap { padding:16px; }
+  h2 { color:#1b5e20; margin:6px 0 2px; font-size:18px; }
+  .sub { color:#555; font-size:13px; margin:0 0 12px; }
+  label { display:block; font-weight:600; font-size:13px; margin:14px 0 4px; }
+  input[type=text] { width:100%; box-sizing:border-box; padding:12px; font-size:16px; border:1px solid #ccc; border-radius:8px; }
+  #pad { width:100%; height:200px; background:#fff; border:2px dashed #b0b0b0; border-radius:10px; touch-action:none; }
+  .row { display:flex; gap:8px; margin-top:14px; }
+  button { flex:1; padding:14px; font-size:16px; font-weight:700; border:0; border-radius:10px; }
+  #clear { background:#eee; color:#333; flex:0 0 90px; }
+  #cancel { background:#9ca3af; color:#fff; }
+  #save { background:#1b5e20; color:#fff; }
+  button:disabled { opacity:.5; }
+</style>
+</head>
+<body>
+  <div class="wrap">
+    <h2>Sign Residential Contract</h2>
+    <p class="sub">Customer signs below to accept the agreement and terms (incl. cancellation policy).</p>
+    <label>Full legal name</label>
+    <input id="name" type="text" placeholder="Type full legal name" autocomplete="name" />
+    <label>Signature</label>
+    <canvas id="pad"></canvas>
+    <div class="row"><button id="clear">Clear</button></div>
+    <div class="row">
+      <button id="cancel">Cancel</button>
+      <button id="save">Sign &amp; Submit</button>
+    </div>
+  </div>
+  <script>
+    var c=document.getElementById('pad'), ctx=c.getContext('2d'), drawing=false, last=null, dirty=false;
+    function size(){ c.width=c.offsetWidth*2; c.height=c.offsetHeight*2; }
+    size();
+    function pt(e){ var r=c.getBoundingClientRect(); var t=e.touches?e.touches[0]:e; return {x:(t.clientX-r.left)*(c.width/r.width), y:(t.clientY-r.top)*(c.height/r.height)}; }
+    function down(e){ e.preventDefault(); drawing=true; last=pt(e); }
+    function move(e){ if(!drawing)return; e.preventDefault(); var p=pt(e); ctx.strokeStyle='#111'; ctx.lineWidth=3; ctx.lineCap='round'; ctx.lineJoin='round'; ctx.beginPath(); ctx.moveTo(last.x,last.y); ctx.lineTo(p.x,p.y); ctx.stroke(); last=p; dirty=true; }
+    function up(e){ drawing=false; }
+    c.addEventListener('mousedown',down); c.addEventListener('mousemove',move); window.addEventListener('mouseup',up);
+    c.addEventListener('touchstart',down,{passive:false}); c.addEventListener('touchmove',move,{passive:false}); c.addEventListener('touchend',up);
+    document.getElementById('clear').addEventListener('click',function(){ ctx.clearRect(0,0,c.width,c.height); dirty=false; });
+    document.getElementById('cancel').addEventListener('click',function(){ window.ReactNativeWebView && window.ReactNativeWebView.postMessage('CLOSE'); });
+    document.getElementById('save').addEventListener('click',function(){
+      var name=(document.getElementById('name').value||'').trim();
+      if(!name){ alert('Please enter the full legal name.'); return; }
+      if(!dirty){ alert('Please sign in the box.'); return; }
+      var sig=c.toDataURL('image/png');
+      window.ReactNativeWebView && window.ReactNativeWebView.postMessage('CONTRACT_SIGN:'+JSON.stringify({name:name, sig:sig}));
+    });
+  </script>
+</body>
+</html>
+`;
+
 export default function ViewWorkOrder() {
   const params = useLocalSearchParams();
   const navigation = useNavigation();
@@ -637,6 +700,10 @@ export default function ViewWorkOrder() {
   const [annotateVisible, setAnnotateVisible] = useState(false);
   const [pdfBase64, setPdfBase64] = useState(null);
   const annotatorRef = useRef(null);
+
+  // Residential contract in-field signing
+  const [contractSignVisible, setContractSignVisible] = useState(false);
+  const [contractSigning, setContractSigning] = useState(false);
 
   // Status modal / saving
   const [showStatusModal, setShowStatusModal] = useState(false);
@@ -1289,6 +1356,38 @@ export default function ViewWorkOrder() {
   };
 
   /**
+   * Residential contract in-field signing (from CONTRACT_SIGN_HTML)
+   */
+  const onContractSignMessage = async (ev) => {
+    const msg = ev?.nativeEvent?.data || '';
+    if (typeof msg !== 'string') return;
+    if (msg === 'CLOSE') { setContractSignVisible(false); return; }
+    if (msg.startsWith('CONTRACT_SIGN:')) {
+      let payload;
+      try { payload = JSON.parse(msg.slice('CONTRACT_SIGN:'.length)); }
+      catch { Alert.alert('Error', 'Could not read the signature.'); return; }
+      const signerName = (payload?.name || '').trim();
+      const signatureData = payload?.sig || '';
+      if (!signerName || !signatureData) { Alert.alert('Missing info', 'Name and signature are required.'); return; }
+      setContractSigning(true);
+      try {
+        await api.post(
+          `/work-orders/${workOrderId}/residential-contract/sign-infield`,
+          { signerName, signatureData },
+          { headers: authHeaders() }
+        );
+        setContractSignVisible(false);
+        await fetchWorkOrder();
+        Alert.alert('Signed', 'The residential contract has been signed.');
+      } catch (e) {
+        Alert.alert('Error', e?.response?.data?.error || e?.message || 'Failed to sign contract.');
+      } finally {
+        setContractSigning(false);
+      }
+    }
+  };
+
+  /**
    * Draw Note upload (from SKETCH_HTML)
    * ✅ ALWAYS saved as DRAW
    */
@@ -1650,6 +1749,47 @@ export default function ViewWorkOrder() {
             </Text>
             {!!poUrls.length && <Text style={styles.tileBadge}>PDF</Text>}
           </TouchableOpacity>
+
+          {/* Residential Contract (Phase 3) — only on residential WOs */}
+          {workOrder?.residentialContract && (() => {
+            const rc = workOrder.residentialContract;
+            const signed = rc.status === 'Signed';
+            const viewPath = rc.signedPdfPath || rc.generatedPdfPath;
+            return (
+              <TouchableOpacity
+                style={styles.tile}
+                onPress={() => {
+                  if (signed) {
+                    if (viewPath) Linking.openURL(fileUrl(viewPath));
+                    else Alert.alert('Signed', `Signed by ${rc.signerName || 'customer'}.`);
+                  } else {
+                    setContractSignVisible(true);
+                  }
+                }}
+              >
+                <View style={styles.tileIconCircle}>
+                  <Text style={styles.tileIconText}>RC</Text>
+                </View>
+                <Text style={styles.tileTitle}>Residential Contract</Text>
+                <Text style={styles.tileSub}>
+                  {signed
+                    ? `Signed${rc.signerName ? ' · ' + rc.signerName : ''}`
+                    : (rc.status === 'Sent' ? 'Sent · tap to sign' : 'Tap to sign')}
+                </Text>
+                <Text
+                  style={[
+                    styles.tileBadge,
+                    {
+                      backgroundColor: signed ? '#16a34a' : (rc.status === 'Sent' ? '#2563EB' : '#6b7280'),
+                      color: '#fff',
+                    },
+                  ]}
+                >
+                  {rc.status || 'Draft'}
+                </Text>
+              </TouchableOpacity>
+            );
+          })()}
         </View>
 
         {/* On Site */}
@@ -1993,6 +2133,34 @@ export default function ViewWorkOrder() {
               <Text style={styles.loadingText}>Loading PDF…</Text>
             </View>
           )}
+        </View>
+      </Modal>
+
+      {/* Residential Contract — In-Field Sign Modal */}
+      <Modal visible={contractSignVisible} animationType="slide" onRequestClose={() => setContractSignVisible(false)}>
+        <View style={{ flex: 1, backgroundColor: '#f3f4f6', paddingTop: Platform.OS === 'ios' ? 54 : 10 }}>
+          {workOrder?.residentialContract?.generatedPdfPath ? (
+            <TouchableOpacity
+              onPress={() => Linking.openURL(fileUrl(workOrder.residentialContract.generatedPdfPath))}
+              style={{ padding: 12, backgroundColor: '#111827' }}
+            >
+              <Text style={{ color: '#fff', textAlign: 'center', fontWeight: '700' }}>📄 View Contract PDF</Text>
+            </TouchableOpacity>
+          ) : null}
+          <WebView
+            originWhitelist={['*']}
+            source={{ html: CONTRACT_SIGN_HTML }}
+            javaScriptEnabled
+            domStorageEnabled
+            keyboardDisplayRequiresUserAction={false}
+            onMessage={onContractSignMessage}
+            style={{ flex: 1 }}
+          />
+          {contractSigning ? (
+            <View style={{ padding: 12, backgroundColor: '#111827' }}>
+              <Text style={{ color: '#fff', textAlign: 'center' }}>Submitting…</Text>
+            </View>
+          ) : null}
         </View>
       </Modal>
 
