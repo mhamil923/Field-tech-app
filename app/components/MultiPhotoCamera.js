@@ -15,6 +15,7 @@ import {
   Animated,
 } from 'react-native';
 import { CameraView, useCameraPermissions } from 'expo-camera';
+import * as MediaLibrary from 'expo-media-library';
 import { Ionicons } from '@expo/vector-icons';
 
 const { width: SCREEN_WIDTH, height: SCREEN_HEIGHT } = Dimensions.get('window');
@@ -30,6 +31,37 @@ export default function MultiPhotoCamera({ visible, onClose, onUpload, workOrder
   const [captureFlash, setCaptureFlash] = useState(false);
   const cameraRef = useRef(null);
   const flashAnim = useRef(new Animated.Value(0)).current;
+
+  // Photo-gallery (Photos app) save state — cached so we prompt only ONCE per session.
+  // null = not asked yet, true = granted, false = denied.
+  const galleryPermRef = useRef(null);
+  const deniedToastShownRef = useRef(false);
+
+  // Save a captured photo to the device photo gallery (iOS Photos). This runs IN
+  // ADDITION to the CRM upload and must NEVER break the capture/upload flow.
+  const saveToGallery = async (uri) => {
+    try {
+      // Resolve write-only ("Add Photos Only") permission once, then cache it.
+      if (galleryPermRef.current === null) {
+        const res = await MediaLibrary.requestPermissionsAsync(true); // true = write-only / add-only
+        galleryPermRef.current = res.granted || res.status === 'granted';
+      }
+      if (!galleryPermRef.current) {
+        if (!deniedToastShownRef.current) {
+          deniedToastShownRef.current = true;
+          Alert.alert(
+            'Gallery save is off',
+            "Photos won't be saved to the iPad gallery — enable in Settings > First Class Glass > Photos.",
+          );
+        }
+        return; // uploads still work; just skip the gallery save
+      }
+      await MediaLibrary.saveToLibraryAsync(uri);
+    } catch (err) {
+      // Non-fatal: a gallery-save failure must not affect capture or upload.
+      console.warn('[gallery-save] failed (non-fatal):', err?.message || err);
+    }
+  };
 
   // Request permission on mount
   useEffect(() => {
@@ -85,6 +117,10 @@ export default function MultiPhotoCamera({ visible, onClose, onUpload, workOrder
         };
 
         setCapturedPhotos(prev => [...prev, newPhoto]);
+
+        // Also save this photo to the device gallery (iOS Photos), in addition to the
+        // CRM upload. Fire-and-forget so it never blocks capture or the later upload.
+        saveToGallery(photo.uri);
       } catch (error) {
         console.error('Error capturing photo:', error);
         Alert.alert('Error', 'Failed to capture photo. Please try again.');
