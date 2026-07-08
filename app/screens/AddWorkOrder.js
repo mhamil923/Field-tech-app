@@ -1,5 +1,5 @@
 // File: app/screens/AddWorkOrder.js
-import React, { useEffect, useState, useMemo, useRef } from 'react';
+import React, { useEffect, useState, useMemo, useRef, useCallback } from 'react';
 import {
   View,
   Text,
@@ -12,13 +12,18 @@ import {
   Modal,
   FlatList,
   Platform,
+  Image,
+  KeyboardAvoidingView,
 } from 'react-native';
-import { useRouter } from 'expo-router';
+import { useRouter, useNavigation } from 'expo-router';
 import * as ImagePicker from 'expo-image-picker';
 import * as ImageManipulator from 'expo-image-manipulator';
 import * as DocumentPicker from 'expo-document-picker';
+import DateTimePicker from '@react-native-community/datetimepicker';
+import { Ionicons } from '@expo/vector-icons';
 
 import api, { getMe } from '../../constants/api';
+import MultiPhotoCamera from '../components/MultiPhotoCamera';
 
 /** Keep in sync with web/server */
 const STATUS_OPTIONS = [
@@ -44,17 +49,32 @@ const toLocalYYYYMMDD = (d = new Date()) =>
   `${d.getFullYear()}-${pad2(d.getMonth() + 1)}-${pad2(d.getDate())}`;
 const toLocalHHMM = (d = new Date()) =>
   `${pad2(d.getHours())}:${pad2(d.getMinutes())}`;
+const fmtSched = (d) =>
+  d
+    ? d.toLocaleString('en-US', {
+        month: 'short',
+        day: 'numeric',
+        hour: 'numeric',
+        minute: '2-digit',
+        hour12: true,
+      })
+    : '';
 
 export default function AddWorkOrder() {
   const router = useRouter();
+  const navigation = useNavigation();
   const [me, setMe] = useState(null);
   const [busy, setBusy] = useState(false);
+  const submitLock = useRef(false);   // single-submit guard (double-tap)
+  const submittedOk = useRef(false);  // let navigation proceed after success
+  const [submitError, setSubmitError] = useState('');
 
   // ── form fields ────────────────────────────────────────────
   const [customer, setCustomer] = useState('');
   const [customerPhone, setCustomerPhone] = useState('');
   const [customerEmail, setCustomerEmail] = useState('');
   const [poNumber, setPoNumber] = useState('');
+  const [referralSource, setReferralSource] = useState('');
 
   // Split location name vs address
   const [siteLocation, setSiteLocation] = useState(''); // location name (e.g., "Panda Express")
@@ -81,14 +101,23 @@ export default function AddWorkOrder() {
   const [status, setStatus] = useState('Needs to be Scheduled');
   const [showStatusPicker, setShowStatusPicker] = useState(false);
 
-  // Scheduled date/time (sent as single scheduledDate)
-  const [scheduledDatePart, setScheduledDatePart] = useState(''); // YYYY-MM-DD
-  const [scheduledTimePart, setScheduledTimePart] = useState(''); // HH:mm
+  // Scheduled date/time — single Date (null = not scheduled). Sent as "YYYY-MM-DDTHH:mm".
+  const [schedDate, setSchedDate] = useState(null);
+  const [showDateTime, setShowDateTime] = useState(false);
+  const [tempDate, setTempDate] = useState(new Date());
 
   // attachments
-  const [photoUri, setPhotoUri] = useState(null);
-  const [workOrderPdfUri, setWorkOrderPdfUri] = useState(null);
-  const [estimatePdfUri, setEstimatePdfUri] = useState(null);
+  const [photos, setPhotos] = useState([]);            // [{ id, uri }]
+  const [showCamera, setShowCamera] = useState(false);
+  const [workOrderPdf, setWorkOrderPdf] = useState(null);  // { uri, name }
+  const [estimatePdf, setEstimatePdf] = useState(null);    // { uri, name }
+
+  // field-to-field keyboard flow
+  const phoneRef = useRef(null);
+  const emailRef = useRef(null);
+  const siteLocRef = useRef(null);
+  const poRef = useRef(null);
+  const referralRef = useRef(null);
 
   useEffect(() => {
     (async () => {
@@ -100,6 +129,30 @@ export default function AddWorkOrder() {
       }
     })();
   }, []);
+
+  // ── Draft guard: warn before losing a half-filled form on back-swipe/back ──
+  const isDirty =
+    [customer, customerPhone, customerEmail, poNumber, referralSource,
+     siteLocation, siteAddress, billingAddress, problemDescription].some((v) => v && v.trim()) ||
+    photos.length > 0 || !!workOrderPdf || !!estimatePdf || !!schedDate;
+  const dirtyRef = useRef(isDirty);
+  dirtyRef.current = isDirty;
+
+  useEffect(() => {
+    const unsub = navigation.addListener('beforeRemove', (e) => {
+      if (!dirtyRef.current || submittedOk.current) return; // nothing to lose
+      e.preventDefault();
+      Alert.alert(
+        'Discard work order?',
+        'You have unsaved changes. Discard this work order?',
+        [
+          { text: 'Keep Editing', style: 'cancel' },
+          { text: 'Discard', style: 'destructive', onPress: () => navigation.dispatch(e.data.action) },
+        ]
+      );
+    });
+    return unsub;
+  }, [navigation]);
 
   // ── helpers ────────────────────────────────────────────────
   const processImageForUpload = async (uri) => {
@@ -123,62 +176,70 @@ export default function AddWorkOrder() {
     const res = await ImagePicker.launchImageLibraryAsync({
       mediaTypes: ImagePicker.MediaTypeOptions.Images,
       quality: 1,
+      allowsMultipleSelection: true,
     });
     if (res.canceled) return;
-    const processed = await processImageForUpload(res.assets[0].uri);
-    setPhotoUri(processed);
+    const assets = res.assets || [];
+    const processed = [];
+    for (const a of assets) {
+      const uri = await processImageForUpload(a.uri);
+      processed.push({ id: `${Date.now()}-${Math.random().toString(36).slice(2)}`, uri });
+    }
+    setPhotos((prev) => [...prev, ...processed]);
   };
 
-  const pickWorkOrderPdf = async () => {
+  // Photos captured via the in-app camera modal (reused from ViewWorkOrder).
+  // For the *create* flow we just collect the URIs into the payload (no upload yet).
+  const onCameraPhotos = useCallback(async (captured) => {
+    const mapped = [];
+    for (const c of captured || []) {
+      const uri = await processImageForUpload(c.uri);
+      mapped.push({ id: c.id || `${Date.now()}-${Math.random().toString(36).slice(2)}`, uri });
+    }
+    setPhotos((prev) => [...prev, ...mapped]);
+  }, []);
+
+  const removePhoto = (id) => setPhotos((prev) => prev.filter((p) => p.id !== id));
+
+  const pickPdf = async (setter) => {
     const res = await DocumentPicker.getDocumentAsync({
       type: 'application/pdf',
       multiple: false,
       copyToCacheDirectory: true,
     });
     if (res.canceled || !res.assets?.length) return;
-    setWorkOrderPdfUri(res.assets[0].uri);
-  };
-
-  const pickEstimatePdf = async () => {
-    const res = await DocumentPicker.getDocumentAsync({
-      type: 'application/pdf',
-      multiple: false,
-      copyToCacheDirectory: true,
-    });
-    if (res.canceled || !res.assets?.length) return;
-    setEstimatePdfUri(res.assets[0].uri);
+    const a = res.assets[0];
+    setter({ uri: a.uri, name: a.name || 'document.pdf' });
   };
 
   const validate = () => {
     const missing = [];
     if (!customer.trim()) missing.push('Customer');
-    if (!billingAddress.trim()) missing.push('Billing Address');
-    if (!problemDescription.trim()) missing.push('Problem Description');
     if (!siteLocation.trim()) missing.push('Site Location (name)');
     if (!siteAddress.trim()) missing.push('Site Address');
+    if (!billingAddress.trim()) missing.push('Billing Address');
+    if (!problemDescription.trim()) missing.push('Problem Description');
 
     if (missing.length) {
+      setSubmitError(`Please fill required: ${missing.join(', ')}`);
       Alert.alert('Missing info', `Please fill required: ${missing.join(', ')}`);
-      return false;
-    }
-
-    // If one of date/time is set, require both
-    if ((scheduledDatePart && !scheduledTimePart) || (!scheduledDatePart && scheduledTimePart)) {
-      Alert.alert('Incomplete time', 'Please set both Scheduled Date and Time, or leave both empty.');
       return false;
     }
     return true;
   };
 
   const submit = async () => {
+    if (submitLock.current || busy) return; // double-tap guard
+    setSubmitError('');
     if (!validate()) return;
 
-    // Build scheduledDate string like "YYYY-MM-DDTHH:mm"
+    // Build scheduledDate string like "YYYY-MM-DDTHH:mm" (unchanged payload shape)
     let scheduledDate = '';
-    if (scheduledDatePart && scheduledTimePart) {
-      scheduledDate = `${scheduledDatePart}T${scheduledTimePart}`;
+    if (schedDate) {
+      scheduledDate = `${toLocalYYYYMMDD(schedDate)}T${toLocalHHMM(schedDate)}`;
     }
 
+    submitLock.current = true;
     setBusy(true);
     try {
       const form = new FormData();
@@ -189,189 +250,324 @@ export default function AddWorkOrder() {
 
       form.append('status', status);
       form.append('poNumber', poNumber.trim());
+      form.append('referralSource', referralSource.trim());
       form.append('siteLocation', siteLocation.trim()); // name
       form.append('siteAddress', siteAddress.trim());   // address
       form.append('billingAddress', billingAddress);
       form.append('problemDescription', problemDescription);
 
       if (scheduledDate) {
-        // server normalizes this like the web app’s <input type="datetime-local">
+        // server normalizes this like the web app's <input type="datetime-local">
         form.append('scheduledDate', scheduledDate);
       }
 
       // Use the SAME field names as the web CRM so the backend routes are consistent
-      if (workOrderPdfUri) {
+      if (workOrderPdf) {
         form.append('workOrderPdf', {
-          uri: workOrderPdfUri,
+          uri: workOrderPdf.uri,
           name: `workorder-${Date.now()}.pdf`,
           type: 'application/pdf',
         });
       }
-      if (estimatePdfUri) {
+      if (estimatePdf) {
         form.append('estimatePdf', {
-          uri: estimatePdfUri,
+          uri: estimatePdf.uri,
           name: `estimate-${Date.now()}.pdf`,
           type: 'application/pdf',
         });
       }
-      if (photoUri) {
+      // Multiple photos: backend upload.any() + images filter stores all (first ->
+      // attachments, rest appended to photoPath). Same field name as before.
+      photos.forEach((p, i) => {
         form.append('photoFile', {
-          uri: photoUri,
-          name: `photo-${Date.now()}.jpg`,
+          uri: p.uri,
+          name: `photo-${Date.now()}-${i}.jpg`,
           type: 'image/jpeg',
         });
-      }
+      });
 
       await api.post('/work-orders', form, {
         headers: { 'Content-Type': 'multipart/form-data' },
       });
 
+      submittedOk.current = true; // allow navigation without discard prompt
       Alert.alert('Success', 'Work order created.');
       router.back();
     } catch (e) {
-      Alert.alert('Error', e?.response?.data?.error || e?.message || 'Failed to create work order.');
+      setSubmitError(e?.response?.data?.error || e?.message || 'Failed to create work order.');
     } finally {
       setBusy(false);
+      submitLock.current = false;
     }
   };
 
-  // Prefill date/time with “now” if user taps quick set
-  const quickSetNow = () => {
-    const now = new Date();
-    setScheduledDatePart(toLocalYYYYMMDD(now));
-    setScheduledTimePart(toLocalHHMM(now));
+  // ── date/time picker handlers ──────────────────────────────
+  const openDateTime = () => {
+    setTempDate(schedDate || new Date());
+    setShowDateTime(true);
+  };
+  const quickSetNow = () => setSchedDate(new Date());
+  const clearSched = () => setSchedDate(null);
+
+  // Toggle handlers for the "Same as" checkboxes (mutually exclusive)
+  const toggleSiteFromBilling = () => {
+    setSiteFromBilling((prev) => {
+      const next = !prev;
+      if (next) { setBillingFromSite(false); setSiteAddress(billingAddress); }
+      else { setSiteAddress(''); }
+      return next;
+    });
+  };
+  const toggleBillingFromSite = () => {
+    setBillingFromSite((prev) => {
+      const next = !prev;
+      if (next) { setSiteFromBilling(false); setBillingAddress(siteAddress); }
+      else { setBillingAddress(''); }
+      return next;
+    });
   };
 
   return (
-    <ScrollView contentContainerStyle={styles.form} keyboardShouldPersistTaps="handled">
-      <Text style={styles.title}>Add Work Order</Text>
-
-      {/* Customer block */}
-      <LabeledInput required label="Customer Name" value={customer} onChangeText={setCustomer} />
-      <LabeledInput
-        label="Customer Phone (optional)"
-        value={customerPhone}
-        onChangeText={setCustomerPhone}
-        placeholder="(###) ###-####"
-        keyboardType="phone-pad"
-      />
-      <LabeledInput
-        label="Customer Email (optional)"
-        value={customerEmail}
-        onChangeText={setCustomerEmail}
-        keyboardType="email-address"
-        autoCapitalize="none"
-      />
-
-      {/* PO */}
-      <LabeledInput label="PO Number (optional)" value={poNumber} onChangeText={setPoNumber} placeholder="Optional" />
-
-      {/* Site Location Name — with "Same as billing address" toggle inline */}
-      <LabeledInput
-        required
-        label="Site Location (name)"
-        value={siteLocation}
-        onChangeText={setSiteLocation}
-        placeholder="e.g., Panda Express"
-        headerRight={
-          <TouchableOpacity
-            onPress={() => {
-              setSiteFromBilling((prev) => {
-                const next = !prev;
-                if (next) {
-                  setBillingFromSite(false);
-                  setSiteAddress(billingAddress);
-                } else {
-                  setSiteAddress('');
-                }
-                return next;
-              });
-            }}
-            style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}
-          >
-            <View
-              style={{
-                width: 18,
-                height: 18,
-                borderRadius: 4,
-                borderWidth: 2,
-                borderColor: siteFromBilling ? '#3b82f6' : '#9ca3af',
-                backgroundColor: siteFromBilling ? '#3b82f6' : 'transparent',
-                alignItems: 'center',
-                justifyContent: 'center',
-              }}
-            >
-              {siteFromBilling && <Text style={{ color: '#fff', fontSize: 11, fontWeight: 'bold' }}>✓</Text>}
-            </View>
-            <Text style={{ color: '#6b7280', fontSize: 12 }}>Same as billing address</Text>
-          </TouchableOpacity>
-        }
-      />
-
-      {/* Site Address with Google Places autocomplete */}
-      <PlacesAutocompleteInput
-        label="Site Address"
-        value={siteAddress}
-        onChangeValue={setSiteAddress}
-        googleKey={GOOGLE_PLACES_KEY}
-        required
-        editable={!siteFromBilling}
-      />
-
-      {/* Billing Address — with "Same as site address" toggle inline */}
-      <LabeledInput
-        required
-        label="Billing Address"
-        value={billingAddress}
-        onChangeText={setBillingAddress}
-        multiline
-        editable={!billingFromSite}
-        style={billingFromSite ? { backgroundColor: '#f3f4f6', color: '#6b7280' } : null}
-        headerRight={
-          <TouchableOpacity
-            onPress={() => {
-              setBillingFromSite((prev) => {
-                const next = !prev;
-                if (next) {
-                  setSiteFromBilling(false);
-                  setBillingAddress(siteAddress);
-                } else {
-                  setBillingAddress('');
-                }
-                return next;
-              });
-            }}
-            style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}
-          >
-            <View
-              style={{
-                width: 18,
-                height: 18,
-                borderRadius: 4,
-                borderWidth: 2,
-                borderColor: billingFromSite ? '#3b82f6' : '#9ca3af',
-                backgroundColor: billingFromSite ? '#3b82f6' : 'transparent',
-                alignItems: 'center',
-                justifyContent: 'center',
-              }}
-            >
-              {billingFromSite && <Text style={{ color: '#fff', fontSize: 11, fontWeight: 'bold' }}>✓</Text>}
-            </View>
-            <Text style={{ color: '#6b7280', fontSize: 12 }}>Same as site address</Text>
-          </TouchableOpacity>
-        }
-      />
-      <LabeledInput required label="Problem Description" value={problemDescription} onChangeText={setProblemDescription} multiline />
-
-      {/* Status picker */}
-      <Text style={styles.label}>Status</Text>
-      <TouchableOpacity
-        onPress={() => setShowStatusPicker(true)}
-        style={[styles.input, { justifyContent: 'center', minHeight: 48 }]}
+    <View style={styles.screen}>
+      <KeyboardAvoidingView
+        style={{ flex: 1 }}
+        behavior={Platform.OS === 'ios' ? 'padding' : undefined}
       >
-        <Text style={{ color: '#111827' }}>{status}</Text>
-      </TouchableOpacity>
+        <ScrollView
+          contentContainerStyle={styles.form}
+          keyboardShouldPersistTaps="handled"
+          keyboardDismissMode="interactive"
+          showsVerticalScrollIndicator={false}
+        >
+          <Text style={styles.title}>Add Work Order</Text>
 
+          {/* ── CUSTOMER ─────────────────────────────── */}
+          <Card title="Customer" icon="person-outline">
+            <LabeledInput
+              required
+              label="Customer Name"
+              value={customer}
+              onChangeText={setCustomer}
+              placeholder="Business or person"
+              returnKeyType="next"
+              onSubmitEditing={() => phoneRef.current?.focus()}
+              blurOnSubmit={false}
+            />
+            <LabeledInput
+              ref={phoneRef}
+              label="Phone"
+              value={customerPhone}
+              onChangeText={setCustomerPhone}
+              placeholder="(###) ###-####"
+              keyboardType="phone-pad"
+              returnKeyType="next"
+              onSubmitEditing={() => emailRef.current?.focus()}
+              blurOnSubmit={false}
+            />
+            <LabeledInput
+              ref={emailRef}
+              label="Email"
+              value={customerEmail}
+              onChangeText={setCustomerEmail}
+              placeholder="name@example.com"
+              keyboardType="email-address"
+              autoCapitalize="none"
+              autoCorrect={false}
+              returnKeyType="done"
+              last
+            />
+          </Card>
+
+          {/* ── LOCATION ─────────────────────────────── */}
+          <Card title="Location" icon="location-outline">
+            <LabeledInput
+              ref={siteLocRef}
+              required
+              label="Site Location (name)"
+              value={siteLocation}
+              onChangeText={setSiteLocation}
+              placeholder="e.g., Panda Express"
+              returnKeyType="next"
+            />
+
+            <View style={{ marginBottom: 12 }}>
+              <View style={styles.rowBetween}>
+                <FieldLabel required>Site Address</FieldLabel>
+                <CheckRow
+                  checked={siteFromBilling}
+                  label="Same as billing"
+                  onPress={toggleSiteFromBilling}
+                />
+              </View>
+              <PlacesAutocompleteInput
+                value={siteAddress}
+                onChangeValue={setSiteAddress}
+                googleKey={GOOGLE_PLACES_KEY}
+                editable={!siteFromBilling}
+              />
+            </View>
+
+            <View style={{ marginBottom: 4 }}>
+              <View style={styles.rowBetween}>
+                <FieldLabel required>Billing Address</FieldLabel>
+                <CheckRow
+                  checked={billingFromSite}
+                  label="Same as site"
+                  onPress={toggleBillingFromSite}
+                />
+              </View>
+              <TextInput
+                style={[
+                  styles.input,
+                  { height: 84, textAlignVertical: 'top' },
+                  billingFromSite && styles.inputDisabled,
+                ]}
+                value={billingAddress}
+                onChangeText={setBillingAddress}
+                editable={!billingFromSite}
+                multiline
+                placeholder="Street, City, State ZIP"
+                placeholderTextColor="#9ca3af"
+              />
+            </View>
+          </Card>
+
+          {/* ── JOB ──────────────────────────────────── */}
+          <Card title="Job" icon="construct-outline">
+            <LabeledInput
+              required
+              label="Problem Description"
+              value={problemDescription}
+              onChangeText={setProblemDescription}
+              placeholder="What needs to be done?"
+              multiline
+            />
+            <LabeledInput
+              ref={poRef}
+              label="PO Number"
+              value={poNumber}
+              onChangeText={setPoNumber}
+              placeholder="Optional"
+              autoCapitalize="characters"
+              autoCorrect={false}
+              returnKeyType="next"
+              onSubmitEditing={() => referralRef.current?.focus()}
+              blurOnSubmit={false}
+            />
+            <LabeledInput
+              ref={referralRef}
+              label="Referral Source"
+              value={referralSource}
+              onChangeText={setReferralSource}
+              placeholder="How did they hear about us?"
+              autoCorrect={false}
+              returnKeyType="done"
+              last
+            />
+          </Card>
+
+          {/* ── SCHEDULE ─────────────────────────────── */}
+          <Card title="Schedule" icon="calendar-outline">
+            <FieldLabel>Status</FieldLabel>
+            <TouchableOpacity
+              onPress={() => setShowStatusPicker(true)}
+              style={[styles.input, styles.selectRow]}
+            >
+              <Text style={styles.selectText}>{status}</Text>
+              <Ionicons name="chevron-down" size={18} color="#6b7280" />
+            </TouchableOpacity>
+
+            <View style={{ height: 12 }} />
+
+            <FieldLabel>Scheduled Date &amp; Time</FieldLabel>
+            <View style={styles.rowGap}>
+              <TouchableOpacity onPress={openDateTime} style={[styles.input, styles.selectRow, { flex: 1 }]}>
+                <Text style={[styles.selectText, !schedDate && { color: '#9ca3af' }]}>
+                  {schedDate ? fmtSched(schedDate) : 'Not scheduled'}
+                </Text>
+                <Ionicons name="calendar-outline" size={18} color="#6b7280" />
+              </TouchableOpacity>
+              <TouchableOpacity onPress={quickSetNow} style={[styles.chip, { backgroundColor: '#22c55e' }]}>
+                <Text style={styles.chipText}>Now</Text>
+              </TouchableOpacity>
+              {schedDate ? (
+                <TouchableOpacity onPress={clearSched} style={[styles.chip, { backgroundColor: '#94a3b8' }]}>
+                  <Text style={styles.chipText}>Clear</Text>
+                </TouchableOpacity>
+              ) : null}
+            </View>
+          </Card>
+
+          {/* ── ATTACHMENTS ──────────────────────────── */}
+          <Card title="Attachments" icon="attach-outline">
+            <AttachRow
+              label="Work Order PDF"
+              file={workOrderPdf}
+              onPick={() => pickPdf(setWorkOrderPdf)}
+              onRemove={() => setWorkOrderPdf(null)}
+            />
+            <AttachRow
+              label="Estimate PDF"
+              file={estimatePdf}
+              onPick={() => pickPdf(setEstimatePdf)}
+              onRemove={() => setEstimatePdf(null)}
+              helper="Appears under Estimates on the Work Order."
+            />
+
+            <FieldLabel>Photos</FieldLabel>
+            <View style={styles.rowGap}>
+              <TouchableOpacity onPress={() => setShowCamera(true)} style={[styles.attachBtn, styles.photoBtn]}>
+                <Ionicons name="camera" size={18} color="#fff" />
+                <Text style={styles.attachBtnText}>Take Photo</Text>
+              </TouchableOpacity>
+              <TouchableOpacity onPress={pickPhoto} style={[styles.attachBtn, styles.photoBtnAlt]}>
+                <Ionicons name="images-outline" size={18} color="#fff" />
+                <Text style={styles.attachBtnText}>Library</Text>
+              </TouchableOpacity>
+            </View>
+
+            {photos.length > 0 && (
+              <View style={styles.thumbGrid}>
+                {photos.map((p) => (
+                  <View key={p.id} style={styles.thumbWrap}>
+                    <Image source={{ uri: p.uri }} style={styles.thumb} />
+                    <TouchableOpacity style={styles.thumbX} onPress={() => removePhoto(p.id)}>
+                      <Ionicons name="close" size={14} color="#fff" />
+                    </TouchableOpacity>
+                  </View>
+                ))}
+              </View>
+            )}
+          </Card>
+
+          {submitError ? (
+            <View style={styles.errorBanner}>
+              <Ionicons name="alert-circle" size={18} color="#b91c1c" />
+              <Text style={styles.errorText}>{submitError}</Text>
+            </View>
+          ) : null}
+
+          <View style={{ height: 12 }} />
+        </ScrollView>
+
+        {/* ── Sticky submit ─────────────────────────── */}
+        <View style={styles.footer}>
+          <TouchableOpacity
+            disabled={busy}
+            onPress={submit}
+            style={[styles.submit, busy && { opacity: 0.6 }]}
+            activeOpacity={0.85}
+          >
+            {busy ? (
+              <ActivityIndicator color="#fff" />
+            ) : (
+              <Text style={styles.submitText}>Add Work Order</Text>
+            )}
+          </TouchableOpacity>
+        </View>
+      </KeyboardAvoidingView>
+
+      {/* Status picker modal */}
       <Modal visible={showStatusPicker} transparent animationType="fade" onRequestClose={() => setShowStatusPicker(false)}>
         <View style={styles.modalOverlay}>
           <View style={styles.modalCard}>
@@ -398,72 +594,122 @@ export default function AddWorkOrder() {
         </View>
       </Modal>
 
-      {/* Scheduled date/time */}
-      <Text style={[styles.label, { marginTop: 8 }]}>Scheduled Date & Time (optional)</Text>
-      <View style={{ flexDirection: 'row', gap: 10 }}>
-        <TextInput
-          style={[styles.input, { flex: 1 }]}
-          placeholder="YYYY-MM-DD"
-          value={scheduledDatePart}
-          onChangeText={setScheduledDatePart}
-          inputMode="numeric"
-          autoCapitalize="none"
-        />
-        <TextInput
-          style={[styles.input, { width: 120 }]}
-          placeholder="HH:mm"
-          value={scheduledTimePart}
-          onChangeText={setScheduledTimePart}
-          inputMode="numeric"
-          autoCapitalize="none"
-        />
-        <TouchableOpacity onPress={quickSetNow} style={[styles.btn, { backgroundColor: '#22c55e' }]}>
-          <Text style={styles.btnText}>Now</Text>
-        </TouchableOpacity>
-      </View>
+      {/* Native date & time picker modal */}
+      <Modal visible={showDateTime} transparent animationType="fade" onRequestClose={() => setShowDateTime(false)}>
+        <View style={styles.modalOverlay}>
+          <View style={styles.modalCard}>
+            <Text style={styles.modalTitle}>Scheduled Date &amp; Time</Text>
+            <DateTimePicker
+              value={tempDate}
+              mode="datetime"
+              display={Platform.OS === 'ios' ? 'spinner' : 'default'}
+              onChange={(e, d) => {
+                if (d) setTempDate(d);
+                if (Platform.OS === 'android') {
+                  setShowDateTime(false);
+                  if (e.type === 'set' && d) setSchedDate(d);
+                }
+              }}
+            />
+            <View style={[styles.rowGap, { marginTop: 8 }]}>
+              <TouchableOpacity style={[styles.modalClose, { flex: 1, backgroundColor: '#6b7280' }]} onPress={() => setShowDateTime(false)}>
+                <Text style={{ color: '#fff', fontWeight: '700' }}>Cancel</Text>
+              </TouchableOpacity>
+              <TouchableOpacity
+                style={[styles.modalClose, { flex: 1 }]}
+                onPress={() => { setSchedDate(tempDate); setShowDateTime(false); }}
+              >
+                <Text style={{ color: '#fff', fontWeight: '700' }}>Set</Text>
+              </TouchableOpacity>
+            </View>
+          </View>
+        </View>
+      </Modal>
 
-      {/* Attachments */}
-      <Text style={[styles.label, { marginTop: 12 }]}>Upload Work Order PDF</Text>
-      <TouchableOpacity onPress={pickWorkOrderPdf} style={[styles.btn, styles.pdfBtn]}>
-        <Text style={styles.btnText}>{workOrderPdfUri ? 'Change PDF' : 'Choose PDF'}</Text>
-      </TouchableOpacity>
-
-      <Text style={[styles.label, { marginTop: 10 }]}>Upload Estimate PDF</Text>
-      <TouchableOpacity onPress={pickEstimatePdf} style={[styles.btn, styles.pdfBtn]}>
-        <Text style={styles.btnText}>{estimatePdfUri ? 'Change Estimate PDF' : 'Choose Estimate PDF'}</Text>
-      </TouchableOpacity>
-      <Text style={{ color: '#0f172a', marginTop: 4 }}>
-        This will appear under <Text style={{ fontWeight: '700' }}>Estimates</Text> on the Work Order.
-      </Text>
-
-      <Text style={[styles.label, { marginTop: 10 }]}>Upload Photo</Text>
-      <TouchableOpacity onPress={pickPhoto} style={[styles.btn, styles.photoBtn]}>
-        <Text style={styles.btnText}>{photoUri ? 'Change Photo' : 'Choose Photo'}</Text>
-      </TouchableOpacity>
-
-      <TouchableOpacity disabled={busy} onPress={submit} style={[styles.submit, busy && { opacity: 0.7 }]}>
-        <Text style={styles.submitText}>{busy ? 'Saving…' : 'Add Work Order'}</Text>
-      </TouchableOpacity>
-    </ScrollView>
+      {/* In-app camera (reused multi-photo modal) */}
+      <MultiPhotoCamera
+        visible={showCamera}
+        onClose={() => setShowCamera(false)}
+        onUpload={onCameraPhotos}
+        workOrderId={null}
+      />
+    </View>
   );
 }
 
-/** Simple labeled input */
-function LabeledInput({ label, required, multiline, style, headerRight, ...props }) {
+/** Card section wrapper */
+function Card({ title, icon, children }) {
   return (
-    <View style={{ marginBottom: 14 }}>
-      <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginBottom: 4 }}>
-        <Text style={styles.label}>
-          {label} {required ? <Text style={{ color: '#ef4444' }}>*</Text> : null}
-        </Text>
-        {headerRight}
+    <View style={styles.card}>
+      <View style={styles.cardHeader}>
+        {icon ? <Ionicons name={icon} size={18} color="#3D5A80" /> : null}
+        <Text style={styles.cardTitle}>{title}</Text>
       </View>
+      {children}
+    </View>
+  );
+}
+
+/** Field label with optional required asterisk */
+function FieldLabel({ children, required }) {
+  return (
+    <Text style={styles.label}>
+      {children} {required ? <Text style={{ color: '#ef4444' }}>*</Text> : null}
+    </Text>
+  );
+}
+
+/** Checkbox row (compact, for "Same as" toggles) */
+function CheckRow({ checked, label, onPress }) {
+  return (
+    <TouchableOpacity onPress={onPress} style={styles.checkRow} hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}>
+      <View style={[styles.checkbox, checked && styles.checkboxOn]}>
+        {checked && <Ionicons name="checkmark" size={12} color="#fff" />}
+      </View>
+      <Text style={styles.checkLabel}>{label}</Text>
+    </TouchableOpacity>
+  );
+}
+
+/** Simple labeled input (forwardRef for keyboard flow) */
+const LabeledInput = React.forwardRef(function LabeledInput(
+  { label, required, multiline, style, last, ...props },
+  ref
+) {
+  return (
+    <View style={{ marginBottom: last ? 2 : 12 }}>
+      <FieldLabel required={required}>{label}</FieldLabel>
       <TextInput
-        style={[styles.input, multiline && { height: 110, textAlignVertical: 'top' }, style]}
-        placeholder={label}
+        ref={ref}
+        style={[styles.input, multiline && { height: 96, textAlignVertical: 'top' }, style]}
+        placeholderTextColor="#9ca3af"
         multiline={!!multiline}
         {...props}
       />
+    </View>
+  );
+});
+
+/** Attachment picker row with filename chip + remove */
+function AttachRow({ label, file, onPick, onRemove, helper }) {
+  return (
+    <View style={{ marginBottom: 12 }}>
+      <FieldLabel>{label}</FieldLabel>
+      {file ? (
+        <View style={styles.fileChip}>
+          <Ionicons name="document-text-outline" size={18} color="#3D5A80" />
+          <Text style={styles.fileName} numberOfLines={1}>{file.name || 'document.pdf'}</Text>
+          <TouchableOpacity onPress={onRemove} hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}>
+            <Ionicons name="close-circle" size={20} color="#94a3b8" />
+          </TouchableOpacity>
+        </View>
+      ) : (
+        <TouchableOpacity onPress={onPick} style={[styles.attachBtn, styles.pdfBtn]}>
+          <Ionicons name="cloud-upload-outline" size={18} color="#fff" />
+          <Text style={styles.attachBtnText}>Choose PDF</Text>
+        </TouchableOpacity>
+      )}
+      {helper ? <Text style={styles.helper}>{helper}</Text> : null}
     </View>
   );
 }
@@ -471,10 +717,9 @@ function LabeledInput({ label, required, multiline, style, headerRight, ...props
 /**
  * Google Places Autocomplete Input
  * - Uses Places v1, falls back to legacy.
- * - FIX: keep form state (`onChangeValue`) in sync on each keystroke,
- *   so validation sees the address even if the user doesn’t tap a suggestion.
+ * - Keeps form state (`onChangeValue`) in sync on each keystroke.
  */
-function PlacesAutocompleteInput({ label, value, onChangeValue, googleKey, required, editable = true }) {
+function PlacesAutocompleteInput({ value, onChangeValue, googleKey, editable = true }) {
   const [query, setQuery] = useState(value || '');
   const [predictions, setPredictions] = useState([]); // [{place_id, description}]
   const [loading, setLoading] = useState(false);
@@ -555,7 +800,7 @@ function PlacesAutocompleteInput({ label, value, onChangeValue, googleKey, requi
 
   const onChangeText = (text) => {
     setQuery(text);
-    onChangeValue?.(text); // ← keep parent state in sync while typing (fixes false "not filled out")
+    onChangeValue?.(text); // keep parent state in sync while typing
     setShowList(true);
     if (debounceRef.current) clearTimeout(debounceRef.current);
     debounceRef.current = setTimeout(() => runAutocomplete(text), 250);
@@ -590,7 +835,7 @@ function PlacesAutocompleteInput({ label, value, onChangeValue, googleKey, requi
       if (!formatted) formatted = await fetchDetailsLegacy(p.place_id);
       const addr = formatted || p.description || '';
       setQuery(addr);
-      onChangeValue?.(addr); // also update parent state
+      onChangeValue?.(addr);
     } catch {
       const addr = p.description || '';
       setQuery(addr);
@@ -601,13 +846,10 @@ function PlacesAutocompleteInput({ label, value, onChangeValue, googleKey, requi
   };
 
   return (
-    <View style={{ marginBottom: 14, zIndex: Platform.OS === 'android' ? 10 : undefined }}>
-      <Text style={styles.label}>
-        {label} {required ? <Text style={{ color: '#ef4444' }}>*</Text> : null}
-      </Text>
+    <View style={{ zIndex: Platform.OS === 'android' ? 10 : undefined }}>
       <View style={{ position: 'relative' }}>
         <TextInput
-          style={[styles.input, !editable && { backgroundColor: '#f3f4f6', color: '#6b7280' }]}
+          style={[styles.input, !editable && styles.inputDisabled]}
           value={query}
           onChangeText={onChangeText}
           onFocus={() => {
@@ -616,11 +858,11 @@ function PlacesAutocompleteInput({ label, value, onChangeValue, googleKey, requi
             if (query && query.length >= 3) runAutocomplete(query);
           }}
           onBlur={() => {
-            // ensure parent value is in sync even if user never chose a suggestion
             onChangeValue?.(query);
             setShowList(false);
           }}
           placeholder="Start typing address…"
+          placeholderTextColor="#9ca3af"
           autoCorrect={false}
           autoCapitalize="none"
           editable={editable}
@@ -650,44 +892,129 @@ function PlacesAutocompleteInput({ label, value, onChangeValue, googleKey, requi
 }
 
 const styles = StyleSheet.create({
+  screen: { flex: 1, backgroundColor: '#F1F5F9' },
   form: {
     padding: 16,
-    backgroundColor: '#F1F5F9',
-    paddingBottom: 48,
+    paddingBottom: 24,
   },
   title: {
-    fontSize: 22,
+    fontSize: 24,
     fontWeight: '800',
     color: '#0f172a',
-    textAlign: 'center',
-    marginBottom: 12,
+    marginBottom: 14,
   },
-  label: { color: '#0f172a', marginBottom: 6, fontWeight: '700' },
+
+  // Card
+  card: {
+    backgroundColor: '#fff',
+    borderRadius: 16,
+    padding: 16,
+    marginBottom: 14,
+    shadowColor: '#0f172a',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.06,
+    shadowRadius: 8,
+    elevation: 2,
+  },
+  cardHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    marginBottom: 14,
+  },
+  cardTitle: {
+    fontSize: 13,
+    fontWeight: '800',
+    color: '#3D5A80',
+    textTransform: 'uppercase',
+    letterSpacing: 0.6,
+  },
+
+  label: { color: '#334155', marginBottom: 6, fontWeight: '700', fontSize: 13 },
+  helper: { color: '#94a3b8', fontSize: 12, marginTop: 6 },
   input: {
     backgroundColor: '#fff',
-    borderRadius: 8,
-    padding: 12,
+    borderRadius: 10,
+    paddingHorizontal: 12,
+    paddingVertical: 12,
+    minHeight: 46,
     borderWidth: 1,
     borderColor: '#e2e8f0',
+    color: '#0f172a',
+    fontSize: 15,
   },
+  inputDisabled: { backgroundColor: '#f1f5f9', color: '#94a3b8' },
 
-  btn: {
-    padding: 12,
-    borderRadius: 8,
-    alignItems: 'center',
+  rowBetween: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
+  rowGap: { flexDirection: 'row', alignItems: 'center', gap: 10 },
+
+  selectRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
+  selectText: { color: '#0f172a', fontSize: 15 },
+
+  // "Same as" checkbox
+  checkRow: { flexDirection: 'row', alignItems: 'center', gap: 6, marginBottom: 6 },
+  checkbox: {
+    width: 20, height: 20, borderRadius: 5, borderWidth: 2, borderColor: '#cbd5e1',
+    alignItems: 'center', justifyContent: 'center', backgroundColor: '#fff',
   },
-  pdfBtn: { backgroundColor: '#6b7280' },
+  checkboxOn: { backgroundColor: '#3b82f6', borderColor: '#3b82f6' },
+  checkLabel: { color: '#64748b', fontSize: 12, fontWeight: '600' },
+
+  // chips (Now / Clear)
+  chip: { paddingHorizontal: 16, height: 46, borderRadius: 10, alignItems: 'center', justifyContent: 'center' },
+  chipText: { color: '#fff', fontWeight: '800' },
+
+  // attachments
+  attachBtn: {
+    flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 8,
+    paddingVertical: 12, paddingHorizontal: 14, borderRadius: 10, flex: 1,
+  },
+  attachBtnText: { color: '#fff', fontWeight: '800' },
+  pdfBtn: { backgroundColor: '#64748b', flex: 0, alignSelf: 'flex-start', paddingHorizontal: 20 },
   photoBtn: { backgroundColor: '#0ea5e9' },
-  btnText: { color: '#fff', fontWeight: '800' },
+  photoBtnAlt: { backgroundColor: '#3D5A80' },
 
-  submit: {
-    marginTop: 16,
-    backgroundColor: '#3D5A80',
-    padding: 14,
-    borderRadius: 10,
-    alignItems: 'center',
+  fileChip: {
+    flexDirection: 'row', alignItems: 'center', gap: 10,
+    backgroundColor: '#eef2f7', borderRadius: 10, paddingHorizontal: 12, paddingVertical: 10,
+    borderWidth: 1, borderColor: '#e2e8f0',
   },
-  submitText: { color: '#fff', fontWeight: '900' },
+  fileName: { flex: 1, color: '#0f172a', fontWeight: '600' },
+
+  thumbGrid: { flexDirection: 'row', flexWrap: 'wrap', gap: 10, marginTop: 12 },
+  thumbWrap: { position: 'relative' },
+  thumb: { width: 84, height: 84, borderRadius: 10, backgroundColor: '#e2e8f0' },
+  thumbX: {
+    position: 'absolute', top: -6, right: -6, backgroundColor: '#ef4444',
+    width: 22, height: 22, borderRadius: 11, alignItems: 'center', justifyContent: 'center',
+    borderWidth: 2, borderColor: '#fff',
+  },
+
+  // error banner
+  errorBanner: {
+    flexDirection: 'row', alignItems: 'center', gap: 8,
+    backgroundColor: '#fef2f2', borderColor: '#fecaca', borderWidth: 1,
+    borderRadius: 10, padding: 12, marginTop: 4,
+  },
+  errorText: { color: '#b91c1c', fontWeight: '600', flex: 1 },
+
+  // sticky footer
+  footer: {
+    padding: 12,
+    paddingBottom: Platform.OS === 'ios' ? 24 : 12,
+    backgroundColor: '#ffffff',
+    borderTopWidth: 1,
+    borderTopColor: '#e2e8f0',
+  },
+  submit: {
+    backgroundColor: '#3D5A80',
+    paddingVertical: 16,
+    borderRadius: 12,
+    alignItems: 'center',
+    justifyContent: 'center',
+    minHeight: 54,
+  },
+  submitText: { color: '#fff', fontWeight: '900', fontSize: 16 },
 
   // Autocomplete styles
   autocompleteList: {
@@ -710,14 +1037,8 @@ const styles = StyleSheet.create({
     borderBottomWidth: 1,
     borderBottomColor: '#f1f5f9',
   },
-  autocompleteText: {
-    color: '#111827',
-  },
-  autocompleteLoading: {
-    position: 'absolute',
-    right: 10,
-    top: 12,
-  },
+  autocompleteText: { color: '#111827' },
+  autocompleteLoading: { position: 'absolute', right: 10, top: 12 },
 
   // Status picker modal
   modalOverlay: {
@@ -728,15 +1049,15 @@ const styles = StyleSheet.create({
   },
   modalCard: {
     backgroundColor: '#fff',
-    borderRadius: 10,
-    padding: 14,
+    borderRadius: 14,
+    padding: 16,
     maxHeight: '70%',
   },
-  modalTitle: { fontSize: 18, fontWeight: '700', marginBottom: 8, color: '#0f172a' },
+  modalTitle: { fontSize: 18, fontWeight: '700', marginBottom: 10, color: '#0f172a' },
   statusOption: {
-    paddingVertical: 10,
+    paddingVertical: 12,
     paddingHorizontal: 12,
-    borderRadius: 6,
+    borderRadius: 8,
     borderWidth: 1,
     borderColor: '#e5e7eb',
     marginBottom: 8,
@@ -746,9 +1067,9 @@ const styles = StyleSheet.create({
   statusTextActive: { color: '#fff' },
   modalClose: {
     marginTop: 6,
-    backgroundColor: '#111827',
-    padding: 10,
-    borderRadius: 8,
+    backgroundColor: '#3D5A80',
+    padding: 12,
+    borderRadius: 10,
     alignItems: 'center',
   },
 });
