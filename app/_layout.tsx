@@ -8,6 +8,43 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 import { CRM } from '@/constants/Colors';
 import api from '../constants/api';
 
+type MeType = { id?: number; username?: string; name?: string; role?: string };
+
+// Session-level cache for the current user. The header used to fetch /auth/me on
+// every navigation (dep [pathname]); this fetches it once per session instead.
+// Only a successful lookup is cached — a missing token short-circuits to null with
+// NO network call and NO caching, so the logged-out -> logged-in transition (and
+// logout) naturally trigger a fresh fetch without refetching on every tab switch.
+let meCache: MeType | null = null;
+let meLoaded = false; // true only once a real user has been cached
+let meInFlight: Promise<MeType | null> | null = null;
+
+async function loadMe(): Promise<MeType | null> {
+  if (meLoaded) return meCache;
+  if (meInFlight) return meInFlight;
+  meInFlight = (async () => {
+    try {
+      const token = await AsyncStorage.getItem('jwt');
+      if (!token) return null; // logged out: no network, don't cache
+      const res = await api.get('/auth/me');
+      meCache = res?.data || null;
+      meLoaded = !!meCache; // cache only a real result
+      return meCache;
+    } catch {
+      return null; // error (e.g. offline): don't cache, allow a later retry
+    } finally {
+      meInFlight = null;
+    }
+  })();
+  return meInFlight;
+}
+
+function clearMeCache() {
+  meCache = null;
+  meLoaded = false;
+  meInFlight = null;
+}
+
 function Header() {
   const router = useRouter();
   const pathname = (usePathname() || '').replace(/\/+$/, '') || '/';
@@ -44,31 +81,26 @@ function Header() {
     try {
       await AsyncStorage.removeItem('jwt');
     } catch {}
+    clearMeCache(); // force a fresh /auth/me on next login
+    setMe(null);
     router.replace('/screens/LoginScreen');
   });
 
   // Identify the logged-in user so we can show role-specific tabs (e.g. Overview for Jeff).
-  const [me, setMe] = useState<{ id?: number; username?: string; name?: string; role?: string } | null>(null);
+  // Seed from the session cache so an already-loaded user shows instantly on remount.
+  const [me, setMe] = useState<MeType | null>(meCache);
 
+  // Fetch once per session (dep []). loadMe() dedupes/caches, so navigating between
+  // tabs — which remounts this header — does not hit /auth/me again.
   useEffect(() => {
     let cancelled = false;
-    (async () => {
-      try {
-        const token = await AsyncStorage.getItem('jwt');
-        if (!token) {
-          if (!cancelled) setMe(null);
-          return;
-        }
-        const res = await api.get('/auth/me');
-        if (!cancelled) setMe(res?.data || null);
-      } catch {
-        if (!cancelled) setMe(null);
-      }
-    })();
+    loadMe().then((m) => {
+      if (!cancelled) setMe(m);
+    });
     return () => {
       cancelled = true;
     };
-  }, [pathname]);
+  }, []);
 
   const isJeff =
     !!me &&

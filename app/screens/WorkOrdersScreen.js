@@ -248,6 +248,78 @@ const isHtmlResponse = (res) => {
   return ct.includes('text/html') || isHtmlLike(res?.data);
 };
 
+// Module-scope memoized card. Defined once (not re-created each screen render), so
+// React reconciles rows instead of remounting them. All screen-specific values and
+// handlers arrive as props; parent wraps the handlers in useCallback so memo holds.
+const Card = React.memo(function Card({ item, drag, showDrag, onStatusPress, onViewPress, onOpenMaps }) {
+  const rawLoc = norm(item.siteLocation);
+  const explicitName = norm(item.siteName) || norm(item.siteLocationName);
+  let siteLocationName = explicitName;
+  let siteAddress = norm(item.siteAddress) || norm(item.serviceAddress) || norm(item.address);
+
+  if (!siteAddress && rawLoc) {
+    siteAddress = rawLoc;
+  } else if (!siteLocationName && rawLoc) {
+    siteLocationName = rawLoc;
+  }
+
+  const hasAddress = !!siteAddress;
+  const latest = latestNoteText(item.notes);
+
+  return (
+    <View style={styles.card}>
+      <View style={styles.cardHeaderRow}>
+        <Text style={styles.cardTitle}>
+          WO: {item.workOrderNumber || '—'} • PO: {displayPO(item.workOrderNumber, item.poNumber)}
+        </Text>
+        {showDrag && (
+          <TouchableOpacity onLongPress={drag} delayLongPress={120} style={styles.dragHandle}>
+            <Text style={styles.dragGlyph}>≡</Text>
+          </TouchableOpacity>
+        )}
+      </View>
+
+      <Text style={styles.cardText}>Customer: {item.customer || 'N/A'}</Text>
+      <Text style={styles.cardText}>Site Location: {siteLocationName || '—'}</Text>
+
+      {hasAddress ? (
+        <TouchableOpacity onPress={() => onOpenMaps(siteAddress || siteLocationName)}>
+          <Text style={styles.linkText}>Site Address: {siteAddress}</Text>
+        </TouchableOpacity>
+      ) : (
+        <Text style={styles.cardText}>Site Address: N/A</Text>
+      )}
+
+      <Text style={styles.cardText}>Problem: {item.problemDescription || 'N/A'}</Text>
+
+      {!!latest && (
+        <Text numberOfLines={2} style={styles.noteLine}>
+          Latest Note: {latest}
+        </Text>
+      )}
+
+      <Text style={styles.cardText}>
+        Scheduled:{' '}
+        {getScheduledRaw(item)
+          ? parseScheduledMoment(getScheduledRaw(item))?.format('YYYY-MM-DD HH:mm') || 'Not Scheduled'
+          : 'Not Scheduled'}
+      </Text>
+
+      <Text style={styles.cardText}>Status: {item.status}</Text>
+
+      <View style={styles.actionsRow}>
+        <TouchableOpacity style={styles.statusBtn} onPress={() => onStatusPress(item)}>
+          <Text style={styles.statusBtnText}>Status</Text>
+        </TouchableOpacity>
+
+        <TouchableOpacity style={styles.viewButton} onPress={() => onViewPress(item)}>
+          <Text style={styles.viewButtonText}>View Details</Text>
+        </TouchableOpacity>
+      </View>
+    </View>
+  );
+});
+
 export default function WorkOrdersScreen() {
   const router = useRouter();
   const insets = useSafeAreaInsets();
@@ -830,80 +902,42 @@ export default function WorkOrdersScreen() {
     );
   };
 
-  const Card = ({ item, drag }) => {
-    const rawLoc = norm(item.siteLocation);
-    const explicitName = norm(item.siteName) || norm(item.siteLocationName);
-    let siteLocationName = explicitName;
-    let siteAddress = norm(item.siteAddress) || norm(item.serviceAddress) || norm(item.address);
+  // Stable handlers so the memoized Card doesn't re-render on every parent render.
+  const handleStatusPress = useCallback(
+    (item) => setStatusModal({ id: item.id, value: item.status || STATUSES[0] }),
+    []
+  );
+  const handleViewPress = useCallback(
+    (item) => router.push(`/screens/ViewWorkOrder?id=${item.id}`),
+    [router]
+  );
 
-    if (!siteAddress && rawLoc) {
-      siteAddress = rawLoc;
-    } else if (!siteLocationName && rawLoc) {
-      siteLocationName = rawLoc;
-    }
-
-    const hasAddress = !!siteAddress;
-    const latest = latestNoteText(item.notes);
-
-    return (
-      <View style={styles.card}>
-        <View style={styles.cardHeaderRow}>
-          <Text style={styles.cardTitle}>
-            WO: {item.workOrderNumber || '—'} • PO: {displayPO(item.workOrderNumber, item.poNumber)}
-          </Text>
-          {selectedStatus === 'Today' && (
-            <TouchableOpacity onLongPress={drag} delayLongPress={120} style={styles.dragHandle}>
-              <Text style={styles.dragGlyph}>≡</Text>
-            </TouchableOpacity>
-          )}
-        </View>
-
-        <Text style={styles.cardText}>Customer: {item.customer || 'N/A'}</Text>
-        <Text style={styles.cardText}>Site Location: {siteLocationName || '—'}</Text>
-
-        {hasAddress ? (
-          <TouchableOpacity onPress={() => openInGoogleMaps(siteAddress || siteLocationName)}>
-            <Text style={styles.linkText}>Site Address: {siteAddress}</Text>
-          </TouchableOpacity>
-        ) : (
-          <Text style={styles.cardText}>Site Address: N/A</Text>
-        )}
-
-        <Text style={styles.cardText}>Problem: {item.problemDescription || 'N/A'}</Text>
-
-        {!!latest && (
-          <Text numberOfLines={2} style={styles.noteLine}>
-            Latest Note: {latest}
-          </Text>
-        )}
-
-        <Text style={styles.cardText}>
-          Scheduled:{' '}
-          {getScheduledRaw(item)
-            ? parseScheduledMoment(getScheduledRaw(item))?.format('YYYY-MM-DD HH:mm') || 'Not Scheduled'
-            : 'Not Scheduled'}
-        </Text>
-
-        <Text style={styles.cardText}>Status: {item.status}</Text>
-
-        <View style={styles.actionsRow}>
-          <TouchableOpacity
-            style={styles.statusBtn}
-            onPress={() => setStatusModal({ id: item.id, value: item.status || STATUSES[0] })}
-          >
-            <Text style={styles.statusBtnText}>Status</Text>
-          </TouchableOpacity>
-
-          <TouchableOpacity
-            style={styles.viewButton}
-            onPress={() => router.push(`/screens/ViewWorkOrder?id=${item.id}`)}
-          >
-            <Text style={styles.viewButtonText}>View Details</Text>
-          </TouchableOpacity>
-        </View>
-      </View>
-    );
-  };
+  // Stable renderers (one with drag for the Today draggable list, one without).
+  const renderTodayItem = useCallback(
+    ({ item, drag }) => (
+      <Card
+        item={item}
+        drag={drag}
+        showDrag
+        onStatusPress={handleStatusPress}
+        onViewPress={handleViewPress}
+        onOpenMaps={openInGoogleMaps}
+      />
+    ),
+    [handleStatusPress, handleViewPress, openInGoogleMaps]
+  );
+  const renderItem = useCallback(
+    ({ item }) => (
+      <Card
+        item={item}
+        showDrag={false}
+        onStatusPress={handleStatusPress}
+        onViewPress={handleViewPress}
+        onOpenMaps={openInGoogleMaps}
+      />
+    ),
+    [handleStatusPress, handleViewPress, openInGoogleMaps]
+  );
 
   const TodayEmpty = () => (
     <View style={styles.center}>
@@ -958,7 +992,7 @@ export default function WorkOrdersScreen() {
           keyExtractor={(it) => String(it.id)}
           activationDistance={12}
           onDragEnd={({ data }) => saveTodayOrder(data.map((d) => String(d.id)))}
-          renderItem={({ item, drag }) => <Card item={item} drag={drag} />}
+          renderItem={renderTodayItem}
           contentContainerStyle={[styles.list, { paddingBottom: insets.bottom + 160 }]}
           refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} />}
           ListFooterComponent={<View style={{ height: insets.bottom + 80 }} />}
@@ -970,7 +1004,7 @@ export default function WorkOrdersScreen() {
         style={{ flex: 1 }}
         data={filteredOrders}
         keyExtractor={(it) => String(it.id)}
-        renderItem={({ item }) => <Card item={item} />}
+        renderItem={renderItem}
         contentContainerStyle={[styles.list, { paddingBottom: insets.bottom + 160 }]}
         refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} />}
         ListFooterComponent={<View style={{ height: insets.bottom + 80 }} />}
