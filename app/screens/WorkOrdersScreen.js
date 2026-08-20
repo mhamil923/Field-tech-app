@@ -408,6 +408,20 @@ export default function WorkOrdersScreen() {
     async (ids) => {
       setTodayOrderIds(ids);
       await AsyncStorage.setItem(todayKey, JSON.stringify(ids));
+
+      // Also publish the run order to the backend so the office (Work Orders
+      // "Today" tab / Calendar day modal) and the other iPads see the same
+      // sequence. The AsyncStorage write above already succeeded, so a failure
+      // here is non-fatal — the tech keeps their local order and it syncs on the
+      // next drag. Last write wins between office and field, by design.
+      try {
+        await api.put('/work-orders/day-order', {
+          date: moment().format('YYYY-MM-DD'),
+          orderedIds: ids.map(Number).filter((n) => Number.isFinite(n)),
+        });
+      } catch (e) {
+        console.warn('[day-order] sync failed, kept local order:', e?.message);
+      }
     },
     [todayKey]
   );
@@ -543,6 +557,24 @@ export default function WorkOrdersScreen() {
   const orderedToday = useMemo(() => {
     if (selectedStatus !== 'Today') return filteredOrders;
 
+    // Server-arranged order wins when the day has been sequenced anywhere (here
+    // or in the CRM) — that's the shared source of truth. Unsequenced jobs fall
+    // to the bottom by scheduled time, matching the CRM's rule exactly.
+    const hasServerOrder = filteredOrders.some((o) => o.serviceOrder != null);
+    if (hasServerOrder) {
+      return [...filteredOrders].sort((a, b) => {
+        const oa = a.serviceOrder == null ? Infinity : Number(a.serviceOrder);
+        const ob = b.serviceOrder == null ? Infinity : Number(b.serviceOrder);
+        if (oa !== ob) return oa - ob;
+        const ta = a.scheduledDate ? +new Date(a.scheduledDate) : Infinity;
+        const tb = b.scheduledDate ? +new Date(b.scheduledDate) : Infinity;
+        if (ta !== tb) return ta - tb;
+        return Number(a.id) - Number(b.id);
+      });
+    }
+
+    // Nothing sequenced yet — fall back to this device's saved order, so an
+    // offline drag still sticks locally until it can sync.
     const map = new Map(filteredOrders.map((o) => [String(o.id), o]));
     const ordered = [];
     for (const id of todayOrderIds) {
