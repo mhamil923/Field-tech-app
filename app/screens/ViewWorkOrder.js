@@ -16,9 +16,12 @@ import {
   Linking,
   Platform,
   KeyboardAvoidingView,
+  ActivityIndicator,
 } from 'react-native';
 import { WebView } from 'react-native-webview';
 import * as FileSystem from 'expo-file-system/legacy';
+import { loadPdfSources, buildPdfScriptBlock } from '../lib/pdfAssets';
+import { enqueueSignedDocument, attemptEntry, KIND } from '../lib/uploadQueue';
 import * as ImagePicker from 'expo-image-picker';
 import * as ImageManipulator from 'expo-image-manipulator';
 import moment from 'moment';
@@ -197,12 +200,12 @@ const PDF_VIEWER_HTML = `
   <div id="loader">Loading PDF…</div>
   <div id="pages"></div>
   <div id="pageIndicator" style="display:none;">Page 1 of 1</div>
-  <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
+  <!--PDF_LIBS-->
   <script>
-    pdfjsLib.GlobalWorkerOptions.workerSrc="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js";
     function b64ToUint8(b64){const bin=atob(b64);const bytes=new Uint8Array(bin.length);for(let i=0;i<bin.length;i++)bytes[i]=bin.charCodeAt(i);return bytes;}
     async function renderAllPages(){
       const b64=window.PDF_BASE64||''; if(!b64){ document.getElementById('loader').innerText='Missing PDF data.'; return; }
+      if(window.__PDF_BOOT_ERROR){ document.getElementById('loader').innerText=window.__PDF_BOOT_ERROR; window.ReactNativeWebView?.postMessage('ERROR:'+window.__PDF_BOOT_ERROR); return; }
       try{
         const pdfDoc=await pdfjsLib.getDocument({data:b64ToUint8(b64)}).promise;
         const pagesContainer=document.getElementById('pages'); const loader=document.getElementById('loader'); loader.remove();
@@ -271,9 +274,7 @@ const ANNOTATOR_HTML = `
   </div>
   <div id="pages"></div>
 
-  <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
-  <script>pdfjsLib.GlobalWorkerOptions.workerSrc="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js";</script>
-  <script src="https://unpkg.com/pdf-lib@1.17.1/dist/pdf-lib.min.js"></script>
+  <!--PDF_LIBS-->
   <script>
     function b64ToUint8(b64){const bin=atob(b64);const bytes=new Uint8Array(bin.length);for(let i=0;i<bin.length;i++)bytes[i]=bin.charCodeAt(i);return bytes;}
     const state={tool:'pen',drawEnabled:false,pages:[]};
@@ -311,6 +312,7 @@ const ANNOTATOR_HTML = `
 
     async function renderPDF(){
       try{
+        if(window.__PDF_BOOT_ERROR) throw new Error(window.__PDF_BOOT_ERROR);
         const b64=window.PDF_BASE64||''; if(!b64) throw new Error('Missing PDF data.');
         const doc=await pdfjsLib.getDocument({data:b64ToUint8(b64)}).promise;
         const container=document.getElementById('pages'); container.innerHTML='';
@@ -427,7 +429,26 @@ const ANNOTATOR_HTML = `
           ? await pdfDoc.saveAsBase64({dataUri:false})
           : btoa(String.fromCharCode(...(await pdfDoc.save())));
 
-        window.ReactNativeWebView?.postMessage('SIGNED:'+outB64);
+        // The signed PDF used to cross the bridge as ONE postMessage('SIGNED:'+b64).
+        // If that single message was dropped — which an oversized payload can do
+        // silently on iOS — saveAndUpload() finished cleanly, React Native never
+        // heard anything, and the signature vanished with no error and no upload.
+        // Now RN pulls the bytes chunk by chunk and knows exactly how many to expect,
+        // so a lost chunk is a detectable timeout instead of silence.
+        window.__SIGNED_B64 = outB64;
+        window.__CHUNK = 65536;
+        const total = Math.ceil(outB64.length / window.__CHUNK) || 1;
+        window.__SIGNED_CHUNKS = total;
+        window.__sendChunk = function(i){
+          try{
+            const start = i * window.__CHUNK;
+            const part = window.__SIGNED_B64.substr(start, window.__CHUNK);
+            window.ReactNativeWebView?.postMessage('SIGNED_CHUNK:'+i+':'+part);
+          }catch(e){
+            window.ReactNativeWebView?.postMessage('ERROR:chunk '+i+' failed: '+(e?.message||String(e)));
+          }
+        };
+        window.ReactNativeWebView?.postMessage('SIGNED_READY:'+JSON.stringify({chunks: total, length: outB64.length}));
       }catch(e){
         window.ReactNativeWebView?.postMessage('ERROR:'+(e?.message||String(e)));
       }
@@ -436,7 +457,10 @@ const ANNOTATOR_HTML = `
     window.addEventListener('DOMContentLoaded',()=>{
       document.getElementById('pen').addEventListener('click',()=>setTool('pen'));
       document.getElementById('erase').addEventListener('click',()=>setTool('erase'));
-      document.getElementById('save').addEventListener('click',saveAndUpload);
+      document.getElementById('save').addEventListener('click',function(){
+        window.ReactNativeWebView?.postMessage('SAVE_START');
+        saveAndUpload();
+      });
       document.getElementById('close').addEventListener('click',()=>window.ReactNativeWebView?.postMessage('CLOSE'));
       document.getElementById('undo').addEventListener('click',()=>{ const t=state.pages.at(-1); if(t) undo(t); });
       document.getElementById('clear').addEventListener('click',()=>{ const t=state.pages.at(-1); if(t) clearPage(t); });
@@ -698,6 +722,18 @@ export default function ViewWorkOrder() {
 
   // Annotate & Sign existing WO PDF
   const [annotateVisible, setAnnotateVisible] = useState(false);
+  // Annotator save/upload UX. The annotator previously showed nothing between the
+  // Save tap and an alert, and closed itself before reporting failure — so a failed
+  // save was indistinguishable from a glitch.
+  const [annotSaving, setAnnotSaving] = useState(false);   // false | progress string
+  const [annotError, setAnnotError] = useState(null);
+  const [pendingEntryId, setPendingEntryId] = useState(null);
+  const chunkBufRef = useRef(null);
+  const saveWatchdogRef = useRef(null);
+
+  // Offline PDF libraries, injected into both WebView HTMLs at open time.
+  const [pdfLibsHtml, setPdfLibsHtml] = useState({ annotator: null, viewer: null });
+  const [pdfLibsError, setPdfLibsError] = useState(null);
   const [pdfBase64, setPdfBase64] = useState(null);
   const annotatorRef = useRef(null);
 
@@ -1285,9 +1321,58 @@ export default function ViewWorkOrder() {
    */
   const pdfURL = workOrder?.pdfPath ? fileUrl(workOrder.pdfPath) : null;
 
+  const clearSaveWatchdog = () => {
+    if (saveWatchdogRef.current) { clearTimeout(saveWatchdogRef.current); saveWatchdogRef.current = null; }
+  };
+
+  // If the WebView goes silent mid-save there is no other signal, so time it out
+  // loudly rather than leaving the tech looking at a stalled screen.
+  const armSaveWatchdog = (reason) => {
+    clearSaveWatchdog();
+    saveWatchdogRef.current = setTimeout(() => {
+      chunkBufRef.current = null;
+      setAnnotSaving(false);
+      setAnnotError(`${reason} Nothing was lost — your marks are still on screen. Tap Save & Upload to try again.`);
+    }, 45000);
+  };
+
+  useEffect(() => clearSaveWatchdog, []);
+
+  // Build both WebView documents with the bundled libraries inlined. Runs once per
+  // mount, lazily — no network, so this works in airplane mode.
+  const ensurePdfLibs = async () => {
+    if (pdfLibsHtml.annotator && pdfLibsHtml.viewer) return pdfLibsHtml;
+    const sources = await loadPdfSources();
+    // NOTE: the replacement MUST be a function. String.replace() interprets $&, $`
+    // and $' inside a string replacement, and pdf-lib.min.js genuinely contains a
+    // "$&" — a plain string replacement silently corrupts the library.
+    const built = {
+      annotator: ANNOTATOR_HTML.replace('<!--PDF_LIBS-->', () => buildPdfScriptBlock(sources, { withPdfLib: true })),
+      viewer: PDF_VIEWER_HTML.replace('<!--PDF_LIBS-->', () => buildPdfScriptBlock(sources, { withPdfLib: false })),
+    };
+    setPdfLibsHtml(built);
+    return built;
+  };
+
+  useEffect(() => {
+    let alive = true;
+    ensurePdfLibs().catch((e) => { if (alive) setPdfLibsError(e?.message || String(e)); });
+    return () => { alive = false; };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
   const openAnnotator = async () => {
     if (!pdfURL) return Alert.alert('No PDF', 'This work order does not have a PDF attached.');
     try {
+      // Libraries are bundled, so this resolves offline. Do it before showing the
+      // modal so a library problem is reported up front, not as a blank editor.
+      await ensurePdfLibs();
+    } catch (e) {
+      return Alert.alert('Signing unavailable', `The bundled PDF tools failed to load: ${e?.message || e}`);
+    }
+    try {
+      // The work-order PDF itself still needs the network the first time; cache is
+      // the right place for it (re-downloadable), unlike the signed output.
       const tmp = FileSystem.cacheDirectory + `wo_${workOrderId}.pdf`;
       await FileSystem.downloadAsync(pdfURL, tmp);
 
@@ -1296,6 +1381,10 @@ export default function ViewWorkOrder() {
       });
 
       setPdfBase64(b64);
+      setAnnotError(null);
+      setAnnotSaving(false);
+      setPendingEntryId(null);
+      chunkBufRef.current = null;
       setAnnotateVisible(true);
     } catch {
       setAnnotateVisible(false);
@@ -1303,12 +1392,19 @@ export default function ViewWorkOrder() {
     }
   };
 
+  // Assemble the signed PDF from the WebView, then hand it to the persistent queue.
+  //
+  // Every outcome here is either success, a visible queue entry, or a visible error.
+  // There is no path where Save completes and nothing happens — that silence is what
+  // lost a customer sign-off.
   const onAnnotatorMessage = async (ev) => {
     const msg = ev?.nativeEvent?.data || '';
     if (typeof msg !== 'string') return;
 
     if (msg.startsWith('ERROR:')) {
-      Alert.alert('Annotator Error', msg.slice(6));
+      clearSaveWatchdog();
+      setAnnotSaving(false);
+      setAnnotError(msg.slice(6));
       return;
     }
 
@@ -1317,41 +1413,110 @@ export default function ViewWorkOrder() {
       return;
     }
 
-    if (msg.startsWith('SIGNED:')) {
-      const b64 = msg.slice(7);
-      try {
-        const signedUri = FileSystem.cacheDirectory + `signed_${Date.now()}.pdf`;
+    // Save tapped — show progress immediately and arm the watchdog so a WebView that
+    // goes quiet surfaces as an error rather than a frozen screen.
+    if (msg === 'SAVE_START') {
+      setAnnotError(null);
+      setAnnotSaving('Preparing signed PDF…');
+      armSaveWatchdog('The signing view stopped responding before the document was produced.');
+      return;
+    }
 
-        await FileSystem.writeAsStringAsync(signedUri, b64, {
-          encoding: FileSystem.EncodingType.Base64,
-        });
-
-        const form = new FormData();
-
-        const woTag =
-          String(workOrder?.workOrderNumber || '').trim() ||
-          String(workOrder?.poNumber || '').trim() ||
-          String(workOrderId);
-
-        const safeTag = safeSlug(woTag);
-        const name = `WO-${safeTag}_${dateStamp(new Date())}_SIGNED_${Date.now()}.pdf`;
-
-        form.append('pdfFile', {
-          uri: signedUri,
-          name,
-          type: 'application/pdf',
-        });
-
-        await api.put(`/work-orders/${workOrderId}/edit`, form, {
-          headers: { 'Content-Type': 'multipart/form-data', ...authHeaders() },
-        });
-
-        setAnnotateVisible(false);
-        await fetchWorkOrder();
-        Alert.alert('Success', 'Signed PDF uploaded.');
-      } catch (e) {
-        Alert.alert('Upload Error', e?.message || 'Failed to upload signed PDF.');
+    // Bytes are ready; pull them chunk by chunk.
+    if (msg.startsWith('SIGNED_READY:')) {
+      let info;
+      try { info = JSON.parse(msg.slice('SIGNED_READY:'.length)); }
+      catch { info = null; }
+      if (!info?.chunks) {
+        clearSaveWatchdog();
+        setAnnotSaving(false);
+        setAnnotError('Could not read the signed document from the signing view.');
+        return;
       }
+      chunkBufRef.current = { parts: new Array(info.chunks), total: info.chunks, length: info.length, got: 0 };
+      setAnnotSaving(`Transferring signed PDF… 0/${info.chunks}`);
+      armSaveWatchdog('The signed document transfer stalled.');
+      annotatorRef.current?.injectJavaScript('window.__sendChunk(0); true;');
+      return;
+    }
+
+    if (msg.startsWith('SIGNED_CHUNK:')) {
+      const rest = msg.slice('SIGNED_CHUNK:'.length);
+      const sep = rest.indexOf(':');
+      const idx = Number(rest.slice(0, sep));
+      const data = rest.slice(sep + 1);
+      const buf = chunkBufRef.current;
+      if (!buf || !Number.isFinite(idx)) return;
+
+      if (buf.parts[idx] == null) { buf.parts[idx] = data; buf.got += 1; }
+      setAnnotSaving(`Transferring signed PDF… ${buf.got}/${buf.total}`);
+
+      if (buf.got < buf.total) {
+        armSaveWatchdog('The signed document transfer stalled.');
+        annotatorRef.current?.injectJavaScript(`window.__sendChunk(${idx + 1}); true;`);
+        return;
+      }
+
+      // Complete — verify before trusting it.
+      clearSaveWatchdog();
+      const b64 = buf.parts.join('');
+      chunkBufRef.current = null;
+      if (buf.length && b64.length !== buf.length) {
+        setAnnotSaving(false);
+        setAnnotError(`The signed document arrived incomplete (${b64.length} of ${buf.length} bytes). Nothing was discarded — tap Save & Upload to try again.`);
+        return;
+      }
+      await queueAndUploadSigned(b64);
+    }
+  };
+
+  // Persist first, upload second. The manifest entry exists before the network is
+  // touched, so a failed upload leaves a recoverable, visible document behind.
+  const queueAndUploadSigned = async (b64) => {
+    setAnnotSaving('Saving to device…');
+    let entry;
+    try {
+      entry = await enqueueSignedDocument({ base64: b64, woId: workOrderId, kind: KIND.SIGNED_PDF });
+    } catch (e) {
+      setAnnotSaving(false);
+      setAnnotError(`Could not save the signed document to this device: ${e?.message || e}`);
+      return;
+    }
+
+    setAnnotSaving('Uploading…');
+    const res = await attemptEntry(entry.id);
+    setAnnotSaving(false);
+
+    if (res.ok) {
+      setAnnotError(null);
+      setAnnotateVisible(false);          // closes ONLY on success
+      await fetchWorkOrder();
+      Alert.alert('Success', 'Signed PDF uploaded.');
+      return;
+    }
+
+    // Failure keeps the modal open with the signature still on screen.
+    setAnnotError(
+      `Saved on device — will retry automatically.\n\nThe upload did not go through (${res.error}). ` +
+      `This document is queued and visible under "waiting to upload"; it will send itself when there is a connection. ` +
+      `You can also tap Retry now.`
+    );
+    setPendingEntryId(entry.id);
+  };
+
+  const retryQueuedSigned = async () => {
+    if (!pendingEntryId) return;
+    setAnnotSaving('Uploading…');
+    const res = await attemptEntry(pendingEntryId);
+    setAnnotSaving(false);
+    if (res.ok) {
+      setPendingEntryId(null);
+      setAnnotError(null);
+      setAnnotateVisible(false);
+      await fetchWorkOrder();
+      Alert.alert('Success', 'Signed PDF uploaded.');
+    } else {
+      setAnnotError(`Still not uploaded (${res.error}). It stays saved on this device and will keep retrying automatically.`);
     }
   };
 
@@ -1371,14 +1536,29 @@ export default function ViewWorkOrder() {
       if (!signerName || !signatureData) { Alert.alert('Missing info', 'Name and signature are required.'); return; }
       setContractSigning(true);
       try {
-        await api.post(
-          `/work-orders/${workOrderId}/residential-contract/sign-infield`,
-          { signerName, signatureData },
-          { headers: authHeaders() }
-        );
-        setContractSignVisible(false);
-        await fetchWorkOrder();
-        Alert.alert('Signed', 'The residential contract has been signed.');
+        // Same failsafe as the annotator: record the signature in the persistent
+        // queue BEFORE the network call, so a failed submit leaves a visible,
+        // retryable entry instead of an alert and nothing else. There is no PDF
+        // file here — the payload is the signer name + signature image — so the
+        // entry carries it in meta and no file is written.
+        const entry = await enqueueSignedDocument({
+          base64: null,
+          woId: workOrderId,
+          kind: KIND.CONTRACT_SIGNED,
+          meta: { signerName, signatureData },
+        });
+        const res = await attemptEntry(entry.id);
+        if (res.ok) {
+          setContractSignVisible(false);
+          await fetchWorkOrder();
+          Alert.alert('Signed', 'The residential contract has been signed.');
+        } else {
+          Alert.alert(
+            'Saved on device — will retry automatically',
+            `The signature is stored on this device and queued (${res.error}). ` +
+            `It will send itself when there is a connection, and it is listed under "waiting to upload".`
+          );
+        }
       } catch (e) {
         Alert.alert('Error', e?.response?.data?.error || e?.message || 'Failed to sign contract.');
       } finally {
@@ -2112,11 +2292,11 @@ export default function ViewWorkOrder() {
       {/* Annotate & Sign Modal */}
       <Modal visible={annotateVisible} animationType="slide" onRequestClose={() => setAnnotateVisible(false)}>
         <View style={{ flex: 1, backgroundColor: '#000', paddingTop: Platform.OS === 'ios' ? 54 : 10 }}>
-          {pdfBase64 ? (
+          {pdfBase64 && pdfLibsHtml.annotator ? (
             <WebView
               ref={annotatorRef}
               originWhitelist={['*']}
-              source={{ html: ANNOTATOR_HTML }}
+              source={{ html: pdfLibsHtml.annotator }}
               javaScriptEnabled
               domStorageEnabled
               scrollEnabled
@@ -2125,14 +2305,58 @@ export default function ViewWorkOrder() {
               decelerationRate="normal"
               overScrollMode="always"
               onMessage={onAnnotatorMessage}
+              onError={(e) => setAnnotError(`Signing view failed to load: ${e?.nativeEvent?.description || 'unknown error'}`)}
+              onHttpError={(e) => setAnnotError(`Signing view failed to load (HTTP ${e?.nativeEvent?.statusCode}).`)}
               injectedJavaScriptBeforeContentLoaded={`window.PDF_BASE64 = ${JSON.stringify(pdfBase64)}; true;`}
               style={{ flex: 1 }}
             />
           ) : (
             <View style={styles.center}>
-              <Text style={styles.loadingText}>Loading PDF…</Text>
+              <Text style={styles.loadingText}>{pdfLibsError ? `PDF tools failed to load: ${pdfLibsError}` : 'Loading PDF…'}</Text>
             </View>
           )}
+
+          {/* Failure banner. The modal deliberately stays open behind it so the
+              signature is still on screen and the work is obviously not lost. */}
+          {annotError ? (
+            <View style={{ backgroundColor: '#7f1d1d', padding: 12 }}>
+              <Text style={{ color: '#fff', fontWeight: '700', fontSize: 13, lineHeight: 18 }}>{annotError}</Text>
+              <View style={{ flexDirection: 'row', gap: 8, marginTop: 10 }}>
+                {pendingEntryId ? (
+                  <TouchableOpacity
+                    onPress={retryQueuedSigned}
+                    style={{ backgroundColor: '#2563EB', paddingHorizontal: 14, paddingVertical: 9, borderRadius: 6 }}
+                  >
+                    <Text style={{ color: '#fff', fontWeight: '700' }}>Retry now</Text>
+                  </TouchableOpacity>
+                ) : null}
+                <TouchableOpacity
+                  onPress={() => setAnnotError(null)}
+                  style={{ backgroundColor: 'rgba(255,255,255,0.15)', paddingHorizontal: 14, paddingVertical: 9, borderRadius: 6 }}
+                >
+                  <Text style={{ color: '#fff', fontWeight: '700' }}>Dismiss</Text>
+                </TouchableOpacity>
+                {pendingEntryId ? (
+                  <TouchableOpacity
+                    onPress={() => { setAnnotateVisible(false); }}
+                    style={{ backgroundColor: 'rgba(255,255,255,0.15)', paddingHorizontal: 14, paddingVertical: 9, borderRadius: 6 }}
+                  >
+                    <Text style={{ color: '#fff', fontWeight: '700' }}>Close (stays queued)</Text>
+                  </TouchableOpacity>
+                ) : null}
+              </View>
+            </View>
+          ) : null}
+
+          {/* Progress. Mirrors the contract signer's "Submitting…" banner, which the
+              annotator never had — the gap between Save and the result used to look
+              like a frozen screen. */}
+          {annotSaving ? (
+            <View style={{ padding: 12, backgroundColor: '#111827', flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 10 }}>
+              <ActivityIndicator color="#fff" />
+              <Text style={{ color: '#fff', fontWeight: '600' }}>{typeof annotSaving === 'string' ? annotSaving : 'Submitting…'}</Text>
+            </View>
+          ) : null}
         </View>
       </Modal>
 
@@ -2213,11 +2437,21 @@ export default function ViewWorkOrder() {
               </View>
             )}
 
-            {!!docB64 && !docError && (
+            {!!docB64 && !docError && !pdfLibsHtml.viewer && (
+              <View style={[styles.center, { padding: 16 }]}>
+                <Text style={{ color: '#fff', textAlign: 'center' }}>
+                  {pdfLibsError ? `PDF tools failed to load: ${pdfLibsError}` : 'Preparing viewer…'}
+                </Text>
+              </View>
+            )}
+
+            {!!docB64 && !docError && !!pdfLibsHtml.viewer && (
               <WebView
                 originWhitelist={['*']}
-                source={{ html: PDF_VIEWER_HTML }}
+                source={{ html: pdfLibsHtml.viewer }}
                 javaScriptEnabled
+                onError={(e) => setDocError(`viewer failed to load: ${e?.nativeEvent?.description || 'unknown error'}`)}
+                onHttpError={(e) => setDocError(`viewer failed to load (HTTP ${e?.nativeEvent?.statusCode}).`)}
                 scrollEnabled
                 nestedScrollEnabled
                 showsVerticalScrollIndicator

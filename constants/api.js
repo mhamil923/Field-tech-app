@@ -9,11 +9,27 @@ import API_BASE_URL from './API_BASE_URL';
  *  - iOS: add ATS exceptions in Info.plist for your EB host
  *  - Android: set android:usesCleartextTraffic="true" or host allowlist
  */
+// 15s is a sane ceiling for JSON reads. It is NOT a sane ceiling for a multipart
+// file upload over store-back-room cellular — that timeout is what aborted a signed
+// sign-off client-side, leaving no file on the server and no record on the device.
+// File uploads must pass uploadConfig() to get the long timeout instead.
+export const JSON_TIMEOUT_MS = 15000;
+export const UPLOAD_TIMEOUT_MS = 120000;
+
 const api = axios.create({
   baseURL: API_BASE_URL,
-  timeout: 15000,
+  timeout: JSON_TIMEOUT_MS,
   headers: { Accept: 'application/json' },
 });
+
+/**
+ * Per-request config for anything that sends a file.
+ * Usage: api.put(url, form, uploadConfig({ headers: {...} }))
+ */
+export function uploadConfig(extra = {}) {
+  const { headers, ...rest } = extra;
+  return { timeout: UPLOAD_TIMEOUT_MS, ...rest, headers: { ...(headers || {}) } };
+}
 
 // Attach JWT from storage to every request
 api.interceptors.request.use(async (config) => {
@@ -84,9 +100,9 @@ export async function uploadPhotos(workOrderId, assets = []) {
   });
 
   // IMPORTANT: for React Native + axios + FormData, do NOT set the boundary yourself.
-  return api.put(`/work-orders/${workOrderId}/edit`, form, {
+  return api.put(`/work-orders/${workOrderId}/edit`, form, uploadConfig({
     headers: { 'Content-Type': 'multipart/form-data' },
-  });
+  }));
 }
 
 /**

@@ -7,6 +7,8 @@ import { GestureHandlerRootView } from 'react-native-gesture-handler';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { CRM } from '@/constants/Colors';
 import api from '../constants/api';
+import { PendingUploadsBadge } from './components/PendingUploads';
+import { useUploadQueueRunner } from './lib/uploadQueueRunner';
 
 type MeType = { id?: number; username?: string; name?: string; role?: string };
 
@@ -170,12 +172,19 @@ function Header() {
             <Tab key={t.label} {...t} />
           ))}
         </View>
+        {/* Renders only when the upload queue is non-empty. A signed document
+            waiting to upload must be visible from wherever the tech is. */}
+        <PendingUploadsBadge />
       </View>
     </SafeAreaView>
   );
 }
 
 export default function Layout() {
+  // Drains the persistent upload queue on foreground / connectivity regain, and
+  // runs the one-time cacheDirectory orphan sweep on first launch after update.
+  useUploadQueueRunner();
+
   return (
     <GestureHandlerRootView style={styles.wrapper}>
       <Stack
