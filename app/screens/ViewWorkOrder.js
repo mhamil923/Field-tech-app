@@ -394,9 +394,26 @@ const ANNOTATOR_HTML = `
       document.getElementById('pen').addEventListener('click',()=>setTool('pen'));
       document.getElementById('erase').addEventListener('click',()=>setTool('erase'));
       document.getElementById('save').addEventListener('click',function(){
+        // One save per signing session. Every same-day duplicate pair on the server
+        // was two taps 0-2 seconds apart: the button had no disabled state and no
+        // in-flight guard, so each tap re-rendered the PDF through pdf-lib and
+        // produced byte-DIFFERENT output — which content hashing cannot dedupe.
+        // Stopping the second tap is the only place this class of duplicate can be
+        // fixed. Re-enabled if the save fails, so a genuine retry is still possible.
+        if (window.__SAVING) return;
+        window.__SAVING = true;
+        var btn = this;
+        btn.disabled = true;
+        btn.textContent = 'Saving…';
         window.ReactNativeWebView?.postMessage('SAVE_START');
         saveAndUpload();
       });
+      // React Native re-enables the button if the attempt ends in an error.
+      window.__resetSave = function(){
+        window.__SAVING = false;
+        var b = document.getElementById('save');
+        if (b) { b.disabled = false; b.textContent = 'Save & Upload'; }
+      };
       document.getElementById('close').addEventListener('click',()=>window.ReactNativeWebView?.postMessage('CLOSE'));
       document.getElementById('undo').addEventListener('click',()=>{ const t=state.pages.at(-1); if(t) undo(t); });
       document.getElementById('clear').addEventListener('click',()=>{ const t=state.pages.at(-1); if(t) clearPage(t); });
@@ -1273,6 +1290,15 @@ export default function ViewWorkOrder() {
   };
 
   useEffect(() => clearSaveWatchdog, []);
+
+  // Re-enable the in-WebView Save button whenever an attempt ends in a visible error.
+  // Centralised rather than repeated at each failure site so no future failure path
+  // can leave the button stuck disabled.
+  useEffect(() => {
+    if (annotError) {
+      annotatorRef.current?.injectJavaScript('window.__resetSave && window.__resetSave(); true;');
+    }
+  }, [annotError]);
 
   // Build both WebView documents with the bundled libraries inlined. Runs once per
   // mount, lazily — no network, so this works in airplane mode.

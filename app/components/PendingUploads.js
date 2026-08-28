@@ -16,6 +16,7 @@ import LocalPdfViewer from './LocalPdfViewer';
 import {
   subscribe, drainQueue, attemptEntry, assignWorkOrder, KIND, readManifest,
   checkDuplicates, clearDuplicate, clearAllDuplicates, duplicateCount, fileUriFor,
+  dismissRecovered, dismissAllRecovered, isRecovered, recoveredCount,
 } from '../lib/uploadQueue';
 
 const fmtWhen = (iso) => {
@@ -127,6 +128,29 @@ export function PendingUploadsPanel({ visible, onClose }) {
     else setSpotChecked(true);
   }, []);
 
+  const dismissOne = useCallback(async (entry) => {
+    if (!(await confirmAsync(
+      'Permanently remove this recovered document from the device?',
+      'It was recovered from the old cache and is not attached to any work order. This cannot be undone.'
+    ))) return;
+    const r = await dismissRecovered(entry.id);
+    if (!r.ok) Alert.alert('Not removed', r.error);
+  }, []);
+
+  // Two confirmations, because this is the fresh-start button and it is irreversible.
+  const dismissAll = useCallback(async (n) => {
+    if (!(await confirmAsync(
+      `Dismiss all ${n} recovered document${n === 1 ? '' : 's'}?`,
+      'These were recovered from the old cache. Pending sign-offs captured by the app are NOT affected — they can only leave the queue by uploading.'
+    ))) return;
+    if (!(await confirmAsync(
+      'Last check — this cannot be undone',
+      `${n} recovered document${n === 1 ? '' : 's'} will be permanently deleted from this iPad. Confirm only if you have reviewed them.`
+    ))) return;
+    const r = await dismissAllRecovered();
+    Alert.alert('Recovered documents dismissed', `${r.dismissed} of ${r.attempted} removed from this device.`);
+  }, []);
+
   const clearAll = useCallback(async (n) => {
     if (!spotChecked) {
       Alert.alert(
@@ -208,6 +232,17 @@ export function PendingUploadsPanel({ visible, onClose }) {
                 </TouchableOpacity>
               );
             })()}
+            {(() => {
+              const n = recoveredCount(list);
+              if (!n) return null;
+              return (
+                <TouchableOpacity style={[styles.btn, styles.btnDanger]} onPress={() => dismissAll(n)}>
+                  <Text style={[styles.btnText, styles.btnDangerText]}>
+                    Dismiss all recovered documents ({n})
+                  </Text>
+                </TouchableOpacity>
+              );
+            })()}
           </View>
         )}
 
@@ -259,6 +294,11 @@ export function PendingUploadsPanel({ visible, onClose }) {
                   <Text style={styles.btnText}>View</Text>
                 </TouchableOpacity>
 
+                {isRecovered(e) && dupStatus(e) !== 'duplicate' && (
+                  <TouchableOpacity style={[styles.btn, styles.btnDanger]} onPress={() => dismissOne(e)}>
+                    <Text style={[styles.btnText, styles.btnDangerText]}>Dismiss</Text>
+                  </TouchableOpacity>
+                )}
                 {dupStatus(e) === 'duplicate' ? (
                   <TouchableOpacity style={[styles.btn, styles.btnDanger]} onPress={() => clearOne(e)}>
                     <Text style={[styles.btnText, styles.btnDangerText]}>Clear</Text>

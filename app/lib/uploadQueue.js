@@ -298,6 +298,44 @@ export async function attemptEntry(entryId) {
   const entry = list.find((e) => e.id === entryId);
   if (!entry) return { ok: false, error: 'Entry not found' };
 
+  // Pre-upload short-circuit, RECOVERED entries only.
+  //
+  // A recovered document may already be filed against some OTHER work order — the
+  // server-side idempotency check (which only looks at the target WO) would not catch
+  // that, and attaching it again would file the same signature twice. Fresh failsafe
+  // entries skip this: they are new by definition, and a retry of one is already
+  // handled server-side without the extra round-trip.
+  if (isRecovered(entry)) {
+    try {
+      const { hash, size } = await hashEntryFile(entry);
+      const res = await api.post('/api/signoffs/hashes', [{ hash, size }], { timeout: 60000 });
+      const hit = res?.data?.results?.[0];
+      if (hit?.matched) {
+        console.log(`[uploadQueue] recovered doc already on the server (${hit.workOrderLabel}) — clearing instead of uploading`);
+        const fresh = await readManifest();
+        const cur = fresh.find((x) => x.id === entryId);
+        if (cur) {
+          cur.dupCheck = {
+            status: 'duplicate', hash,
+            workOrderId: hit.workOrderId ?? null,
+            workOrderLabel: hit.workOrderLabel || null,
+            s3Key: hit.s3Key || null,
+            checkedAt: new Date().toISOString(),
+          };
+          await writeManifest(fresh);
+        }
+        const cleared = await clearDuplicate(entryId);
+        if (cleared.ok) return { ok: true, alreadyOnServer: true, workOrderLabel: hit.workOrderLabel };
+      }
+    } catch (e) {
+      // Offline, or the check failed — fall through and upload. Server-side
+      // idempotency is the backstop; never block an upload on this. Logged rather
+      // than swallowed silently: a check that always fails would otherwise look
+      // exactly like a check that never matches.
+      console.warn('[uploadQueue] pre-upload duplicate check skipped:', e?.message || e);
+    }
+  }
+
   try {
     await withHardCap(uploadEntry(entry));
   } catch (e) {
@@ -535,6 +573,52 @@ export async function clearAllDuplicates() {
     if (r.ok) cleared += 1;
   }
   return { cleared, attempted: dupes.length };
+}
+
+/* ─────────────────── dismissing recovered documents ───────────────────
+ *
+ * The cache sweep pulled in ten months of signed PDFs. Most were confirmed duplicates
+ * and cleared by hash; the remainder have been reviewed by hand and are not needed.
+ * Without a way to remove them the pending banner never goes away, which trains people
+ * to ignore it — and an ignored banner is exactly how the next real sign-off gets lost.
+ *
+ * So dismissal exists, but it is SCOPED: only entries the recovery sweep created
+ * (meta.recovered === true) can be dismissed. A document captured by the failsafe
+ * itself — a real sign-off waiting to upload — can still only leave the queue by
+ * uploading successfully. The scope check lives here, not in the UI, for the same
+ * reason the duplicate-clear guard does: a screen can be changed by anyone, and this
+ * is the rule that stops the queue quietly becoming deletable.
+ */
+
+export const isRecovered = (e) => e?.meta?.recovered === true;
+export const recoveredCount = (list) => (Array.isArray(list) ? list : []).filter(isRecovered).length;
+
+/** Remove a reviewed recovered document. Refuses anything the sweep didn't create. */
+export async function dismissRecovered(entryId) {
+  const list = await readManifest();
+  const entry = list.find((e) => e.id === entryId);
+  if (!entry) return { ok: false, error: 'Entry not found' };
+  if (!isRecovered(entry)) {
+    return {
+      ok: false,
+      error: 'This is a pending sign-off, not a recovered document — it can only leave the queue by uploading.',
+    };
+  }
+  await writeManifest(list.filter((e) => e.id !== entryId));
+  try { await FileSystem.deleteAsync(fileUriFor(entry), { idempotent: true }); } catch {}
+  return { ok: true };
+}
+
+/** Bulk form of the above. Touches recovered entries only; returns what it did. */
+export async function dismissAllRecovered() {
+  const list = await readManifest();
+  const targets = list.filter(isRecovered);
+  let dismissed = 0;
+  for (const e of targets) {
+    const r = await dismissRecovered(e.id);
+    if (r.ok) dismissed += 1;
+  }
+  return { dismissed, attempted: targets.length };
 }
 
 export const duplicateCount = (list) =>
