@@ -6,7 +6,7 @@
 import { useEffect } from 'react';
 import { AppState } from 'react-native';
 import NetInfo from '@react-native-community/netinfo';
-import { drainQueue, recoverCachedOrphans } from './uploadQueue';
+import { drainQueue, recoverCachedOrphans, migrateManifestPaths } from './uploadQueue';
 
 export function useUploadQueueRunner() {
   useEffect(() => {
@@ -16,10 +16,15 @@ export function useUploadQueueRunner() {
       drainQueue({ force }).catch(() => {});
     };
 
-    // 1. First launch after this update: sweep the OLD cacheDirectory for signed
-    //    PDFs stranded by the previous build, then work whatever is queued.
-    recoverCachedOrphans()
-      .catch(() => [])
+    // 1. Repair any manifest paths left absolute by an earlier build — iOS gives the
+    //    app a new container UUID on every update, which invalidates stored file://
+    //    URIs while the files themselves move across intact. Must run BEFORE anything
+    //    reads or uploads, or every entry looks missing.
+    migrateManifestPaths()
+      .catch(() => ({}))
+      // 2. First launch after the failsafe update: sweep the OLD cacheDirectory for
+      //    signed PDFs stranded by the pre-failsafe build.
+      .then(() => recoverCachedOrphans().catch(() => []))
       .finally(() => safeDrain(false));
 
     // 2. App comes to the foreground.

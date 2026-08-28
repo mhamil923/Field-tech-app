@@ -15,7 +15,7 @@ import api from '../../constants/api';
 import LocalPdfViewer from './LocalPdfViewer';
 import {
   subscribe, drainQueue, attemptEntry, assignWorkOrder, KIND, readManifest,
-  checkDuplicates, clearDuplicate, clearAllDuplicates, duplicateCount,
+  checkDuplicates, clearDuplicate, clearAllDuplicates, duplicateCount, fileUriFor,
 } from '../lib/uploadQueue';
 
 const fmtWhen = (iso) => {
@@ -169,7 +169,8 @@ export function PendingUploadsPanel({ visible, onClose }) {
   // Preview is rendered in-app. expo-web-browser cannot open file:// at all (its iOS
   // module only accepts http/https), which is why every recovered preview failed.
   const viewOne = useCallback((entry) => {
-    setPreview({ uri: entry.file, title: labelFor(entry) });
+    // Resolve against today's container — the stored path is relative.
+    setPreview({ uri: fileUriFor(entry), title: labelFor(entry) });
   }, []);
 
   return (
@@ -233,6 +234,12 @@ export function PendingUploadsPanel({ visible, onClose }) {
               {dupStatus(e) === 'orphan' && (
                 <Text style={styles.cardOrphan}>
                   ⚠ Not found on server — genuine orphan
+                </Text>
+              )}
+              {e.pathMissing && (
+                <Text style={styles.cardWarn}>
+                  File not found on this device. The entry is kept rather than deleted —
+                  the document may still be recoverable from a backup.
                 </Text>
               )}
               {dupStatus(e) === 'unreadable' && (

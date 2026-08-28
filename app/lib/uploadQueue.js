@@ -25,7 +25,33 @@ const MANIFEST_KEY = 'uploadQueue.v1';
 
 // documentDirectory survives OS cache eviction and (with UIFileSharingEnabled) is
 // reachable from Finder/Files if a document ever needs manual recovery.
-export const QUEUE_DIR = FileSystem.documentDirectory + 'pending-uploads/';
+//
+// PATHS ARE STORED RELATIVE, NEVER ABSOLUTE.
+//
+// iOS rebuilds the app's data container with a NEW UUID on every install/update, so
+// documentDirectory changes from
+//   file:///var/mobile/Containers/Data/Application/<OLD-UUID>/Documents/
+// to
+//   file:///var/mobile/Containers/Data/Application/<NEW-UUID>/Documents/
+// The FILES move with the container; absolute URIs written into the manifest do not.
+// AsyncStorage survives the update, so every stored absolute URI pointed into a
+// container that no longer exists — every recovered document read as "no longer on
+// the device" even though all of them were still there.
+//
+// The manifest now stores `path` ("pending-uploads/signed_x.pdf") and resolves it
+// against the CURRENT documentDirectory at every call. That is update-proof.
+export const QUEUE_SUBDIR = 'pending-uploads/';
+export const queueDir = () => FileSystem.documentDirectory + QUEUE_SUBDIR;
+
+/** Absolute file:// URI for an entry, resolved against today's container. */
+export const fileUriFor = (entry) => {
+  if (!entry) return null;
+  if (entry.path) return FileSystem.documentDirectory + entry.path;
+  // Legacy entry that predates the migration (or one written by an older build).
+  // Never trust its absolute URI — rebuild from the basename.
+  const base = String(entry.file || entry.filename || '').split('/').pop();
+  return base ? FileSystem.documentDirectory + QUEUE_SUBDIR + base : null;
+};
 
 export const KIND = {
   SIGNED_PDF: 'signed_pdf',           // annotator "Annotate & Sign PDF" output
@@ -67,8 +93,62 @@ export function subscribe(fn) {
 }
 
 async function ensureDir() {
-  const info = await FileSystem.getInfoAsync(QUEUE_DIR);
-  if (!info.exists) await FileSystem.makeDirectoryAsync(QUEUE_DIR, { intermediates: true });
+  const dir = queueDir();
+  const info = await FileSystem.getInfoAsync(dir);
+  if (!info.exists) await FileSystem.makeDirectoryAsync(dir, { intermediates: true });
+}
+
+/* ───────────────────── container-rotation migration ─────────────────────
+ *
+ * Rewrites manifest entries that still carry an absolute file:// URI (written by a
+ * build before paths went relative) into relative paths against the CURRENT
+ * documentDirectory. The bytes are still on disk under the new container — only the
+ * recorded URI went stale — so this is a pure path rewrite, never a file move.
+ *
+ * An entry whose file genuinely is not there keeps its entry and is flagged missing.
+ * We do not delete it: "we cannot find it" is not the same as "it is not needed", and
+ * the queue's rule is that only a successful upload or a confirmed duplicate removes
+ * anything.
+ */
+let _migrated = false;
+
+export async function migrateManifestPaths({ force = false } = {}) {
+  if (_migrated && !force) return { migrated: 0, missing: 0, alreadyRelative: 0 };
+  const list = await readManifest();
+  let migrated = 0, missing = 0, alreadyRelative = 0, changed = false;
+
+  for (const e of list) {
+    const wasRelative = !!e.path && !e.file;
+
+    const base = String(e.path || e.file || e.filename || '').split('/').pop();
+    if (!base) { missing += 1; continue; }
+
+    const path = QUEUE_SUBDIR + base;
+    const uri = FileSystem.documentDirectory + path;
+
+    // Stat EVERY entry, including ones already relative. A file can go missing long
+    // after the path model is fixed (backup restore, manual deletion, storage
+    // cleanup), and pathMissing is what the UI shows for it — so it has to stay
+    // accurate rather than being decided once at migration time.
+    let exists = false;
+    try { exists = (await FileSystem.getInfoAsync(uri)).exists; } catch { exists = false; }
+
+    if (e.path !== path || 'file' in e || e.pathMissing !== !exists) {
+      e.path = path;
+      delete e.file;            // drop any stale absolute URI for good
+      e.pathMissing = !exists;
+      changed = true;
+    }
+
+    if (wasRelative) alreadyRelative += 1;
+    else if (exists) migrated += 1;
+    if (!exists) missing += 1;
+  }
+
+  if (changed) await writeManifest(list);
+  _migrated = true;
+  console.log(`[uploadQueue] path migration: ${migrated} relinked, ${missing} still missing, ${alreadyRelative} already relative`);
+  return { migrated, missing, alreadyRelative };
 }
 
 /* ───────────────────────── enqueue ───────────────────────── */
@@ -87,7 +167,8 @@ export async function enqueueSignedDocument({ base64, woId = null, kind = KIND.S
   await ensureDir();
   const ts = Date.now();
   const name = filename || `signed_${woId == null ? 'unknown' : woId}_${ts}.pdf`;
-  const file = QUEUE_DIR + name;
+  const path = QUEUE_SUBDIR + name;                 // relative — survives updates
+  const file = FileSystem.documentDirectory + path; // absolute, for this call only
 
   if (base64 != null) {
     await FileSystem.writeAsStringAsync(file, base64, { encoding: FileSystem.EncodingType.Base64 });
@@ -95,7 +176,7 @@ export async function enqueueSignedDocument({ base64, woId = null, kind = KIND.S
 
   const entry = {
     id: `${ts}_${Math.random().toString(36).slice(2, 8)}`,
-    file,
+    path,
     filename: name,
     woId: woId == null ? null : String(woId),
     kind,
@@ -113,13 +194,13 @@ export async function enqueueSignedDocument({ base64, woId = null, kind = KIND.S
 }
 
 /** Adopt an already-on-disk file (orphan recovery) without rewriting its bytes. */
-export async function enqueueExistingFile({ file, filename, woId = null, kind = KIND.SIGNED_PDF, createdAt, meta = {} }) {
+export async function enqueueExistingFile({ path, filename, woId = null, kind = KIND.SIGNED_PDF, createdAt, meta = {} }) {
   const list = await readManifest();
-  if (list.some((e) => e.file === file)) return null; // already tracked
+  if (list.some((e) => e.path === path)) return null; // already tracked
   const ts = Date.now();
   const entry = {
     id: `${ts}_${Math.random().toString(36).slice(2, 8)}`,
-    file,
+    path,
     filename,
     woId: woId == null ? null : String(woId),
     kind,
@@ -161,11 +242,51 @@ async function uploadEntry(entry) {
     return;
   }
 
+  const uri = fileUriFor(entry);
+
+  // Pre-flight. React Native's iOS networking builds the multipart body BEFORE
+  // dispatching the request, and if a file part can't be read it logs and returns
+  // without ever creating the URLSession task:
+  //
+  //   RCTNetworking.mm:333
+  //     if (error) {
+  //       RCTLogError(@"Error processing request body: %@", error);
+  //       // Ideally we'd circle back to JS here and notify an error/abort on the request.
+  //       return (RCTURLRequestCancellationBlock)nil;
+  //     }
+  //
+  // No task means no response, no error, and — because axios implements `timeout` as
+  // xhr.timeout, which only starts once the request is actually sent — no timeout
+  // either. The promise simply never settles. That is what pinned WO 690 at
+  // "Uploading…" forever. Checking first turns it into an ordinary error.
+  const info = await FileSystem.getInfoAsync(uri);
+  if (!info.exists) {
+    throw new Error(`File missing on device (${entry.path || entry.filename}) — nothing was uploaded.`);
+  }
+
   const form = new FormData();
-  form.append('pdfFile', { uri: entry.file, name: entry.filename, type: 'application/pdf' });
+  form.append('pdfFile', { uri, name: entry.filename, type: 'application/pdf' });
   await api.put(`/work-orders/${entry.woId}/edit`, form, uploadConfig({
     headers: { 'Content-Type': 'multipart/form-data' },
   }));
+}
+
+// Belt and braces for the same class of stall. The pre-flight check covers the known
+// cause; this guarantees an attempt is ALWAYS terminal even if the native layer stops
+// calling back for a reason we haven't seen yet.
+const UPLOAD_HARD_CAP_MS = 150000; // > the 120s axios timeout, so axios reports first
+
+export function withHardCap(promise, ms = UPLOAD_HARD_CAP_MS) {
+  let timer;
+  return Promise.race([
+    promise.finally(() => clearTimeout(timer)),
+    new Promise((_, reject) => {
+      timer = setTimeout(
+        () => reject(new Error(`Upload did not complete within ${Math.round(ms / 1000)}s — treated as failed.`)),
+        ms
+      );
+    }),
+  ]);
 }
 
 /**
@@ -178,7 +299,7 @@ export async function attemptEntry(entryId) {
   if (!entry) return { ok: false, error: 'Entry not found' };
 
   try {
-    await uploadEntry(entry);
+    await withHardCap(uploadEntry(entry));
   } catch (e) {
     const msg =
       e?.response?.data?.error ||
@@ -200,7 +321,7 @@ export async function attemptEntry(entryId) {
   list = await readManifest();
   const remaining = list.filter((x) => x.id !== entryId);
   await writeManifest(remaining);
-  try { await FileSystem.deleteAsync(entry.file, { idempotent: true }); } catch {}
+  try { await FileSystem.deleteAsync(fileUriFor(entry), { idempotent: true }); } catch {}
   return { ok: true };
 }
 
@@ -255,7 +376,8 @@ export async function recoverCachedOrphans({ force = false } = {}) {
     for (const name of names) {
       if (!/^signed_.*\.pdf$/i.test(name)) continue;
       const from = dir + name;
-      const to = QUEUE_DIR + name;
+      const toPath = QUEUE_SUBDIR + name;
+      const to = FileSystem.documentDirectory + toPath;
       try {
         const info = await FileSystem.getInfoAsync(from);
         if (!info.exists || !info.size) continue;
@@ -269,16 +391,17 @@ export async function recoverCachedOrphans({ force = false } = {}) {
         const dstInfo = await FileSystem.getInfoAsync(to);
         if (dstInfo.exists) {
           // Don't clobber a queued file that already owns this name.
-          const alt = QUEUE_DIR + name.replace(/\.pdf$/i, `_${Date.now()}.pdf`);
-          await FileSystem.moveAsync({ from, to: alt });
+          const altName = name.replace(/\.pdf$/i, `_${Date.now()}.pdf`);
+          const altPath = QUEUE_SUBDIR + altName;
+          await FileSystem.moveAsync({ from, to: FileSystem.documentDirectory + altPath });
           found.push(await enqueueExistingFile({
-            file: alt, filename: alt.split('/').pop(), woId,
+            path: altPath, filename: altName, woId,
             createdAt: stampMs ? new Date(stampMs).toISOString() : undefined,
           }));
         } else {
           await FileSystem.moveAsync({ from, to });
           found.push(await enqueueExistingFile({
-            file: to, filename: name, woId,
+            path: toPath, filename: name, woId,
             createdAt: stampMs ? new Date(stampMs).toISOString() : undefined,
           }));
         }
@@ -318,7 +441,7 @@ const toHex = (buf) =>
 
 /** SHA-256 of a queued file's raw bytes — the same bytes the server hashes. */
 export async function hashEntryFile(entry) {
-  const b64 = await FileSystem.readAsStringAsync(entry.file, { encoding: FileSystem.EncodingType.Base64 });
+  const b64 = await FileSystem.readAsStringAsync(fileUriFor(entry), { encoding: FileSystem.EncodingType.Base64 });
   const bytes = b64ToBytes(b64);
   const digest = await Crypto.digest(Crypto.CryptoDigestAlgorithm.SHA256, bytes);
   return { hash: toHex(digest), size: bytes.length };
@@ -398,7 +521,7 @@ export async function clearDuplicate(entryId) {
     return { ok: false, error: 'Not a confirmed duplicate — refusing to delete.' };
   }
   await writeManifest(list.filter((e) => e.id !== entryId));
-  try { await FileSystem.deleteAsync(entry.file, { idempotent: true }); } catch {}
+  try { await FileSystem.deleteAsync(fileUriFor(entry), { idempotent: true }); } catch {}
   return { ok: true };
 }
 
