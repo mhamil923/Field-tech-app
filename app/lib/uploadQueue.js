@@ -19,6 +19,7 @@
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import * as FileSystem from 'expo-file-system/legacy';
 import api, { uploadConfig } from '../../constants/api';
+import * as Crypto from 'expo-crypto';
 
 const MANIFEST_KEY = 'uploadQueue.v1';
 
@@ -291,5 +292,129 @@ export async function recoverCachedOrphans({ force = false } = {}) {
   }
   return found.filter(Boolean);
 }
+
+/* ─────────────────── duplicate detection ───────────────────
+ *
+ * The pre-failsafe app wrote every signed PDF to the OS cache and never cleaned up —
+ * on success as well as on failure — so the recovery sweep pulled in roughly ten
+ * months of signed documents, most of which uploaded fine at the time. Telling those
+ * apart from genuine orphans by eye is not feasible; asking the server whether it
+ * already holds these exact bytes is.
+ *
+ * A confirmed hash match is the ONLY delete path besides a successful upload. It is
+ * safe precisely because it is exact-bytes: a match means the server demonstrably has
+ * this document, so the local copy is redundant rather than lost.
+ */
+
+const b64ToBytes = (b64) => {
+  const bin = globalThis.atob ? globalThis.atob(b64) : '';
+  const out = new Uint8Array(bin.length);
+  for (let i = 0; i < bin.length; i++) out[i] = bin.charCodeAt(i);
+  return out;
+};
+
+const toHex = (buf) =>
+  Array.from(new Uint8Array(buf)).map((b) => b.toString(16).padStart(2, '0')).join('');
+
+/** SHA-256 of a queued file's raw bytes — the same bytes the server hashes. */
+export async function hashEntryFile(entry) {
+  const b64 = await FileSystem.readAsStringAsync(entry.file, { encoding: FileSystem.EncodingType.Base64 });
+  const bytes = b64ToBytes(b64);
+  const digest = await Crypto.digest(Crypto.CryptoDigestAlgorithm.SHA256, bytes);
+  return { hash: toHex(digest), size: bytes.length };
+}
+
+/**
+ * Hash every file-backed entry and ask the server which already exist.
+ * Results are written back onto the manifest so the UI can show them and so
+ * clearDuplicate() has something to check against.
+ */
+export async function checkDuplicates({ onProgress } = {}) {
+  const list = await readManifest();
+  const targets = list.filter((e) => e.kind !== KIND.CONTRACT_SIGNED);
+  const payload = [];
+  const byHash = new Map();
+
+  for (let i = 0; i < targets.length; i++) {
+    const e = targets[i];
+    try {
+      const { hash, size } = await hashEntryFile(e);
+      payload.push({ hash, size });
+      if (!byHash.has(hash)) byHash.set(hash, []);
+      byHash.get(hash).push(e.id);
+      e.__hash = hash;
+    } catch (err) {
+      // Unreadable/damaged file: leave it alone and un-checked. Never clearable.
+      e.__hash = null;
+      e.__hashError = err?.message || String(err);
+    }
+    onProgress?.(i + 1, targets.length);
+  }
+
+  if (!payload.length) return { checked: 0, matched: 0 };
+
+  const res = await api.post('/api/signoffs/hashes', payload, { timeout: 120000 });
+  const results = res?.data?.results || [];
+  const lookup = new Map(results.map((r) => [r.hash, r]));
+
+  const fresh = await readManifest();
+  const checkedAt = new Date().toISOString();
+  let matched = 0;
+  for (const e of fresh) {
+    const t = targets.find((x) => x.id === e.id);
+    if (!t) continue;
+    if (!t.__hash) {
+      e.dupCheck = { status: 'unreadable', error: t.__hashError || 'could not read file', checkedAt };
+      continue;
+    }
+    const hit = lookup.get(t.__hash);
+    if (hit?.matched) {
+      matched += 1;
+      e.dupCheck = {
+        status: 'duplicate',
+        hash: t.__hash,
+        workOrderId: hit.workOrderId ?? null,
+        workOrderLabel: hit.workOrderLabel || null,
+        s3Key: hit.s3Key || null,
+        checkedAt,
+      };
+    } else {
+      e.dupCheck = { status: 'orphan', hash: t.__hash, checkedAt };
+    }
+  }
+  await writeManifest(fresh);
+  return { checked: payload.length, matched };
+}
+
+/**
+ * Delete a hash-confirmed duplicate. Refuses anything not confirmed by the server —
+ * the guard lives here rather than in the UI so no future caller can bypass it.
+ */
+export async function clearDuplicate(entryId) {
+  const list = await readManifest();
+  const entry = list.find((e) => e.id === entryId);
+  if (!entry) return { ok: false, error: 'Entry not found' };
+  if (entry.dupCheck?.status !== 'duplicate') {
+    return { ok: false, error: 'Not a confirmed duplicate — refusing to delete.' };
+  }
+  await writeManifest(list.filter((e) => e.id !== entryId));
+  try { await FileSystem.deleteAsync(entry.file, { idempotent: true }); } catch {}
+  return { ok: true };
+}
+
+/** Bulk clear. Only touches entries the server confirmed; returns how many went. */
+export async function clearAllDuplicates() {
+  const list = await readManifest();
+  const dupes = list.filter((e) => e.dupCheck?.status === 'duplicate');
+  let cleared = 0;
+  for (const e of dupes) {
+    const r = await clearDuplicate(e.id);
+    if (r.ok) cleared += 1;
+  }
+  return { cleared, attempted: dupes.length };
+}
+
+export const duplicateCount = (list) =>
+  (Array.isArray(list) ? list : []).filter((e) => e.dupCheck?.status === 'duplicate').length;
 
 export const pendingCount = (list) => (Array.isArray(list) ? list.length : 0);

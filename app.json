@@ -9,7 +9,7 @@
     "scheme": "myapp",
     "userInterfaceStyle": "automatic",
     "ios": {
-      "buildNumber": "174",
+      "buildNumber": "175",
       "supportsTablet": true,
       "bundleIdentifier": "com.firstclassglass.fieldtech",
       "infoPlist": {
