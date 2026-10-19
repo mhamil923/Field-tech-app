@@ -25,6 +25,34 @@ import { Ionicons } from '@expo/vector-icons';
 import api, { getMe } from '../../constants/api';
 import MultiPhotoCamera from '../components/MultiPhotoCamera';
 
+/**
+ * Address normalization for the "Same as …" copy toggles.
+ * Mirrors crm-frontend/src/AddWorkOrder.js.
+ *
+ * Billing is a multiline input and Site Address is single-line, so a raw copy
+ * carried newlines (and any trailing commas) straight into a one-line field.
+ * Flatten to a single comma-separated line, stripping each line's trailing
+ * comma first so the join can't produce "168 N Gregory St,, Aurora, IL".
+ *
+ * NOTE: unlike the web form, this does NOT split line 1 into Site Location —
+ * mobile's toggle has always copied the whole address and that behavior is
+ * unchanged here; only the formatting is normalized.
+ */
+const cleanAddressLine = (line) =>
+  String(line ?? '')
+    .trim()
+    .replace(/[\s,]+$/, '');
+
+const normalizeAddress = (raw) =>
+  String(raw ?? '')
+    .split(/\r?\n/)
+    .map(cleanAddressLine)
+    .filter(Boolean)
+    .join(', ')
+    .replace(/,\s*(?=,)/g, '')
+    .replace(/\s{2,}/g, ' ')
+    .trim();
+
 /** Keep in sync with web/server */
 const STATUS_OPTIONS = [
   'New',
@@ -87,14 +115,14 @@ export default function AddWorkOrder() {
   const [siteFromBilling, setSiteFromBilling] = useState(false);
   const [billingFromSite, setBillingFromSite] = useState(false);
   useEffect(() => {
-    if (siteFromBilling && siteAddress !== billingAddress) {
-      setSiteAddress(billingAddress);
-    }
+    if (!siteFromBilling) return;
+    const next = normalizeAddress(billingAddress);
+    if (siteAddress !== next) setSiteAddress(next);
   }, [siteFromBilling, billingAddress]); // eslint-disable-line react-hooks/exhaustive-deps
   useEffect(() => {
-    if (billingFromSite && billingAddress !== siteAddress) {
-      setBillingAddress(siteAddress);
-    }
+    if (!billingFromSite) return;
+    const next = cleanAddressLine(siteAddress);
+    if (billingAddress !== next) setBillingAddress(next);
   }, [billingFromSite, siteAddress]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // Status
@@ -313,7 +341,7 @@ export default function AddWorkOrder() {
   const toggleSiteFromBilling = () => {
     setSiteFromBilling((prev) => {
       const next = !prev;
-      if (next) { setBillingFromSite(false); setSiteAddress(billingAddress); }
+      if (next) { setBillingFromSite(false); setSiteAddress(normalizeAddress(billingAddress)); }
       else { setSiteAddress(''); }
       return next;
     });
@@ -321,7 +349,7 @@ export default function AddWorkOrder() {
   const toggleBillingFromSite = () => {
     setBillingFromSite((prev) => {
       const next = !prev;
-      if (next) { setSiteFromBilling(false); setBillingAddress(siteAddress); }
+      if (next) { setSiteFromBilling(false); setBillingAddress(cleanAddressLine(siteAddress)); }
       else { setBillingAddress(''); }
       return next;
     });
